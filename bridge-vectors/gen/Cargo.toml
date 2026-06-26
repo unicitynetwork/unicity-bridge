@@ -1,0 +1,18 @@
+[package]
+name = "bridge-vectors-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Reference generator for the Unicity bridge cross-stack conformance vectors (BRIDGE_PROTO_VERSION=1). See ../../docs/bridge/dev-plan/00-interop-contract.md."
+publish = false
+
+# Zero dependencies on purpose: SHA-256 and Keccak-256 are inlined and self-tested
+# (src/hash.rs) so the reference generator builds offline anywhere and carries no
+# supply-chain surface. The generated vectors are the cross-stack source of truth.
+[dependencies]
+
+[[bin]]
+name = "bridge-vectors-gen"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

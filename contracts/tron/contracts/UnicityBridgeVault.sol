@@ -1,0 +1,261 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {BridgeConfig, ReturnLeaf, SourceLockRef, PublicValues, BridgeEncoding} from "./BridgeEncoding.sol";
+import {IProofVerifier} from "./IProofVerifier.sol";
+
+/// @dev Minimal TRC20/ERC20 surface. USDT on Tron returns a bool from
+///      transfer/transferFrom, but we tolerate no-return tokens via
+///      {_safeTransfer}/{_safeTransferFrom} low-level calls.
+interface ITRC20 {
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
+    function transfer(address to, uint256 value) external returns (bool);
+}
+
+/// @title UnicityBridgeVault
+/// @notice The single greenfield bridge vault per ZK_BACK3: it holds custody of
+///         the external asset, records the bridge-in `lockDigest`, and settles
+///         the bridge-back return path (proof verification + one replay
+///         accumulator root + fee/deadline settlement).
+/// @dev    Supersedes `UnicityLock`'s `unlock`/`withdrawn` model. Releases are
+///         keyed by **nullifier**, not lock nonce (a deposit split on Unicity
+///         returns as many independent tokens). Conforms to
+///         docs/bridge/dev-plan/00-interop-contract.md §1–3, §7, §9 and
+///         01-source-chain-contracts.md. The proof system is pluggable behind
+///         {IProofVerifier} (a mock at M2, real SP1 Groth16 at M3).
+contract UnicityBridgeVault {
+    // ----- immutables, all derived from one BridgeConfig (00 §2, ZK_BACK3 §2.3)
+    IProofVerifier public immutable verifier;
+    bytes32 public immutable VKEY;
+    bytes32 public immutable DOMAIN_TAG;   // K("unicity-bridge-return:v1")
+    bytes32 public immutable CONFIG_HASH;  // K(abi.encode(config)) (00 §2)
+    ITRC20  public immutable ASSET;        // = config.asset; cannot diverge from CONFIG_HASH
+
+    // config fields retained to recompute lockDigest at lock time (00 §3)
+    uint64  public immutable sourceChainId;
+    address public immutable assetAddr;
+    bytes32 public immutable tokenType;
+    bytes32 public immutable coinId;
+
+    /// @notice Empty replay-accumulator root (00 §6). All-zero placeholder; the
+    ///         real empty-tree root is pinned by `bridge-vectors/accumulator` at
+    ///         M2 and must equal this constant.
+    bytes32 public constant EMPTY_TREE_ROOT = bytes32(0);
+
+    /// @notice Admin able to manage the trust-base allow-list (timelock at M5).
+    address public admin;
+
+    /// @notice Bridge-in: nonce => lockDigest (00 §3), stored at lock time.
+    mapping(uint256 => bytes32) public lockDigest;
+    /// @notice Auto-incrementing lock id, echoed in {Lock}.
+    uint256 public nextNonce;
+    /// @notice Defence-in-depth: the same Unicity tokenId can't be locked twice.
+    mapping(bytes32 => bool) public tokenIdUsed;
+
+    /// @notice Allow-listed `trustBaseHash` set (validator-set epochs; 00 §8).
+    mapping(bytes32 => bool) public trustBaseAllowed;
+    /// @notice The replay accumulator root; advances once per settled batch.
+    bytes32 public spentRoot;
+
+    uint256 private _entered;
+
+    event Lock(
+        uint256 indexed nonce,
+        address indexed from,
+        uint256 amount,
+        bytes32 unicityTokenId,
+        bytes32 recipientCommitment
+    );
+    event BatchFulfilled(
+        bytes32 indexed spentRootOld,
+        bytes32 indexed spentRootNew,
+        uint32 batchSize,
+        uint256 totalAmount
+    );
+    event Released(
+        bytes32 indexed nullifier,
+        address indexed recipient,
+        uint256 amount,
+        address feeRecipient,
+        uint256 feeAmount,
+        uint64 deadline
+    );
+    event TrustBaseAllowedUpdated(bytes32 indexed trustBaseHash, bool allowed);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "vault: not admin");
+        _;
+    }
+
+    modifier nonReentrant() {
+        require(_entered == 0, "vault: reentrancy");
+        _entered = 1;
+        _;
+        _entered = 0;
+    }
+
+    /// @param cfg       Deployment config. `cfg.vault` must equal this address so
+    ///                  CONFIG_HASH binds the live vault (predict via CREATE/CREATE2).
+    /// @param verifier_ The proof verifier (mock at M2, SP1 Groth16 at M3).
+    /// @param vkey      The circuit verification key (placeholder until M3).
+    /// @param admin_    Trust-base allow-list manager.
+    constructor(BridgeConfig memory cfg, IProofVerifier verifier_, bytes32 vkey, address admin_) {
+        require(cfg.vault == address(this), "vault: config vault mismatch");
+        require(cfg.asset != address(0), "vault: zero asset");
+        require(address(verifier_) != address(0), "vault: zero verifier");
+        require(admin_ != address(0), "vault: zero admin");
+
+        verifier = verifier_;
+        VKEY = vkey;
+        CONFIG_HASH = BridgeEncoding.configHash(cfg);
+        DOMAIN_TAG = BridgeEncoding.domainTag();
+        ASSET = ITRC20(cfg.asset);
+        sourceChainId = cfg.sourceChainId;
+        assetAddr = cfg.asset;
+        tokenType = cfg.tokenType;
+        coinId = cfg.coinId;
+
+        admin = admin_;
+        spentRoot = EMPTY_TREE_ROOT;
+    }
+
+    // ---------------------------------------------------------------------
+    // Bridge-in: lock the asset, store lockDigest, emit the full fields
+    // ---------------------------------------------------------------------
+
+    /// @notice Lock `amount` of the asset and bind it to a future Unicity mint.
+    /// @param amount               Asset amount (token decimals). Must be > 0.
+    /// @param unicityTokenId       The Unicity TokenId (32 bytes) this funds.
+    /// @param recipientCommitment  SHA256 of the recipient's encoded predicate.
+    /// @return nonce               The lock id, echoed in {Lock}.
+    /// @dev Caller must `approve` this contract first. Checks-effects-interactions:
+    ///      `lockDigest[nonce]` is finalised before the token pull. The `Lock`
+    ///      event keeps emitting full fields for the TS verifier and explorers.
+    function lock(
+        uint256 amount,
+        bytes32 unicityTokenId,
+        bytes32 recipientCommitment
+    ) external nonReentrant returns (uint256 nonce) {
+        require(amount > 0, "vault: zero amount");
+        require(unicityTokenId != bytes32(0), "vault: zero tokenId");
+        require(recipientCommitment != bytes32(0), "vault: zero recipient");
+        require(!tokenIdUsed[unicityTokenId], "vault: tokenId already locked");
+
+        tokenIdUsed[unicityTokenId] = true;
+        nonce = nextNonce++;
+        lockDigest[nonce] = BridgeEncoding.lockDigest(
+            sourceChainId,
+            address(this),
+            nonce,
+            assetAddr,
+            tokenType,
+            coinId,
+            amount,
+            unicityTokenId,
+            recipientCommitment
+        );
+
+        emit Lock(nonce, msg.sender, amount, unicityTokenId, recipientCommitment);
+        _safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    // ---------------------------------------------------------------------
+    // Bridge-back: verify one batch proof and settle every leaf
+    // ---------------------------------------------------------------------
+
+    /// @notice Verify a return-batch proof and release the asset for each leaf.
+    /// @dev ZK_BACK3 §9 / 01 §"The vault". All validation precedes any transfer;
+    ///      the accumulator root advances (replay guard consumed) before payouts.
+    /// @param publicValues ABI-encoded {PublicValues} the circuit committed (00 §7).
+    /// @param proof        The Groth16 proof over `publicValues`.
+    /// @param leaves       The settlement leaves, in the batch's submission order.
+    /// @param lockRefs     The deduplicated source-lock refs, sorted by nonce.
+    function fulfillBatch(
+        bytes calldata publicValues,
+        bytes calldata proof,
+        ReturnLeaf[] calldata leaves,
+        SourceLockRef[] calldata lockRefs
+    ) external nonReentrant {
+        // 1. proof (reverts on failure)
+        verifier.verifyProof(VKEY, publicValues, proof);
+
+        // 2. decode the public statement and check it against this vault
+        PublicValues memory pv = abi.decode(publicValues, (PublicValues));
+        require(pv.domainTag == DOMAIN_TAG, "vault: bad domain");
+        require(pv.configHash == CONFIG_HASH, "vault: bad config");
+        require(trustBaseAllowed[pv.trustBaseHash], "vault: trust base not allowed");
+        require(pv.spentRootOld == spentRoot, "vault: stale root");
+        require(leaves.length > 0, "vault: empty batch");
+        require(pv.batchSize == leaves.length, "vault: batch size mismatch");
+        require(pv.returnRoot == BridgeEncoding.returnRoot(leaves), "vault: return root mismatch");
+        require(pv.lockRefRoot == BridgeEncoding.lockRefRoot(lockRefs), "vault: lock ref root mismatch");
+
+        // 3. lock refs sorted-unique + bound to stored digests (one SLOAD each)
+        for (uint256 i = 0; i < lockRefs.length; i++) {
+            if (i > 0) {
+                require(lockRefs[i].nonce > lockRefs[i - 1].nonce, "vault: lock refs unsorted");
+            }
+            require(lockDigest[lockRefs[i].nonce] == lockRefs[i].digest, "vault: lock digest mismatch");
+        }
+
+        // 4. value conservation: per-leaf fee <= amount, and sum == totalAmount
+        uint256 total;
+        for (uint256 i = 0; i < leaves.length; i++) {
+            require(leaves[i].feeAmount <= leaves[i].amount, "vault: fee exceeds amount");
+            total += leaves[i].amount;
+        }
+        require(total == pv.totalAmount, "vault: total amount mismatch");
+
+        // 5. consume the replay guard (effects before interactions)
+        spentRoot = pv.spentRootNew;
+        emit BatchFulfilled(pv.spentRootOld, pv.spentRootNew, pv.batchSize, pv.totalAmount);
+
+        // 6. settle each leaf; deadline gates the FEE only, principal is always paid
+        for (uint256 i = 0; i < leaves.length; i++) {
+            ReturnLeaf calldata l = leaves[i];
+            uint256 fee =
+                (l.feeRecipient != address(0) && block.timestamp <= l.deadline) ? l.feeAmount : 0;
+            _safeTransfer(l.recipient, l.amount - fee);
+            if (fee > 0) {
+                _safeTransfer(l.feeRecipient, fee);
+            }
+            emit Released(l.nullifier, l.recipient, l.amount, l.feeRecipient, fee, l.deadline);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Admin (trust-base allow-list; timelocked governance at M5)
+    // ---------------------------------------------------------------------
+
+    function setTrustBaseAllowed(bytes32 trustBaseHash, bool allowed) external onlyAdmin {
+        trustBaseAllowed[trustBaseHash] = allowed;
+        emit TrustBaseAllowedUpdated(trustBaseHash, allowed);
+    }
+
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        require(newAdmin != address(0), "vault: zero admin");
+        emit AdminTransferred(admin, newAdmin);
+        admin = newAdmin;
+    }
+
+    // ---------------------------------------------------------------------
+    // Token transfer helpers (tolerate no-return TRC20s)
+    // ---------------------------------------------------------------------
+
+    function _safeTransferFrom(address from, address to, uint256 value) private {
+        (bool ok, bytes memory data) =
+            address(ASSET).call(abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value));
+        _check(ok, data, "vault: transferFrom failed");
+    }
+
+    function _safeTransfer(address to, uint256 value) private {
+        (bool ok, bytes memory data) =
+            address(ASSET).call(abi.encodeWithSelector(ITRC20.transfer.selector, to, value));
+        _check(ok, data, "vault: transfer failed");
+    }
+
+    function _check(bool ok, bytes memory data, string memory err) private pure {
+        require(ok && (data.length == 0 || abi.decode(data, (bool))), err);
+    }
+}

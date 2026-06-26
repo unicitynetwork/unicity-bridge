@@ -31,6 +31,7 @@ logs/
 
 target/
 Cargo.lock
+!prover/Cargo.lock
 
 # Uncomment if building a binary application and you want Cargo.lock tracked
 
@@ -122,4 +123,3 @@ temp/
 *.sqlite
 *.sqlite3
 *.db
-

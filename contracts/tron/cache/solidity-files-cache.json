@@ -73,6 +73,233 @@
       "artifacts": [
         "MockTRC20"
       ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/BridgeEncoding.sol": {
+      "lastModificationDate": 1782482390041,
+      "contentHash": "2bd81c6f26d9849bb62ed5b22cacfaf5",
+      "sourceName": "contracts/BridgeEncoding.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "BridgeEncoding"
+      ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/test/EncodingHarness.sol": {
+      "lastModificationDate": 1782482460915,
+      "contentHash": "d904630b98c958f51a006a29d5af84ea",
+      "sourceName": "contracts/test/EncodingHarness.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "../BridgeEncoding.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "EncodingHarness"
+      ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/UnicityBridgeVault.sol": {
+      "lastModificationDate": 1782482445582,
+      "contentHash": "1f4b51eb18d0dd415f43fe949e3736a7",
+      "sourceName": "contracts/UnicityBridgeVault.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./BridgeEncoding.sol",
+        "./IProofVerifier.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "ITRC20",
+        "UnicityBridgeVault"
+      ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/IProofVerifier.sol": {
+      "lastModificationDate": 1782482397896,
+      "contentHash": "6f1dcea169b52d3e572bb76a31ddf879",
+      "sourceName": "contracts/IProofVerifier.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "IProofVerifier"
+      ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/test/MockProofVerifier.sol": {
+      "lastModificationDate": 1782482451882,
+      "contentHash": "e9cff319c91a639a1d90838e831535da",
+      "sourceName": "contracts/test/MockProofVerifier.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "../IProofVerifier.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "MockProofVerifier",
+        "RevertingProofVerifier"
+      ]
+    },
+    "/Users/risto/uni/br/contracts/tron/contracts/test/MockTRC20Variants.sol": {
+      "lastModificationDate": 1782482515609,
+      "contentHash": "a7b0f81b7641c198dc3e4936e5c857a3",
+      "sourceName": "contracts/test/MockTRC20Variants.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "ILock",
+        "MockNoReturnTRC20",
+        "MockReentrantTRC20"
+      ]
     }
   }
 }

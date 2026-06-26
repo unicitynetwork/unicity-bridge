@@ -14,6 +14,7 @@ import {
 import { TRON_USDT_LOCK_JUSTIFICATION_TAG } from './TronUsdtLockJustification.js';
 import type { BridgedAmountExtractor } from './value.js';
 
+export * from './bridge-back/index.js';
 export * from './config.js';
 export * from './hex.js';
 export * from './identifiers.js';

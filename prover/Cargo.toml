@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/guest",
+    "crates/host",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.81"
+license = "MIT OR Apache-2.0"
+publish = false
+

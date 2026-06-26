@@ -1,0 +1,19 @@
+[package]
+name = "bridge-return-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-return-core = { path = "../core" }
+bridge-return-guest = { path = "../guest" }
+hex = "0.4"
+serde_json = "1"
+thiserror = "1"
+unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+num-bigint = "0.4"
+unicity-token = { path = "../../../state-transition-sdk-rust", features = ["client"] }

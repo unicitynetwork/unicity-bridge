@@ -2,6 +2,7 @@ import { type TronUsdtBridgeConfig } from './config.js';
 import { type TronRpc } from './TronRpcClient.js';
 import { type ResolvedTronUsdtConfig, TronUsdtMintJustificationVerifier } from './TronUsdtMintJustificationVerifier.js';
 import type { BridgedAmountExtractor } from './value.js';
+export * from './bridge-back/index.js';
 export * from './config.js';
 export * from './hex.js';
 export * from './identifiers.js';

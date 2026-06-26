@@ -5,6 +5,7 @@ import { toEvmAddressHex } from './tron-address.js';
 import { TronHttpRpcClient } from './TronRpcClient.js';
 import { TronUsdtMintJustificationVerifier, } from './TronUsdtMintJustificationVerifier.js';
 import { TRON_USDT_LOCK_JUSTIFICATION_TAG } from './TronUsdtLockJustification.js';
+export * from './bridge-back/index.js';
 export * from './config.js';
 export * from './hex.js';
 export * from './identifiers.js';
