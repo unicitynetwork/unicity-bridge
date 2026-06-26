@@ -1,11 +1,14 @@
 use bridge_return_core::{
-    burn_transition_id, config_hash, domain_tag, lock_ref_root, nullifier, reason_cbor,
-    return_root, sum_amounts, BridgeBackReason, BridgeConfig, PublicValues, ReturnLeaf,
-    SourceLockRef,
+    burn_transition_id, config_hash, domain_tag, lock_ref_root, nullifier, public_values_abi,
+    reason_cbor, return_root, sum_amounts, BridgeBackReason, BridgeConfig, PublicValues,
+    ReturnLeaf, SourceLockRef,
 };
 use bridge_return_guest::{execute, BridgeBurnWitness, GuestInput, RelationWitness};
 use num_bigint::BigUint;
-use unicity_token::accumulator::{ordered_insert_witnesses, NullifierTree};
+use serde_json::json;
+use unicity_token::accumulator::{
+    ordered_insert_witnesses, NonMembershipTerminal, NonMembershipWitness, NullifierTree,
+};
 use unicity_token::api::bft::{
     InputRecord, RootTrustBase, RootTrustBaseNodeInfo, ShardId, ShardTreeCertificate,
     UnicityCertificate, UnicitySeal, UnicityTreeCertificate,
@@ -53,14 +56,22 @@ fn trust_base(node: &Secp256k1Signer) -> RootTrustBase {
 fn core_config() -> BridgeConfig {
     BridgeConfig {
         source_chain_id: 728126428,
-        vault: [0xA1; 20],
-        asset: [0xA2; 20],
-        token_type: [0xB1; 32],
-        coin_id: [0xC1; 32],
+        vault: h20("00000000000000000000000000000000000000a1"),
+        asset: h20("a614f803b6fd780986a42c78ec9c7f77e6ded13c"),
+        token_type: h32("fd58cc8c3a8f61465cc6cef34bac939a8df0a2126884f017f0a1054c72a9161e"),
+        coin_id: h32("16fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b"),
         reason_tag: 39_050,
-        lock_domain: [0xD1; 32],
-        nullifier_domain: [0xD2; 32],
+        lock_domain: h32("158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932"),
+        nullifier_domain: h32("d4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d"),
     }
+}
+
+fn h20(hex: &str) -> [u8; 20] {
+    hex::decode(hex).unwrap().try_into().unwrap()
+}
+
+fn h32(hex: &str) -> [u8; 32] {
+    hex::decode(hex).unwrap().try_into().unwrap()
 }
 
 fn sdk_config(config: &BridgeConfig) -> SdkBridgeConfig {
@@ -332,15 +343,113 @@ fn guest_executes_direct_bridge_burn_b1() {
         return_leaves: leaves,
         sorted_lock_refs: lock_refs,
         witness: RelationWitness {
-            accumulator_witnesses,
+            accumulator_witnesses: accumulator_witnesses.clone(),
             bridge_burns: vec![BridgeBurnWitness {
                 token,
                 trust_base,
-                anchor_certificate: anchor,
+                anchor_certificate: anchor.clone(),
                 lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
             }],
         },
     };
 
+    if std::env::var_os("BRIDGE_PRINT_B1_TOKEN_VECTOR").is_some() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&fixture_json(&input, &anchor, &accumulator_witnesses,))
+                .unwrap()
+        );
+    }
+
     assert_eq!(execute(&input), Ok(public_values));
+}
+
+fn fixture_json(
+    input: &GuestInput,
+    anchor: &UnicityCertificate,
+    accumulator_witnesses: &[NonMembershipWitness],
+) -> serde_json::Value {
+    let burn = &input.witness.bridge_burns[0];
+    json!({
+        "description": "B=1 direct bridge-lock token burned to BridgeBackReason; full guest relation execute vector",
+        "in": {
+            "token_cbor": hex0(&burn.token.to_cbor()),
+            "trust_base": trust_base_json(&burn.trust_base),
+            "anchor_certificate_cbor": hex0(&anchor.to_cbor()),
+            "lock_justification_tag": burn.lock_justification_tag,
+            "leaves": input.return_leaves.iter().map(return_leaf_json).collect::<Vec<_>>(),
+            "lock_refs": input.sorted_lock_refs.iter().map(lock_ref_json).collect::<Vec<_>>(),
+            "accumulator_witnesses": accumulator_witnesses.iter().map(witness_json).collect::<Vec<_>>(),
+        },
+        "out": public_values_json(&input.public_values),
+    })
+}
+
+fn trust_base_json(trust_base: &RootTrustBase) -> serde_json::Value {
+    json!({
+        "version": trust_base.version,
+        "network_id": trust_base.network_id.id(),
+        "epoch": trust_base.epoch,
+        "epoch_start_round": trust_base.epoch_start_round,
+        "quorum_threshold": trust_base.quorum_threshold,
+        "root_nodes": trust_base.root_nodes.iter().map(|node| json!({
+            "node_id": node.node_id,
+            "signing_key": hex0(node.signing_key.as_bytes()),
+            "stake": node.stake,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn return_leaf_json(leaf: &ReturnLeaf) -> serde_json::Value {
+    json!({
+        "nullifier": hex0(&leaf.nullifier),
+        "recipient": hex0(&leaf.recipient),
+        "amount": hex0(&leaf.amount),
+        "fee_recipient": hex0(&leaf.fee_recipient),
+        "fee_amount": hex0(&leaf.fee_amount),
+        "deadline": leaf.deadline,
+    })
+}
+
+fn lock_ref_json(lock_ref: &SourceLockRef) -> serde_json::Value {
+    json!({
+        "nonce": lock_ref.nonce,
+        "digest": hex0(&lock_ref.digest),
+    })
+}
+
+fn witness_json(witness: &NonMembershipWitness) -> serde_json::Value {
+    let terminal = match witness.terminal() {
+        NonMembershipTerminal::Empty => json!({ "kind": "empty" }),
+        NonMembershipTerminal::Occupied { key } => json!({
+            "kind": "occupied",
+            "key": hex0(key),
+        }),
+    };
+    json!({
+        "terminal": terminal,
+        "steps": witness.steps().iter().map(|step| json!({
+            "depth": step.depth(),
+            "sibling_hash": hex0(step.sibling_hash()),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn public_values_json(public_values: &PublicValues) -> serde_json::Value {
+    json!({
+        "domain_tag": hex0(&public_values.domain_tag),
+        "config_hash": hex0(&public_values.config_hash),
+        "trust_base_hash": hex0(&public_values.trust_base_hash),
+        "spent_root_old": hex0(&public_values.spent_root_old),
+        "spent_root_new": hex0(&public_values.spent_root_new),
+        "return_root": hex0(&public_values.return_root),
+        "lock_ref_root": hex0(&public_values.lock_ref_root),
+        "batch_size": public_values.batch_size,
+        "total_amount": hex0(&public_values.total_amount),
+        "public_values_abi": hex0(&public_values_abi(public_values)),
+    })
+}
+
+fn hex0(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
 }

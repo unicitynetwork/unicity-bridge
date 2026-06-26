@@ -85,3 +85,67 @@ export function minimalBe(b: Uint8Array): Uint8Array {
   while (first < b.length && b[first] === 0) first++;
   return b.slice(first);
 }
+
+// --- canonical reader (decode side) ----------------------------------------
+// Only the item types the bridge structures use, with strict canonical checks:
+// minimal-length argument, no trailing bytes (the caller asserts full
+// consumption). Mirrors the encoder above so a blob round-trips exactly.
+
+/** A cursor over CBOR bytes. */
+export class CborReader {
+  public pos = 0;
+  public constructor(public readonly buf: Uint8Array) {}
+
+  public get done(): boolean {
+    return this.pos >= this.buf.length;
+  }
+
+  /** Read one item head; returns its major type and argument. Rejects
+   *  non-minimal (non-canonical) argument encodings. */
+  private head(): { major: number; arg: bigint } {
+    if (this.done) throw new Error('CBOR: unexpected end');
+    const ib = this.buf[this.pos++];
+    const major = ib >> 5;
+    const ai = ib & 0x1f;
+    if (ai < 24) return { major, arg: BigInt(ai) };
+    let len: number;
+    if (ai === 24) len = 1;
+    else if (ai === 25) len = 2;
+    else if (ai === 26) len = 4;
+    else if (ai === 27) len = 8;
+    else throw new Error(`CBOR: bad additional info ${ai}`);
+    if (this.pos + len > this.buf.length) throw new Error('CBOR: truncated argument');
+    let arg = 0n;
+    for (let i = 0; i < len; i++) arg = (arg << 8n) | BigInt(this.buf[this.pos++]);
+    // canonical: the value must not fit in a shorter encoding
+    const min = ai === 24 ? 24n : ai === 25 ? 0x100n : ai === 26 ? 0x10000n : 0x100000000n;
+    if (arg < min) throw new Error('CBOR: non-canonical (non-minimal) integer');
+    return { major, arg };
+  }
+
+  private expect(major: number, what: string): bigint {
+    const h = this.head();
+    if (h.major !== major) throw new Error(`CBOR: expected ${what} (major ${major}), got major ${h.major}`);
+    return h.arg;
+  }
+
+  public readTag(): bigint {
+    return this.expect(6, 'tag');
+  }
+
+  public readArrayHeader(): number {
+    return Number(this.expect(4, 'array'));
+  }
+
+  public readUint(): bigint {
+    return this.expect(0, 'uint');
+  }
+
+  public readBytes(): Uint8Array {
+    const len = Number(this.expect(2, 'byte string'));
+    if (this.pos + len > this.buf.length) throw new Error('CBOR: truncated byte string');
+    const out = this.buf.slice(this.pos, this.pos + len);
+    this.pos += len;
+    return out;
+  }
+}

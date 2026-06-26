@@ -132,6 +132,67 @@ export function reasonHash(reasonBytes: Uint8Array): Uint8Array {
   return sha256(reasonBytes);
 }
 
+/** The fully-decoded `BridgeBackReason`, including its config-bound fields. */
+export interface DecodedBridgeBackReason {
+  readonly reasonTag: bigint;
+  readonly version: bigint;
+  readonly sourceChainId: bigint;
+  readonly vault: Uint8Array;
+  readonly asset: Uint8Array;
+  readonly tokenType: Uint8Array;
+  readonly coinId: Uint8Array;
+  readonly recipient: Uint8Array;
+  readonly amount: bigint;
+  readonly feeRecipient: Uint8Array;
+  readonly feeAmount: bigint;
+  readonly deadline: bigint;
+}
+
+/**
+ * Inverse of {encodeBridgeBackReason}: decode the canonical `reasonBytes` a
+ * burned token blob carries (the circuit performs the same decode). Strict —
+ * rejects non-canonical CBOR and any trailing bytes (00 §4). `amount`/`feeAmount`
+ * come back as the minimal-big-endian byte strings re-read as integers.
+ */
+export function decodeBridgeBackReason(reasonBytes: Uint8Array): DecodedBridgeBackReason {
+  const r = new cbor.CborReader(reasonBytes);
+  const reasonTag = r.readTag();
+  const n = r.readArrayHeader();
+  if (n !== 11) throw new Error(`BridgeBackReason: expected 11 fields, got ${n}`);
+  const version = r.readUint();
+  const sourceChainId = r.readUint();
+  const vault = r.readBytes();
+  const asset = r.readBytes();
+  const tokenType = r.readBytes();
+  const coinId = r.readBytes();
+  const recipient = r.readBytes();
+  const amount = beToBigInt(r.readBytes());
+  const feeRecipient = r.readBytes();
+  const feeAmount = beToBigInt(r.readBytes());
+  const deadline = r.readUint();
+  if (!r.done) throw new Error('BridgeBackReason: trailing bytes after reason');
+  return {
+    reasonTag,
+    version,
+    sourceChainId,
+    vault,
+    asset,
+    tokenType,
+    coinId,
+    recipient,
+    amount,
+    feeRecipient,
+    feeAmount,
+    deadline,
+  };
+}
+
+function beToBigInt(b: Uint8Array): bigint {
+  let n = 0n;
+  for (const x of b) n = (n << 8n) | BigInt(x);
+  return n;
+}
+
 /** `burnTransitionId = H("unicity-burn-transition:v1", stateId, txHash)` (00 §5). */
 export function burnTransitionId(stateId: Uint8Array, txHash: Uint8Array): Uint8Array {
   return cbor.hArray([cbor.text(DOMAIN_BURN_TRANSITION), cbor.bytes(stateId), cbor.bytes(txHash)]);

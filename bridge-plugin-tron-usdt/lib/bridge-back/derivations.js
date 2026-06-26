@@ -88,6 +88,52 @@ export function encodeBridgeBackReason(c, r) {
 export function reasonHash(reasonBytes) {
     return sha256(reasonBytes);
 }
+/**
+ * Inverse of {encodeBridgeBackReason}: decode the canonical `reasonBytes` a
+ * burned token blob carries (the circuit performs the same decode). Strict —
+ * rejects non-canonical CBOR and any trailing bytes (00 §4). `amount`/`feeAmount`
+ * come back as the minimal-big-endian byte strings re-read as integers.
+ */
+export function decodeBridgeBackReason(reasonBytes) {
+    const r = new cbor.CborReader(reasonBytes);
+    const reasonTag = r.readTag();
+    const n = r.readArrayHeader();
+    if (n !== 11)
+        throw new Error(`BridgeBackReason: expected 11 fields, got ${n}`);
+    const version = r.readUint();
+    const sourceChainId = r.readUint();
+    const vault = r.readBytes();
+    const asset = r.readBytes();
+    const tokenType = r.readBytes();
+    const coinId = r.readBytes();
+    const recipient = r.readBytes();
+    const amount = beToBigInt(r.readBytes());
+    const feeRecipient = r.readBytes();
+    const feeAmount = beToBigInt(r.readBytes());
+    const deadline = r.readUint();
+    if (!r.done)
+        throw new Error('BridgeBackReason: trailing bytes after reason');
+    return {
+        reasonTag,
+        version,
+        sourceChainId,
+        vault,
+        asset,
+        tokenType,
+        coinId,
+        recipient,
+        amount,
+        feeRecipient,
+        feeAmount,
+        deadline,
+    };
+}
+function beToBigInt(b) {
+    let n = 0n;
+    for (const x of b)
+        n = (n << 8n) | BigInt(x);
+    return n;
+}
 /** `burnTransitionId = H("unicity-burn-transition:v1", stateId, txHash)` (00 §5). */
 export function burnTransitionId(stateId, txHash) {
     return cbor.hArray([cbor.text(DOMAIN_BURN_TRANSITION), cbor.bytes(stateId), cbor.bytes(txHash)]);

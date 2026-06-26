@@ -1,15 +1,16 @@
-# token/ — STUB (filled at M2)
+# token/
 
 End-to-end vectors: full burned-token CBOR blobs → the batch relation's public
 outputs (nullifier, lock ref, return leaf, value), exercising the whole circuit
 path (`00-interop-contract.md` §10, group `token`).
 
-Not yet generated because it requires the new SDK pieces in
-`docs/bridge/dev-plan/03-prover-service.md`: anchored-mode inclusion (**E1**),
-the structural backing verifier (**E3**), and a `BridgeBackReason`-bearing burn
-built through the mint/transfer/split/burn flow. These reuse the existing
-Rust↔JS cross-SDK fixture machinery (`state-transition-sdk-rust` →
-"Regenerating cross-SDK fixtures").
+`token-00.json` is the M2 direct bridge-lock B=1 fixture:
 
-Planned per file: a `*.cbor` burned-token blob plus a `*.json` of the expected
-relation outputs for that token under a fixed `config` + anchor certificate.
+- one bridge-lock justified payment token using `config/config-00.json`;
+- one terminal burn to `BurnPredicate(SHA256(BridgeBackReason))`;
+- one shared anchored inclusion root for genesis + burn;
+- one nullifier accumulator witness from the empty root; and
+- the exact `PublicValues` ABI bytes the prover commits.
+
+The prover host's `check-vectors` command decodes this fixture into a
+`GuestInput` and runs the guest relation in execute mode.

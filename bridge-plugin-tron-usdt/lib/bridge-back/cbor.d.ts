@@ -15,3 +15,18 @@ export { concat as concatBytes };
 export declare function hArray(items: Uint8Array[]): Uint8Array;
 /** Strip leading zero bytes (minimal big-endian); zero becomes the empty string. */
 export declare function minimalBe(b: Uint8Array): Uint8Array;
+/** A cursor over CBOR bytes. */
+export declare class CborReader {
+    readonly buf: Uint8Array;
+    pos: number;
+    constructor(buf: Uint8Array);
+    get done(): boolean;
+    /** Read one item head; returns its major type and argument. Rejects
+     *  non-minimal (non-canonical) argument encodings. */
+    private head;
+    private expect;
+    readTag(): bigint;
+    readArrayHeader(): number;
+    readUint(): bigint;
+    readBytes(): Uint8Array;
+}

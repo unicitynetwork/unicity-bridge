@@ -51,6 +51,28 @@ export declare function encodeBridgeBackReason(c: BridgeConfig, r: BridgeBackRea
 /** `reasonHash = H(reasonBytes)` — the value `BurnPredicate(H(reasonBytes))`
  *  binds (00 §4, PROVISIONAL preimage pending M0 SDK confirmation). */
 export declare function reasonHash(reasonBytes: Uint8Array): Uint8Array;
+/** The fully-decoded `BridgeBackReason`, including its config-bound fields. */
+export interface DecodedBridgeBackReason {
+    readonly reasonTag: bigint;
+    readonly version: bigint;
+    readonly sourceChainId: bigint;
+    readonly vault: Uint8Array;
+    readonly asset: Uint8Array;
+    readonly tokenType: Uint8Array;
+    readonly coinId: Uint8Array;
+    readonly recipient: Uint8Array;
+    readonly amount: bigint;
+    readonly feeRecipient: Uint8Array;
+    readonly feeAmount: bigint;
+    readonly deadline: bigint;
+}
+/**
+ * Inverse of {encodeBridgeBackReason}: decode the canonical `reasonBytes` a
+ * burned token blob carries (the circuit performs the same decode). Strict —
+ * rejects non-canonical CBOR and any trailing bytes (00 §4). `amount`/`feeAmount`
+ * come back as the minimal-big-endian byte strings re-read as integers.
+ */
+export declare function decodeBridgeBackReason(reasonBytes: Uint8Array): DecodedBridgeBackReason;
 /** `burnTransitionId = H("unicity-burn-transition:v1", stateId, txHash)` (00 §5). */
 export declare function burnTransitionId(stateId: Uint8Array, txHash: Uint8Array): Uint8Array;
 /** `nullifier = H("...nullifier:v1", configHash, burnTransitionId)` (00 §5). */

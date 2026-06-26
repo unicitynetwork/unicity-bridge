@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "cli": "tsx src/cli/main.ts",
-    "e2e": "tsx demo/e2e.ts"
+    "e2e": "tsx demo/e2e.ts",
+    "e2e:back": "tsx demo/bridge-back-e2e.ts"
   },
   "engines": {
     "node": ">=22"

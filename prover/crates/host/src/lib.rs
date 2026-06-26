@@ -6,12 +6,18 @@ use bridge_return_core::{
     sorted_lock_ref_root, token_type, BridgeBackReason, BridgeConfig, LockRecord, PublicValues,
     ReturnLeaf, SourceLockRef,
 };
+use bridge_return_guest::{execute, BridgeBurnWitness, GuestInput, RelationWitness};
 use serde_json::Value;
 use thiserror::Error;
 use unicity_token::accumulator::{
     insert as accumulator_insert, verify_non_member, NonMembershipTerminal, NonMembershipWitness,
     SmtProofStep, EMPTY_TREE_ROOT,
 };
+use unicity_token::api::bft::{RootTrustBase, RootTrustBaseNodeInfo, UnicityCertificate};
+use unicity_token::api::NetworkId;
+use unicity_token::cbor::Decoder;
+use unicity_token::crypto::signature::PublicKey;
+use unicity_token::transaction::Token;
 
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -46,6 +52,10 @@ pub fn check_vectors(root: &Path) -> Result<()> {
     check_accumulator(&read(root, "accumulator/accumulator-00.json")?)?;
     check_public(
         &read(root, "public/public-00.json")?,
+        &read(root, "config/config-00.json")?,
+    )?;
+    check_token(
+        &read(root, "token/token-00.json")?,
         &read(root, "config/config-00.json")?,
     )?;
     println!("bridge return prover vectors ok");
@@ -260,6 +270,61 @@ fn check_public(public: &Value, config: &Value) -> Result<()> {
     )
 }
 
+fn check_token(token: &Value, config: &Value) -> Result<()> {
+    let cfg = config_from_json(&config["in"], &config["out"])?;
+    let input = &token["in"];
+    let output = &token["out"];
+    let leaves = array_field(input, "leaves")?
+        .iter()
+        .map(return_leaf_from_json)
+        .collect::<Result<Vec<_>>>()?;
+    let refs = array_field(input, "lock_refs")?
+        .iter()
+        .map(lock_ref_from_json)
+        .collect::<Result<Vec<_>>>()?;
+    let accumulator_witnesses = array_field(input, "accumulator_witnesses")?
+        .iter()
+        .map(non_membership_witness_from_json)
+        .collect::<Result<Vec<_>>>()?;
+    let burned_token = Token::from_cbor(&bytes_field(input, "token_cbor")?)
+        .map_err(|err| HostError::Check(format!("token decode: {err}")))?;
+    let trust_base = trust_base_from_json(&input["trust_base"])?;
+    let anchor_bytes = bytes_field(input, "anchor_certificate_cbor")?;
+    let anchor_decoder = Decoder::new(&anchor_bytes);
+    anchor_decoder
+        .finish()
+        .map_err(|err| HostError::Check(format!("anchor certificate trailing data: {err}")))?;
+    let anchor_certificate = UnicityCertificate::from_cbor(anchor_decoder)
+        .map_err(|err| HostError::Check(format!("anchor certificate decode: {err}")))?;
+    let public_values = public_values_from_json(output)?;
+    let relation_input = GuestInput {
+        config: cfg,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs: refs,
+        witness: RelationWitness {
+            accumulator_witnesses,
+            bridge_burns: vec![BridgeBurnWitness {
+                token: burned_token,
+                trust_base,
+                anchor_certificate,
+                lock_justification_tag: u64_field(input, "lock_justification_tag")?,
+            }],
+        },
+    };
+    let actual = execute(&relation_input)
+        .map_err(|err| HostError::Check(format!("guest token vector rejected: {err:?}")))?;
+    if actual != public_values {
+        return Err(HostError::Check("token public values mismatch".to_string()));
+    }
+    eq_hex_vec(
+        "public_values_abi",
+        &public_values_abi(&public_values),
+        output,
+        "public_values_abi",
+    )
+}
+
 fn config_from_json(input: &Value, output: &Value) -> Result<BridgeConfig> {
     Ok(BridgeConfig {
         source_chain_id: u64_field(input, "source_chain_id")?,
@@ -289,6 +354,51 @@ fn lock_ref_from_json(v: &Value) -> Result<SourceLockRef> {
         nonce: u64_field(v, "nonce")?,
         digest: b32_field(v, "digest")?,
     })
+}
+
+fn public_values_from_json(v: &Value) -> Result<PublicValues> {
+    Ok(PublicValues {
+        domain_tag: b32_field(v, "domain_tag")?,
+        config_hash: b32_field(v, "config_hash")?,
+        trust_base_hash: b32_field(v, "trust_base_hash")?,
+        spent_root_old: b32_field(v, "spent_root_old")?,
+        spent_root_new: b32_field(v, "spent_root_new")?,
+        return_root: b32_field(v, "return_root")?,
+        lock_ref_root: b32_field(v, "lock_ref_root")?,
+        batch_size: u64_field(v, "batch_size")? as u32,
+        total_amount: b32_field(v, "total_amount")?,
+    })
+}
+
+fn trust_base_from_json(v: &Value) -> Result<RootTrustBase> {
+    let nodes = array_field(v, "root_nodes")?
+        .iter()
+        .map(|node| {
+            Ok(RootTrustBaseNodeInfo {
+                node_id: str_field(node, "node_id")?.to_string(),
+                signing_key: PublicKey::from_bytes(&bytes_field(node, "signing_key")?)
+                    .map_err(|err| HostError::Check(format!("trust base signing key: {err}")))?,
+                stake: u64_field(node, "stake")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let network_id = NetworkId::new(
+        u16::try_from(u64_field(v, "network_id")?)
+            .map_err(|_| HostError::Check("network_id exceeds u16".to_string()))?,
+    )
+    .map_err(|err| HostError::Check(format!("network_id: {err}")))?;
+    let trust_base = RootTrustBase::new(
+        u64_field(v, "version")?,
+        network_id,
+        u64_field(v, "epoch")?,
+        u64_field(v, "epoch_start_round")?,
+        nodes,
+        u64_field(v, "quorum_threshold")?,
+    );
+    trust_base
+        .validate()
+        .map_err(|err| HostError::Check(format!("trust base: {err}")))?;
+    Ok(trust_base)
 }
 
 fn non_membership_witness_from_json(v: &Value) -> Result<NonMembershipWitness> {
