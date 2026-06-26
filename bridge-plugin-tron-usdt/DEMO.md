@@ -213,16 +213,27 @@ rm demo/.demo-state.json           # start over
 ## Bridge-BACK demo (return path, live testnet2)
 
 `npm run e2e:back` runs the return path against the **live** Unicity aggregator
-(no Tron needed): it mints a bridged-asset token, burns it to a canonical
-`BridgeBackReason` — terminal recipient predicate `BurnPredicate(H(reasonBytes))`
-with `reasonBytes` in the burn's auxiliary data (00 §4) — certifies the burn on
-the aggregator, then derives the `nullifier` + return leaf from the **real**
-certified burn (state id + tx hash) exactly as the prover will (00 §5/§7). It
-writes the burned-token blob + the prover witness-request envelope to
-`demo/.bridge-back-state.json`.
+(only the Tron lock is mocked in-process): it mints a **bridge-lock-genesis**
+token (real `TronUsdtLockJustification`, structurally verified at mint), burns it
+to a canonical `BridgeBackReason` — terminal recipient predicate
+`BurnPredicate(H(reasonBytes))` with `reasonBytes` in the burn's auxiliary data
+(00 §4) — certifies the burn on the aggregator, then derives the `nullifier` +
+return leaf from the **real** certified burn (state id + tx hash) exactly as the
+prover will (00 §5/§7). It writes the burned-token blob + prover config +
+witness-request envelope to `demo/.bridge-back-state.json`. Reads the repo-root
+`.env` (`UNICITY_GATEWAY`, `UNICITY_API_KEY`, `UNICITY_TRUSTBASE`).
+Source: [`demo/bridge-back-e2e.ts`](demo/bridge-back-e2e.ts).
 
-Reads the repo-root `.env` (`UNICITY_GATEWAY`, `UNICITY_API_KEY`,
-`UNICITY_TRUSTBASE`). The genesis backing reason (E3 structural verifier) is
-exercised by the prover's own token fixture; this demo validates the
-Unicity-side burn construction and that the wallet's nullifier/leaf are computed
-from real certificates. Source: [`demo/bridge-back-e2e.ts`](demo/bridge-back-e2e.ts).
+**Cross-stack closure.** The Rust prover then decodes that exact live blob and
+confirms it derives identical values (E3 `bridge_lock_obligation` lockDigest +
+nonce, `configHash`, burn state id/tx hash, `burnTransitionId`, `nullifier`):
+
+```
+cd ../prover && cargo run -p bridge-return-host --example cross_check_live -- \
+  ../bridge-plugin-tron-usdt/demo/.bridge-back-state.json
+```
+
+> Interop note: the token **value envelope must use the SDK `PaymentAssetCollection`
+> format** (which the prover decodes), not the bespoke `encodeBridgedValue` in
+> `src/value.ts` (CLI-only, not cross-stack compatible). The production wallet
+> (sphere) likewise uses SDK payment data.

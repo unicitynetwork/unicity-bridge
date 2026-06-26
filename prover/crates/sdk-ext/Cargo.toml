@@ -1,0 +1,15 @@
+[package]
+name = "bridge-return-sdk-ext"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+num-bigint = { version = "0.4", default-features = false }
+tiny-keccak = { version = "2", default-features = false, features = ["keccak"] }
+unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc"] }

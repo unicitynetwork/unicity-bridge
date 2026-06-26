@@ -9,25 +9,26 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
+pub mod wire;
+
 use alloc::vec::Vec;
 use bridge_return_core::{
-    burn_transition_id, config_hash, nullifier, sha256, validate_public_values,
-    BridgeConfig as CoreBridgeConfig, BridgeCoreError, PublicValues, Result, ReturnLeaf,
-    SourceLockRef, U256,
+    burn_transition_id, config_hash, nullifier, public_values_abi, public_values_digest, sha256,
+    validate_public_values, BridgeConfig as CoreBridgeConfig, BridgeCoreError, PublicValues,
+    Result, ReturnLeaf, SourceLockRef, U256,
 };
-use unicity_token::accumulator::{insert as accumulator_insert, NonMembershipWitness};
+use bridge_return_sdk_ext::accumulator::{insert as accumulator_insert, NonMembershipWitness};
+use bridge_return_sdk_ext::bridge::{
+    bridge_lock_obligations_for_token_anchored, BridgeConfig as SdkBridgeConfig,
+};
+use bridge_return_sdk_ext::trust::canonical_hash;
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
 use unicity_token::api::StateId;
-use unicity_token::bridge::{
-    bridge_lock_obligation, BridgeConfig as SdkBridgeConfig, BridgeLockMintJustificationVerifier,
-};
 use unicity_token::cbor::Decoder;
 use unicity_token::payment::{AssetId, PaymentAssetCollection};
 use unicity_token::predicate::builtin::BurnPredicate;
 use unicity_token::transaction::Token;
 use unicity_token::transaction::Transaction;
-use unicity_token::verify::{verify_token_anchored_with, MintJustificationRegistry};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuestInput {
@@ -50,6 +51,13 @@ pub struct BridgeBurnWitness {
     pub trust_base: RootTrustBase,
     pub anchor_certificate: UnicityCertificate,
     pub lock_justification_tag: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuestOutput {
+    pub public_values: PublicValues,
+    pub public_values_abi: Vec<u8>,
+    pub public_values_digest: [u8; 32],
 }
 
 pub fn execute(input: &GuestInput) -> Result<PublicValues> {
@@ -75,6 +83,24 @@ pub fn execute(input: &GuestInput) -> Result<PublicValues> {
     Ok(input.public_values)
 }
 
+pub fn execute_public_output(input: &GuestInput) -> Result<GuestOutput> {
+    let public_values = execute(input)?;
+    Ok(public_output(public_values))
+}
+
+pub fn public_output(public_values: PublicValues) -> GuestOutput {
+    GuestOutput {
+        public_values,
+        public_values_abi: public_values_abi(&public_values),
+        public_values_digest: public_values_digest(&public_values),
+    }
+}
+
+pub fn execute_wire(input: &[u8]) -> Result<GuestOutput> {
+    let input = wire::decode_guest_input(input)?;
+    execute_public_output(&input)
+}
+
 fn validate_bridge_burns(
     config: &CoreBridgeConfig,
     trust_base_hash: [u8; 32],
@@ -92,25 +118,13 @@ fn validate_bridge_burns(
     let cfg_hash = config_hash(config);
     let mut obligations = Vec::with_capacity(burns.len());
     for (burn, leaf) in burns.iter().zip(leaves) {
-        if burn.trust_base.canonical_hash() != trust_base_hash {
+        if canonical_hash(&burn.trust_base) != trust_base_hash {
             return Err(BridgeCoreError::WrongTrustBaseHash);
         }
-        let mut registry = MintJustificationRegistry::new();
-        registry
-            .register(Box::new(BridgeLockMintJustificationVerifier::new(
-                burn.lock_justification_tag,
-                sdk_config.clone(),
-            )))
-            .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
-        verify_token_anchored_with(
+        let burn_obligations = bridge_lock_obligations_for_token_anchored(
             &burn.token,
             &burn.trust_base,
             &burn.anchor_certificate,
-            &registry,
-        )
-        .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
-        let obligation = bridge_lock_obligation(
-            burn.token.genesis(),
             burn.lock_justification_tag,
             &sdk_config,
             PaymentAssetCollection::from_cbor_bytes,
@@ -118,10 +132,14 @@ fn validate_bridge_burns(
         .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
         validate_terminal_burn(config, &cfg_hash, leaf, &burn.token)?;
         validate_current_value(config, leaf, &burn.token)?;
-        obligations.push(SourceLockRef {
-            nonce: obligation.nonce,
-            digest: obligation.digest,
-        });
+        obligations.extend(
+            burn_obligations
+                .into_iter()
+                .map(|obligation| SourceLockRef {
+                    nonce: obligation.nonce,
+                    digest: obligation.digest,
+                }),
+        );
     }
     obligations.sort_by_key(|r| r.nonce);
     if obligations.as_slice() != sorted_lock_refs {
@@ -325,7 +343,7 @@ mod tests {
         config_hash, domain_tag, lock_ref_root, reason_cbor, return_root, sum_amounts,
         BridgeBackReason, BridgeConfig, PublicValues, ReturnLeaf,
     };
-    use unicity_token::accumulator::{ordered_insert_witnesses, NullifierTree};
+    use bridge_return_sdk_ext::accumulator::{ordered_insert_witnesses, NullifierTree};
 
     fn cfg() -> BridgeConfig {
         BridgeConfig {

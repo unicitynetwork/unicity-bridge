@@ -108,6 +108,7 @@ pub enum BridgeCoreError {
     WrongBurnPredicate,
     WrongNullifier,
     WrongBurnAmount,
+    WireDecodeFailed,
 }
 
 pub type Result<T> = core::result::Result<T, BridgeCoreError>;

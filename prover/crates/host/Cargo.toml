@@ -6,14 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+sp1 = ["dep:sp1-sdk"]
+
 [dependencies]
 bridge-return-core = { path = "../core" }
 bridge-return-guest = { path = "../guest" }
+bridge-return-sdk-ext = { path = "../sdk-ext" }
 hex = "0.4"
-serde_json = "1"
-thiserror = "1"
-unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc"] }
-
-[dev-dependencies]
 num-bigint = "0.4"
-unicity-token = { path = "../../../state-transition-sdk-rust", features = ["client"] }
+serde_json = "1"
+sp1-sdk = { version = "6.3.1", optional = true, default-features = false, features = ["blocking"] }
+thiserror = "1"
+unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc", "client"] }

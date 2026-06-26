@@ -1,18 +1,22 @@
 use std::{fs, path::Path};
 
+pub mod fixture;
+#[cfg(feature = "sp1")]
+pub mod sp1;
+
 use bridge_return_core::{
     burn_transition_id, coin_id, config_hash, domain_tag, lock_digest, nullifier,
-    public_values_abi, reason_cbor, reason_hash, recipient_commitment, return_root,
-    sorted_lock_ref_root, token_type, BridgeBackReason, BridgeConfig, LockRecord, PublicValues,
-    ReturnLeaf, SourceLockRef,
+    public_values_abi, public_values_digest, reason_cbor, reason_hash, recipient_commitment,
+    return_root, sorted_lock_ref_root, token_type, BridgeBackReason, BridgeConfig, LockRecord,
+    PublicValues, ReturnLeaf, SourceLockRef,
 };
-use bridge_return_guest::{execute, BridgeBurnWitness, GuestInput, RelationWitness};
-use serde_json::Value;
-use thiserror::Error;
-use unicity_token::accumulator::{
+use bridge_return_guest::{execute, execute_wire, BridgeBurnWitness, GuestInput, RelationWitness};
+use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, verify_non_member, NonMembershipTerminal, NonMembershipWitness,
     SmtProofStep, EMPTY_TREE_ROOT,
 };
+use serde_json::Value;
+use thiserror::Error;
 use unicity_token::api::bft::{RootTrustBase, RootTrustBaseNodeInfo, UnicityCertificate};
 use unicity_token::api::NetworkId;
 use unicity_token::cbor::Decoder;
@@ -56,6 +60,10 @@ pub fn check_vectors(root: &Path) -> Result<()> {
     )?;
     check_token(
         &read(root, "token/token-00.json")?,
+        &read(root, "config/config-00.json")?,
+    )?;
+    check_token(
+        &read(root, "token/token-01.json")?,
         &read(root, "config/config-00.json")?,
     )?;
     println!("bridge return prover vectors ok");
@@ -316,6 +324,17 @@ fn check_token(token: &Value, config: &Value) -> Result<()> {
         .map_err(|err| HostError::Check(format!("guest token vector rejected: {err:?}")))?;
     if actual != public_values {
         return Err(HostError::Check("token public values mismatch".to_string()));
+    }
+    let wire_output = execute_wire(&bytes_field(input, "guest_wire_input")?)
+        .map_err(|err| HostError::Check(format!("guest wire vector rejected: {err:?}")))?;
+    if wire_output.public_values != public_values {
+        return Err(HostError::Check("wire public values mismatch".to_string()));
+    }
+    if wire_output.public_values_abi != public_values_abi(&public_values) {
+        return Err(HostError::Check("wire public ABI mismatch".to_string()));
+    }
+    if wire_output.public_values_digest != public_values_digest(&public_values) {
+        return Err(HostError::Check("wire public digest mismatch".to_string()));
     }
     eq_hex_vec(
         "public_values_abi",
