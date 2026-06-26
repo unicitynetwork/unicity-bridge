@@ -57,7 +57,6 @@ The full plan is `docs/bridge/dev-plan/` (start at its `README.md`).
 ### Design-doc hierarchy (read these before touching bridge code)
 
 - `docs/bridge/ZK_BACK3.md` — **the engineering reference for the return path.**
-  Supersedes `ZK_BACK.md` and `ZK_BACK2.md` (kept only for history).
 - `docs/bridge/dev-plan/` — the implementation plan: `00-interop-contract.md`
   (the byte-level cross-stack contract), then `01`/`02`/`03` per component.
 - `unicity-yellowpaper-tex/appendix-bridging.tex` — the formal version; where it

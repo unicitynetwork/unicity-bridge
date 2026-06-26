@@ -114,9 +114,8 @@ they serve.
   are the prover track's SDK extensions.
 - **`state-transition-sdk-js/`** — mirror SDK; source of the plugin extension
   point and `BurnPredicate`.
-- **`docs/bridge/`** — design history: `ZK_BACK.md`, `ZK_BACK2.md` (superseded by
-  `ZK_BACK3.md`), `MINT_REASON.md`, `BRIDGE_BACK.md`, `PLUGIN_ARCHITECTURE.md`,
-  `TRUST_MODELS.md`, `OPTIMISTIC_UNLOCK.md`.
+- **`docs/bridge/`** —  `ZK_BACK3.md`, `MINT_REASON.md`, `BRIDGE_BACK.md`,
+  `PLUGIN_ARCHITECTURE.md`, `TRUST_MODELS.md`, `OPTIMISTIC_UNLOCK.md`.
 
 ## Decisions (fixed)
 
