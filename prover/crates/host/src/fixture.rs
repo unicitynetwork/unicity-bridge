@@ -165,6 +165,176 @@ pub fn b1_fixture_json(fixture: &B1Fixture) -> serde_json::Value {
     )
 }
 
+/// One direct bridge-lock token, minted + burned to a `BridgeBackReason` under
+/// its own anchor. Returns the pieces a batch needs: the burned token + its
+/// anchor (one BFT-quorum check per burn), the settlement leaf, and the source
+/// lock obligation `(nonce, digest)`.
+fn build_direct_burn(
+    config: &BridgeConfig,
+    node: &Secp256k1Signer,
+    owner: &Secp256k1Signer,
+    amount: u64,
+    nonce: u64,
+    salt: [u8; 32],
+    reason: &BridgeBackReason,
+) -> (
+    unicity_token::transaction::Token,
+    UnicityCertificate,
+    ReturnLeaf,
+    SourceLockRef,
+) {
+    let mint = bridge_mint_with_salt(config, owner, amount, nonce, salt);
+    let reason_bytes = reason_cbor(config, reason);
+    let burn = bridge_burn(&mint, reason_bytes);
+
+    let mint_state_id =
+        unicity_token::api::StateId::derive(mint.lock_script(), mint.source_state_hash());
+    let burn_state_id =
+        unicity_token::api::StateId::derive(burn.lock_script(), burn.source_state_hash());
+    let (mint_path, root) = one_sibling_path(
+        mint_state_id.bytes(),
+        &mint.calculate_transaction_hash(),
+        burn_state_id.bytes(),
+        &burn.calculate_transaction_hash(),
+    );
+    let (burn_path, burn_root) = one_sibling_path(
+        burn_state_id.bytes(),
+        &burn.calculate_transaction_hash(),
+        mint_state_id.bytes(),
+        &mint.calculate_transaction_hash(),
+    );
+    assert_eq!(root, burn_root);
+    let anchor = signed_uc(node, root);
+
+    let minter = Minter::signer(mint.token_id()).unwrap();
+    let token = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint.clone(),
+            proof(&mint, &minter, mint_path, anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn.clone(),
+            proof(&burn, owner, burn_path, anchor.clone()),
+        )],
+    );
+
+    let cfg_hash = config_hash(config);
+    let burn_tx_hash: [u8; 32] = burn.calculate_transaction_hash().data().try_into().unwrap();
+    let burn_id = burn_transition_id(burn_state_id.bytes(), &burn_tx_hash);
+    let leaf = ReturnLeaf {
+        nullifier: nullifier(&cfg_hash, &burn_id),
+        recipient: reason.recipient,
+        amount: reason.amount,
+        fee_recipient: reason.fee_recipient,
+        fee_amount: reason.fee_amount,
+        deadline: reason.deadline,
+    };
+    let obligation = bridge_lock_obligation(
+        token.genesis(),
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+        &sdk_config(config),
+        PaymentAssetCollection::from_cbor_bytes,
+    )
+    .unwrap();
+    let lock_ref = SourceLockRef {
+        nonce: obligation.nonce,
+        digest: obligation.digest,
+    };
+    (token, anchor, leaf, lock_ref)
+}
+
+/// A B=2 batch: two independent direct bridge-lock tokens burned to distinct
+/// `BridgeBackReason`s, sharing one trust base, with one ordered accumulator
+/// transition over both nullifiers and two source lock refs sorted by nonce.
+/// This exercises the multi-burn path and the order-coupled accumulator
+/// invariant (ZK_BACK3 §7.4) in `execute` mode.
+pub fn build_b2_direct_bridge_fixture() -> GuestInput {
+    let config = core_config();
+    let node = signer(0x11);
+    let trust_base = trust_base(&node);
+
+    let reason0 = BridgeBackReason {
+        version: 1,
+        recipient: [0xB2; 20],
+        amount: bridge_return_core::u256_from_u64(1_000_000),
+        fee_recipient: [0xC3; 20],
+        fee_amount: bridge_return_core::u256_from_u64(1_000),
+        deadline: 1_900_000_000,
+    };
+    let reason1 = BridgeBackReason {
+        version: 1,
+        recipient: [0xD4; 20],
+        amount: bridge_return_core::u256_from_u64(600_000),
+        fee_recipient: [0u8; 20],
+        fee_amount: [0u8; 32],
+        deadline: 0,
+    };
+
+    // Distinct owners/nonces/salts keep the two tokens (and their nullifiers and
+    // lock obligations) independent. Nonces 7 < 9 are already sorted.
+    let (token0, anchor0, leaf0, ref0) = build_direct_burn(
+        &config,
+        &node,
+        &signer(0x22),
+        1_000_000,
+        7,
+        [0x42; 32],
+        &reason0,
+    );
+    let (token1, anchor1, leaf1, ref1) = build_direct_burn(
+        &config,
+        &node,
+        &signer(0x23),
+        600_000,
+        9,
+        [0x43; 32],
+        &reason1,
+    );
+
+    let leaves = vec![leaf0, leaf1];
+    let tree = NullifierTree::new();
+    let (accumulator_witnesses, spent_root_new) =
+        ordered_insert_witnesses(&tree, &[leaves[0].nullifier, leaves[1].nullifier]).unwrap();
+    let lock_refs = vec![ref0, ref1]; // sorted by nonce (7, 9)
+
+    let cfg_hash = config_hash(&config);
+    let public_values = PublicValues {
+        domain_tag: domain_tag(),
+        config_hash: cfg_hash,
+        trust_base_hash: canonical_hash(&trust_base),
+        spent_root_old: tree.root(),
+        spent_root_new,
+        return_root: return_root(&leaves),
+        lock_ref_root: lock_ref_root(&lock_refs).unwrap(),
+        batch_size: 2,
+        total_amount: sum_amounts(&leaves),
+    };
+
+    GuestInput {
+        config,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs: lock_refs,
+        witness: RelationWitness {
+            accumulator_witnesses,
+            bridge_burns: vec![
+                BridgeBurnWitness {
+                    token: token0,
+                    trust_base: trust_base.clone(),
+                    anchor_certificate: anchor0,
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+                BridgeBurnWitness {
+                    token: token1,
+                    trust_base,
+                    anchor_certificate: anchor1,
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+            ],
+        },
+    }
+}
+
 pub fn build_split_bridge_fixture() -> SplitFixture {
     let config = core_config();
     let source_amount = 1_000_000;

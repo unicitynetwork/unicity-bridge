@@ -12,3 +12,17 @@ edition = "2021"
 rust-version = "1.81"
 license = "MIT OR Apache-2.0"
 publish = false
+
+# SP1 accelerated precompiles for the guest's crypto. These forks route the
+# RustCrypto sha2 / k256 (ECDSA secp256k1) / crypto-bigint and tiny-keccak calls
+# to SP1 zkVM syscalls, cutting the secp256k1-verify and SHA-256-heavy relation
+# from tens of millions of RISC-V cycles to a tractable count. Off-zkVM the forks
+# fall back to the stock implementation, so host `cargo test` is unaffected.
+# Tags pinned to the SP1 6.2.0 patch line (compatible with the sp1-zkvm 6.3.1
+# toolchain); versions match the guest tree (sha2 0.10.9, k256 0.13.4,
+# crypto-bigint 0.5.5, tiny-keccak 2.0.2).
+[patch.crates-io]
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.2.0" }
+k256 = { git = "https://github.com/sp1-patches/elliptic-curves", package = "k256", tag = "patch-k256-13.4-sp1-6.2.0" }
+crypto-bigint = { git = "https://github.com/sp1-patches/RustCrypto-bigint", package = "crypto-bigint", tag = "patch-0.5.5-sp1-6.2.0" }
+tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", package = "tiny-keccak", tag = "patch-2.0.2-sp1-6.2.0" }
