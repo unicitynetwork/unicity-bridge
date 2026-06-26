@@ -23,31 +23,42 @@ The document is intentionally layered. Each layer has a small contract:
 | Replay accumulator | Proves each burn nullifier was absent and inserts it | Prevents double release with one on-chain root |
 | Batch executor | Binds public leaves to the vault transfers | Keeps source-chain calldata and execution deterministic |
 
+Destination binding — that recipient, amount, asset, and vault cannot be altered —
+is not a separate pass. It is a cross-cut enforced across the lineage, value, and
+executor layers: the burn reason is decoded once in the lineage layer, checked
+against the pinned config in the value layer, and copied verbatim into the public
+leaf by the executor.
+
 ---
 
 ## 1. Design Summary
 
-### 1.1 What changes from the account-nonce design
+### 1.1 Why a global accumulator and not per-account nonces
 
-[`ZK_BACK2.md`](./ZK_BACK2.md) removed per-burn nullifier storage by using
-source-chain account nonces. That is simple for the vault, but it adds
-source-chain signatures, per-account/lane state, and nonce-ordering UX.
+Replay protection must consume some scarce source-chain object, or the same
+Groth16 proof could be replayed for a second release. There are two ways to keep
+that object small.
 
-This design uses a global nullifier accumulator instead:
+One is a per-account nonce: each returning account owns a monotone counter, and a
+release must present the account's next value. It is simple for the vault, but it
+adds a source-chain authorization signature per return, per-account/lane state,
+and nonce-ordering UX (a stuck return blocks that account's next one).
 
-| Topic | Account nonces (`ZK_BACK2`) | Accumulator (`ZK_BACK3`) |
+This design uses a single global nullifier accumulator instead. The two approaches
+trade off as follows:
+
+| Topic | Per-account nonces | Global accumulator (this design) |
 |---|---|---|
-| Source replay state | `nextReturnNonce[account][lane]` | one `spentRoot` |
-| Extra source authorization | EVM/Tron account signature | none; burn reason is authorization |
+| Source replay state | one counter per active account/lane | one `spentRoot` total |
+| Extra source authorization | account signature per return | none; the burn is the authorization |
 | User ordering | ordered per account/lane | no per-user ordering |
-| Batch ordering | independent except account nonces | serialized by global `spentRoot` |
+| Batch ordering | independent except per account | serialized by the global `spentRoot` |
 | Public per-burn replay data | account/lane/nonce | nullifier |
 | Off-chain complexity | low | accumulator witness maintenance |
-| Source-chain storage growth | one slot per active account/lane | one slot total for replay |
 
-The accumulator is the cheaper source-chain end state. It is not simpler
-operationally, so the rest of this document makes that complexity explicit and
-modular.
+The accumulator is the cheaper and lower-friction source-chain end state: constant
+replay storage and no per-user ordering. Its one cost is off-chain witness
+maintenance, which the rest of this document makes explicit and modular.
 
 ### 1.2 Flow
 
@@ -107,6 +118,15 @@ With those properties, one recent certified root `R*` can anchor every state
 record in a token's history. The circuit verifies the BFT certificate for `R*`
 once, then verifies many cheap anchored inclusion paths against that root.
 
+This optimization intentionally removes each transition's original request
+validation time from the in-circuit predicate call. V1 bridge-return therefore
+supports only token predicates whose validity is independent of Unicity system
+time. That matches the current bridge-token path: signature ownership, burn, and
+split/value checks do not need the original `UC.IR.t`. If bridge-return later
+needs timelocks, HTLCs, or any predicate whose result depends on validation time,
+the relation must either carry authenticated original validation time per
+transition or fall back to per-transition certificates for those spends.
+
 If a future Unicity deployment does not provide historical inclusion proofs
 against a later root, this optimization is invalid and the design must fall back
 to per-transition certificates or another authenticated-history commitment.
@@ -122,9 +142,10 @@ a transfer is certified under the `StateId` of the state it spends:
 StateId = H(lock_script, source_state_hash)
 ```
 
-The burn transfer is the terminal transfer whose recipient predicate is
-`BurnPredicate(BridgeBackReason)`. Its certified transition is uniquely
-identified by:
+The burn transfer is the terminal transfer whose auxiliary data contains the
+canonical `BridgeBackReason` bytes and whose recipient predicate is
+`BurnPredicate(H(reasonBytes))`. Its certified transition is uniquely identified
+by:
 
 ```text
 burnTransitionId = H(
@@ -169,6 +190,13 @@ configHash = keccak256(abi.encode(
 The circuit receives the full config as witness or constant, checks every burn
 reason and lock digest against it, and commits only `configHash` publicly. The
 vault compares `publicValues.configHash` with its immutable `CONFIG_HASH`.
+
+Because the vault settles in its own immutable `ASSET` while the circuit validates
+against `config.asset`, the two must not diverge. The vault therefore does not take
+`CONFIG_HASH` as an opaque constant: it takes the full config in its constructor,
+derives `CONFIG_HASH` from those fields, and sets `ASSET` from the same `asset`
+field (Section 9). `CONFIG_HASH` and `ASSET` are then consistent by construction
+and cannot be misconfigured independently.
 
 ---
 
@@ -226,8 +254,9 @@ the first implementation.
 
 ## 4. Burn Reason
 
-The holder returns value by burning a Unicity token to a `BurnPredicate` whose
-reason commits to the source-chain release.
+The holder returns value by burning a Unicity token with a self-contained burn
+reason. The terminal transfer carries the canonical `BridgeBackReason` bytes in
+its auxiliary data and uses recipient predicate `BurnPredicate(H(reasonBytes))`.
 
 ```text
 BridgeBackReason = #tag(BRIDGE_BACK_REASON_TAG) [
@@ -241,25 +270,37 @@ BridgeBackReason = #tag(BRIDGE_BACK_REASON_TAG) [
   amount,             // gross amount; equals burned token value for coinId
   feeRecipient,       // zero address if no fee
   feeAmount,          // <= amount
-  deadline            // optional; see below
+  deadline            // gates the relayer fee only; see below
 ]
 ```
 
 There is no separate source-chain signature. The act of burning is the
 authorization, and the burn reason fixes the destination.
 
+The reason is not an out-of-band witness. The circuit decodes it from the
+certified terminal burn transfer and checks that the burn predicate binds exactly
+those bytes. A burned token blob therefore contains all release-authorizing data;
+if that blob is lost before settlement, the source-chain vault has nothing
+self-contained to release against.
+
 For a partial return, the wallet splits first and burns the child whose value is
 the desired return amount.
 
 ### Deadline guidance
 
-`deadline` is useful for relayer fee quotes, but it is dangerous because a burn
-is irreversible. If the deadline expires before a proof lands, the source vault
-must reject the release and the burned value remains locked on the source chain.
+`deadline` bounds the relayer-fee arrangement, not the release itself. Because a
+burn is irreversible, the vault never rejects a release for lateness — that would
+strand the burned value permanently. Instead the deadline gates only the fee:
 
-For v1, wallets should default to "effectively no deadline" or a very long
-deadline. Short deadlines should be treated as an advanced relayer-order feature,
-not a default return flow.
+- on or before `deadline`: the vault pays `recipient` the net `amount - feeAmount`
+  and `feeRecipient` the `feeAmount`;
+- after `deadline`: the vault pays `recipient` the full `amount` and no fee.
+
+So a slow or absent relayer costs the relayer its fee, never the user's principal.
+After the deadline the recipient (or anyone) can still settle the burn by
+submitting the proof themselves and receive the full amount. Wallets may set a
+near-term `deadline` to price a relayer order with no risk to funds; a value of
+zero (or any past timestamp) simply means "no fee, recipient self-settles."
 
 ---
 
@@ -320,6 +361,11 @@ pub struct SourceLockRef {
 `SourceLockRef[]`, sorted by `nonce` and with duplicate nonces rejected. The
 vault enforces the same sorted-unique rule before checking storage.
 
+The public commitment helpers for `return_root` and `lock_ref_root` are not
+deployment-configurable in v1. They are part of the circuit verification key,
+the vault helpers, and the `domain_tag` contract: both sides use the same
+fixed-width ABI encoding and keccak hashing.
+
 ---
 
 ## 6. Private Witnesses
@@ -356,6 +402,14 @@ pub struct AnchoredInclusionProof {
 
 The witness builder obtains `anchor_root`, `anchor_cert`, and the anchored
 inclusion proofs by querying Unicity for one chosen root `R*`.
+
+`nullifier_aux` is order-sensitive. When a batch returns several burns the
+accumulator is mutated once per burn, so the non-membership witness for the k-th
+burn must be valid against the accumulator state *after* the first k-1 insertions
+of this batch — not against `spent_root_old`. The accumulator builder therefore
+simulates the batch's insertions in return-leaf order and emits each
+`nullifier_aux` against the running intermediate root (Sections 7.4 and 10.2). A
+witness computed against `spent_root_old` is valid only for the first burn.
 
 ---
 
@@ -397,8 +451,14 @@ Checks:
 1. Genesis and transfer chain linkage matches the SDK's reconstructed fields.
 2. Each transfer spends the prior token state.
 3. Each transition hash equals the authenticated transaction hash.
-4. Each owner authorization is valid for the authenticated spend.
-5. The terminal transfer's recipient is `BurnPredicate(BridgeBackReason)`.
+4. Each owner authorization is valid for the authenticated spend, using only
+   predicate families whose validation is independent of Unicity system time.
+5. The terminal transfer carries `BridgeBackReason` in auxiliary data and its
+   recipient predicate is `BurnPredicate(H(reasonBytes))`.
+
+Anchored mode must reject any predicate type whose validity depends on the
+original `UC.IR.t`, unless a later circuit version explicitly carries and checks
+that authenticated time.
 
 Output:
 
@@ -453,11 +513,17 @@ Checks:
 
 1. Start with `running_spent = spent_root_old`.
 2. For each burn in return-leaf order:
-   - verify nullifier non-membership under `running_spent`;
+   - verify nullifier non-membership under `running_spent`, using the witness the
+     builder computed against this same intermediate root (not against
+     `spent_root_old`);
    - insert the nullifier;
    - set `running_spent` to the insertion result.
 3. Reject duplicate nullifiers in the same batch. The second insertion should
    fail non-membership, but an explicit duplicate check gives clearer errors.
+
+The supplied witnesses are therefore order-coupled to the batch: witness k assumes
+insertions 0..k-1 have already been applied. The builder produces them in the same
+return-leaf order (Section 10.2).
 
 Output:
 
@@ -507,19 +573,22 @@ For each burn, in return-leaf order:
 ```text
 F1. token = Token::from_cbor(token_cbor)
 F2. verify every required AnchoredInclusionProof against anchor_root
-F3. verify SDK-equivalent chain linkage and owner authorization
+F3. verify SDK-equivalent chain linkage and time-independent owner authorization
 
 V1. verify bridge genesis against source LockRecord digest
 V2. verify split/value lineage to the burned token
 
-D1. decode BridgeBackReason from the terminal BurnPredicate
+D1. decode BridgeBackReason from terminal burn auxiliary data
+    and require recipient == BurnPredicate(H(reasonBytes))
 D2. require reason config fields match config
 D3. require reason.amount == certified value for coinId
 D4. require reason.feeAmount <= reason.amount
 
-R1. burnTransitionId = H(certifiedBurnStateId, certifiedBurnTransactionHash)
-R2. nullifier = H(nullifierDomain, configHash, burnTransitionId)
+R1. burnTransitionId = H("unicity-burn-transition:v1",
+                        certifiedBurnStateId, certifiedBurnTransactionHash)
+R2. nullifier = H("unicity-bridge-return-nullifier:v1", configHash, burnTransitionId)
 R3. verify nullifier non-membership under running_spent
+       (witness valid against the current running_spent; see 7.4)
 R4. running_spent := insert(running_spent, nullifier)
 
 E1. append ReturnLeaf{nullifier, recipient, amount, feeRecipient, feeAmount, deadline}
@@ -554,6 +623,33 @@ contract ReturnVault {
     mapping(bytes32 => bool)    public trustBaseAllowed; // timelocked governance
     bytes32 public spentRoot;                            // init = EMPTY_TREE_ROOT
 
+    struct BridgeConfig {
+        uint64  sourceChainId;
+        address vault;
+        address asset;
+        bytes32 tokenType;
+        bytes32 coinId;
+        uint64  bridgeBackReasonTag;
+        bytes32 lockDigestDomain;
+        bytes32 nullifierDomain;
+    }
+
+    // CONFIG_HASH and ASSET are derived from one config, so the asset the circuit
+    // validates and the asset the vault pays out cannot diverge.
+    constructor(BridgeConfig memory cfg, ISP1Verifier _sp1, bytes32 _vkey, bytes32 _domainTag) {
+        require(cfg.vault == address(this), "vault");
+        require(cfg.sourceChainId == block.chainid, "chain");
+        sp1 = _sp1;
+        VKEY = _vkey;
+        DOMAIN_TAG = _domainTag;
+        ASSET = IERC20(cfg.asset);
+        CONFIG_HASH = keccak256(abi.encode(
+            "unicity-bridge-return-config:v1",
+            cfg.sourceChainId, cfg.vault, cfg.asset, cfg.tokenType, cfg.coinId,
+            cfg.bridgeBackReasonTag, cfg.lockDigestDomain, cfg.nullifierDomain));
+        spentRoot = EMPTY_TREE_ROOT;
+    }
+
     function fulfillBatch(
         bytes calldata publicValues,
         bytes calldata proof,
@@ -578,10 +674,8 @@ contract ReturnVault {
 
         uint256 total;
         for (uint256 i = 0; i < leaves.length; ++i) {
-            ReturnLeaf calldata L = leaves[i];
-            require(block.timestamp <= L.deadline, "expired");
-            require(L.feeAmount <= L.amount,       "fee");
-            total += L.amount;
+            require(leaves[i].feeAmount <= leaves[i].amount, "fee");
+            total += leaves[i].amount;
         }
         require(total == p.totalAmount, "total");
 
@@ -590,11 +684,14 @@ contract ReturnVault {
 
         for (uint256 i = 0; i < leaves.length; ++i) {
             ReturnLeaf calldata L = leaves[i];
-            ASSET.safeTransfer(L.recipient, L.amount - L.feeAmount);
-            if (L.feeAmount != 0) {
-                ASSET.safeTransfer(L.feeRecipient, L.feeAmount);
+            // The deadline gates only the fee. The principal is always released,
+            // so a late or absent relayer can never strand funds.
+            uint256 fee = block.timestamp <= L.deadline ? L.feeAmount : 0;
+            ASSET.safeTransfer(L.recipient, L.amount - fee);
+            if (fee != 0) {
+                ASSET.safeTransfer(L.feeRecipient, fee);
             }
-            emit Released(L.nullifier, L.recipient, L.amount, L.feeRecipient, L.feeAmount);
+            emit Released(L.nullifier, L.recipient, L.amount, L.feeRecipient, fee);
         }
     }
 }
@@ -612,6 +709,20 @@ Contract rules:
 - All validation happens before external transfers.
 - The known asset should still be transferred through a safe-transfer helper and
   a reentrancy guard.
+- `CONFIG_HASH` and `ASSET` are derived together in the constructor, so the
+  circuit's asset checks and the vault's payout asset cannot diverge.
+- The deadline gates only the fee; the principal is always released, so an expired
+  return can never strand funds.
+
+> **Batch atomicity.** All `B` transfers settle in one transaction, so a single
+> recipient that reverts on receipt (for example a token that blocks certain
+> addresses) reverts the whole batch. This is a liveness concern, not a safety
+> one: on revert `spentRoot` is unchanged and no nullifier is consumed, so the
+> sequencer can drop the offending leaf and re-batch. Sequencers should
+> pre-simulate transfers and exclude failing recipients. Deployments that expect
+> blockable recipients can switch settlement to a pull model — credit
+> `recipient => owed` here and expose a separate `withdraw()` — trading one extra
+> user transaction for transfer-failure isolation.
 
 ---
 
@@ -636,7 +747,9 @@ Responsibilities:
 - reconstruct the indexed Merkle tree from `EMPTY_TREE_ROOT` by replaying
   successful `BatchFulfilled` and `Released(nullifier, ...)` events in chain
   order;
-- produce non-membership witnesses;
+- produce non-membership witnesses; for a multi-burn batch, simulate the batch's
+  insertions in return-leaf order and emit each witness against the running
+  intermediate root, not against the starting `spentRoot`;
 - update a local cache after successful batches;
 - rebase pending batches when another batch advances `spentRoot`.
 
@@ -657,6 +770,8 @@ Responsibilities:
 
 - select burns for a batch;
 - serialize batches on the current `spentRoot`;
+- pre-simulate settlement transfers and exclude any recipient that would revert,
+  so one blocked transfer cannot fail the whole batch (Section 9, batch atomicity);
 - submit `fulfillBatch`;
 - retry or rebase stale-root batches.
 
@@ -730,9 +845,12 @@ This changes proving architecture only. The vault interface stays stable.
 |---|---|---|
 | Burn is real and final | One certified anchor root plus inclusion of the burn transition | Proof-system soundness; trust-base governance |
 | Token history is valid | SDK-equivalent chain linkage and owner-authorization checks | Circuit must track SDK semantics exactly |
+| Predicate-time soundness | V1 accepts only predicates independent of `UC.IR.t` | Future time-dependent predicates need authenticated original time |
 | Value is genuine | Bridge genesis backed by vault-stored lock digest | Correct lock digest at bridge-in |
 | Splits cannot inflate value | Recursive split sum checks on the path to the burned leaf | None for supported split semantics |
 | Destination cannot be altered | Burn reason binds config, recipient, amount, fee, deadline | None |
+| Late/absent relayer cannot strand funds | Deadline gates only the fee; principal is always releasable, by the recipient if needed | Recipient must self-settle after deadline |
+| Validated asset equals settled asset | `CONFIG_HASH` and `ASSET` derived from one constructor config | Correct deployment config |
 | Same burn cannot release twice | Public nullifier non-membership and insertion, checked by `spentRootOld == spentRoot` | Accumulator implementation correctness |
 | Source-chain replay storage is constant | One `spentRoot`, no nullifier map and no nonce map | Off-chain accumulator grows publicly |
 | Prover cannot steal | Vault pays only public leaves proven from burn reasons | Prover can stall |
@@ -751,6 +869,14 @@ Security-critical implementation requirements:
    transition.
 5. The vault must compare `configHash` and `trustBaseHash` against governed
    source-chain state.
+6. Each per-burn non-membership witness must be built against the intermediate
+   accumulator root after the prior burns in the same batch, not against
+   `spentRootOld`.
+7. `CONFIG_HASH` and `ASSET` must be derived together at deployment, so the
+   validated asset and the settled asset cannot differ.
+8. Anchored mode must reject predicate types that require the original
+   request-validation time unless the relation carries authenticated original
+   time for those transitions.
 
 ---
 
@@ -765,6 +891,8 @@ Security-critical implementation requirements:
 - If a prover disappears, another prover rebuilds the accumulator from public
   `Released` events from the empty accumulator root, refetches Unicity anchored
   proofs, and proves again.
+- A passed `deadline` never blocks a release; it only drops the relayer fee, after
+  which the recipient (or anyone) can self-settle the burn for the full amount.
 - If a burned token blob is lost before release, the source-chain vault cannot
   release it. Wallets and relayers must treat burned token blobs as critical
   recovery material until settlement.
@@ -785,6 +913,11 @@ Normative before implementation:
   `SourceLockRef`.
 - sorted-unique rule for lock refs.
 - trust-base allow-list governance and timelock.
+- constructor derivation of `CONFIG_HASH` and `ASSET` from one config struct.
+- intra-batch non-membership witness ordering (witness k against the root after
+  insertions 0..k-1).
+- deadline semantics: gates the fee only, never blocks the principal release.
+- supported bridge-return predicate set: v1 is time-independent only.
 
 Measured before production:
 
@@ -807,7 +940,8 @@ Measured before production:
 : Hash of the certified mint or transfer transaction.
 
 `burn transition`
-: Terminal transfer whose recipient is `BurnPredicate(BridgeBackReason)`.
+: Terminal transfer whose auxiliary data contains `BridgeBackReason` and whose
+  recipient is `BurnPredicate(H(reasonBytes))`.
 
 `burnTransitionId`
 : Domain-separated hash of the certified burn `StateId` and transition hash.
