@@ -95,13 +95,21 @@ contract UnicityBridgeVault {
         _entered = 0;
     }
 
-    /// @param cfg       Deployment config. `cfg.vault` must equal this address so
-    ///                  CONFIG_HASH binds the live vault (predict via CREATE/CREATE2).
+    /// @param cfg       Deployment config. `cfg.vault` is IGNORED and overwritten
+    ///                  with `address(this)`: the vault stamps its own address into
+    ///                  CONFIG_HASH so the binding holds without predicting the
+    ///                  deploy address. This is required on Tron, where the contract
+    ///                  address derives from the deployment txID (which covers the
+    ///                  constructor args), making a `cfg.vault == address(this)`
+    ///                  precondition circular/unsatisfiable. On EVM the stamped
+    ///                  value equals the CREATE address, so CONFIG_HASH is unchanged.
+    ///                  The off-chain prover/wallet MUST set its `BridgeConfig.vault`
+    ///                  to the deployed address so its `configHash` matches.
     /// @param verifier_ The proof verifier (mock at M2, SP1 Groth16 at M3).
     /// @param vkey      The circuit verification key (placeholder until M3).
     /// @param admin_    Trust-base allow-list manager.
     constructor(BridgeConfig memory cfg, IProofVerifier verifier_, bytes32 vkey, address admin_) {
-        require(cfg.vault == address(this), "vault: config vault mismatch");
+        cfg.vault = address(this);
         require(cfg.asset != address(0), "vault: zero asset");
         require(address(verifier_) != address(0), "vault: zero verifier");
         require(admin_ != address(0), "vault: zero admin");

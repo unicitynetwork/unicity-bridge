@@ -127,42 +127,49 @@ This `SP1Verifier` contract is the one to deploy in Stage C (`TRON_VERIFIER`).
 
 ## Stage B — mock end-to-end on Nile (M2)
 
-> **Tooling ready, two live blockers found (2026-06-28).** The TronWeb deploy
-> script `scripts/deploy-nile.js` is in place and connects to Nile (reads
-> balance, builds deploy txs). Attempting the deploy surfaced two blockers:
+> **Deployed to Nile ✅ (2026-06-28).** Mock verifier + the Tron-compatible vault
+> are live on Nile via `scripts/deploy-nile.js stage-b`:
 >
-> 1. **Credential mismatch in `.env`.** `TRON_SK` derives
->    `TPu3AykWeTSC1hBNnAHvqib7Hu9jbpvjG1` (0 TRX, **unactivated**), but the funded
->    account is `TRON_ACCOUNT = TBAubrN14Zm3mbWACjPMte9HeqQgJ1cDxQ` (2000 TRX).
->    The key does not control the funded account, so nothing can be deployed.
->    **Fix:** put the funded account's private key in `TRON_SK`, **or** fund
->    `TPu3Ayk…` via the Nile faucet (https://nileex.io/join/getJoinPage). The
->    deploy attempt failed pre-broadcast (`account does not exist`) — no TRX spent.
-> 2. **Vault self-reference is not Tron-deployable.** `UnicityBridgeVault`'s
->    constructor requires `cfg.vault == address(this)`. On EVM you predict the
->    CREATE address from `(deployer, nonce)` — independent of constructor args —
->    set `cfg.vault`, and deploy (this is how the Hardhat tests do it). On Tron
->    the new contract address is `sha3omit12(txID)` and the **txID covers the
->    constructor args**, so the address depends on `cfg.vault` which must equal the
->    address: a circular dependency with no fixed point (CREATE2 doesn't help —
->    `cfg.vault` is in the initcode too). **Fix (01 track):** a Tron-compatible
->    vault that sets `vault = address(this)` internally (drop the `cfg.vault`
->    constructor arg, fold `address(this)` into `CONFIG_HASH`) or uses a one-time
->    initializer. Until then only the no-arg contracts (mock/real verifier) deploy.
+> | Contract | Nile address |
+> |---|---|
+> | `MockProofVerifier` | `TBwGYUY9BimAjnaPyFd6YwTit2o2zSRjn9` |
+> | `UnicityBridgeVault` | `TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a` |
+>
+> Deployer `TPu3AykWeTSC1hBNnAHvqib7Hu9jbpvjG1` (the account `TRON_SK` controls);
+> vault deploy cost ~145 TRX (1.35M energy). The vault's
+> `CONFIG_HASH = 0xe06d52d9006479a11680bdc350f0e37c745a2fe752ce9e5dcb23000e06204203`
+> was verified off-chain to equal
+> `keccak(abi.encode(DOMAIN_CONFIG, …, vault = the deployed address, …))`,
+> confirming the **self-stamp** worked.
+>
+> **The vault was made Tron-compatible.** Originally the constructor required
+> `cfg.vault == address(this)`. On EVM you predict the CREATE address from
+> `(deployer, nonce)` (independent of constructor args) and pass it; on Tron the
+> address is `sha3omit12(txID)` and the txID covers the constructor args, so the
+> requirement is circular (CREATE2 doesn't help — `cfg.vault` is in the initcode).
+> Fix: the constructor now **stamps `cfg.vault = address(this)`** before hashing,
+> so `CONFIG_HASH` binds the deploy address without predicting it (on EVM the
+> stamped value equals the CREATE address, so behavior is unchanged — Hardhat
+> tests still green). **The off-chain prover/wallet must set
+> `BridgeConfig.vault = TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a`** so its `configHash`
+> matches this vault.
+>
+> Two TronWeb gotchas the script handles: struct constructor args must be
+> ABI-encoded via ethers and passed as `rawParameter` (TronWeb mis-encodes
+> tuples); and the on-chain contract `name` must be ≤ 32 chars.
 
-Goal: exercise the vault's settlement logic on Nile without a real proof.
+Goal: exercise the vault's settlement logic on Nile without a real proof. Done:
 
-1. `npm run build` in `contracts/tron/` (compile artifacts).
-2. Deploy `test/MockProofVerifier.sol` → temporary `TRON_VERIFIER`
-   (`node scripts/deploy-nile.js mock-verifier`, once a funded key is set).
-3. **(blocked, see above)** Predict the vault address, build `cfg` (Nile +
-   `TRON_USDT` + derived fields), deploy
-   `UnicityBridgeVault(cfg, mockVerifier, vkey, admin)`.
-4. `setTrustBaseAllowed(trustBaseHash, true)` for the testnet2 trust base hash
-   (`canonical_hash` of `bft-trustbase.testnet2.json`).
-5. Seed a `lock()` so `lockDigest[nonce]` is set, fund the vault with `TRON_USDT`,
-   then `fulfillBatch(publicValues, proof=<any>, leaves, lockRefs)` with a
-   mock-accepted proof. Confirm `Released` events + TRC20 transfer.
+1. ✅ `npm run build` in `contracts/tron/` (compile artifacts).
+2. ✅ `node scripts/deploy-nile.js stage-b` — deploys `MockProofVerifier` then the
+   vault (stamping `address(this)`), prints addresses + `CONFIG_HASH`.
+3. **(open)** `setTrustBaseAllowed(trustBaseHash, true)` for the testnet2 trust
+   base hash (`canonical_hash` of `bft-trustbase.testnet2.json`).
+4. **(open)** Seed a `lock()` so `lockDigest[nonce]` is set, fund the vault with
+   `TRON_USDT`, then `fulfillBatch(publicValues, proof=<any>, leaves, lockRefs)`
+   with a mock-accepted proof. Confirm `Released` events + TRC20 transfer. (Needs
+   a `BridgeConfig` whose derived fields the off-chain side also commits — the
+   config freeze, #3.)
 
 ## Stage C — real proof on Nile (M3) — needs blockers #1, #3, #4
 

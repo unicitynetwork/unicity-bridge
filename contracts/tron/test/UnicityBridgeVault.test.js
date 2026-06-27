@@ -133,16 +133,21 @@ describe("UnicityBridgeVault — constructor & lock (bridge-in)", () => {
     expect(await vault.CONFIG_HASH()).to.not.equal(ethers.ZeroHash);
   });
 
-  it("rejects a config whose vault != address(this)", async () => {
+  it("stamps address(this) into CONFIG_HASH, ignoring the passed cfg.vault", async () => {
+    // The constructor overwrites cfg.vault with address(this) (Tron-compatible:
+    // the deploy address can't be predicted). So a "wrong" cfg.vault is accepted
+    // and CONFIG_HASH binds the real address, not the passed value.
     const [deployer, admin] = await ethers.getSigners();
     const Asset = await ethers.getContractFactory("MockTRC20");
     const asset = await Asset.deploy();
+    await asset.waitForDeployment();
     const Verifier = await ethers.getContractFactory("MockProofVerifier");
     const verifier = await Verifier.deploy();
+    await verifier.waitForDeployment();
     const Vault = await ethers.getContractFactory("UnicityBridgeVault");
-    const badCfg = {
+
+    const cfgBase = {
       sourceChainId: SRC_CHAIN,
-      vault: deployer.address, // wrong
       asset: await asset.getAddress(),
       tokenType: TOKEN_TYPE,
       coinId: COIN_ID,
@@ -150,9 +155,26 @@ describe("UnicityBridgeVault — constructor & lock (bridge-in)", () => {
       lockDomain: "0x" + "cc".repeat(32),
       nullifierDomain: "0x" + "dd".repeat(32),
     };
-    await expect(
-      Vault.deploy(badCfg, await verifier.getAddress(), VKEY, admin.address)
-    ).to.be.revertedWith("vault: config vault mismatch");
+
+    // Deploy with a deliberately wrong cfg.vault — must NOT revert.
+    const vault = await Vault.connect(deployer).deploy(
+      { ...cfgBase, vault: deployer.address },
+      await verifier.getAddress(),
+      VKEY,
+      admin.address
+    );
+    await vault.waitForDeployment();
+
+    // CONFIG_HASH must equal the hash computed with vault = the deployed address,
+    // and differ from one computed with the (wrong) passed value.
+    const enc = await ethers.getContractFactory("EncodingHarness");
+    const harness = await enc.deploy();
+    await harness.waitForDeployment();
+    const addr = await vault.getAddress();
+    const expected = await harness.configHash({ ...cfgBase, vault: addr });
+    const wrong = await harness.configHash({ ...cfgBase, vault: deployer.address });
+    expect(await vault.CONFIG_HASH()).to.equal(expected);
+    expect(await vault.CONFIG_HASH()).to.not.equal(wrong);
   });
 
   it("lock() stores lockDigest, escrows the asset, guards tokenId, increments nonce", async () => {

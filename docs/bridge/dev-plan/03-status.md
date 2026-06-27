@@ -361,16 +361,18 @@ anchor saves `(B-1)` quorum checks.
    `contracts/tron/contracts/verifier/`, `test/verifier.test.js` green (the B=1
    bundle verifies; tampered proof/publicValues/vkey revert). Stage A of
    `04-deployment.md`.
-2. Complete the on-chain *settlement* smoke (`01` M3): deploy the vendored
-   `SP1Verifier` + vault on Nile and run `fulfillBatch` with the real proof
-   (`04-deployment.md` Stages B/C). TronWeb deploy tooling is ready
-   (`contracts/tron/scripts/deploy-nile.js`, connects to Nile). **Two blockers
-   found:** (a) `.env` `TRON_SK` controls an unfunded account, not the funded
-   `TRON_ACCOUNT` (provide the matching key or fund via faucet); (b) the vault's
-   `cfg.vault == address(this)` constructor is **not Tron-deployable** (Tron's
-   txID-based CREATE address makes the self-reference circular) — needs a
-   Tron-compatible vault on the `01` track. Also needs the frozen real
-   `BridgeConfig` (#3) and a real burn (#4). See `04-deployment.md` Stage B.
+2. Complete the on-chain *settlement* smoke (`01` M3). **Stage B mock deploy is
+   DONE on Nile** (`04-deployment.md`): the vault was made **Tron-compatible**
+   (constructor now stamps `cfg.vault = address(this)` instead of asserting it —
+   Tron's txID-based CREATE address makes the old self-reference circular; EVM
+   behavior/Hardhat tests unchanged) and is live with `MockProofVerifier`:
+   - `UnicityBridgeVault` = `TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a`
+     (`CONFIG_HASH` verified to bind the deployed address),
+   - `MockProofVerifier` = `TBwGYUY9BimAjnaPyFd6YwTit2o2zSRjn9`,
+   - deployed via `contracts/tron/scripts/deploy-nile.js stage-b`.
+   **Still open:** allow the trust base + a `fulfillBatch` smoke (needs the config
+   freeze #3), then Stage C with the real `SP1Verifier` + real proof. The
+   off-chain prover config must set `BridgeConfig.vault` to the deployed vault.
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
    certified-mode verification of a real live token** (`verify_certified_burn`,
