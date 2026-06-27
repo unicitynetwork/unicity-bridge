@@ -378,9 +378,16 @@ anchor saves `(B-1)` quorum checks.
      (`CONFIG_HASH` verified to bind the deployed address),
    - `MockProofVerifier` = `TBwGYUY9BimAjnaPyFd6YwTit2o2zSRjn9`,
    - deployed via `contracts/tron/scripts/deploy-nile.js stage-b`.
-   **Still open:** allow the trust base + a `fulfillBatch` smoke (needs the config
-   freeze #3), then Stage C with the real `SP1Verifier` + real proof. The
-   off-chain prover config must set `BridgeConfig.vault` to the deployed vault.
+   **Stage B settlement smoke also DONE on Nile** (`scripts/mock-smoke.js`):
+   `setTrustBaseAllowed` → `lock` → `fulfillBatch` all SUCCESS, 1 unit released
+   via `_safeTransfer` (tx `348e744a…`). It uses a standard `MockTRC20`
+   (`TD14oa…`) on a mock-asset vault (`TW9JPc…`) because the user-provided Nile
+   "USDT" (`TXYZ…`) is **non-standard** — its `transfer` moves funds but returns
+   `false`, which the vault's safe-transfer correctly rejects (real Tether returns
+   void, which the vault handles). **Still open:** Stage C with the real
+   `SP1Verifier` + a real proof, and (for the real-USDT vault) a Tether-style
+   token or a loosened `_check`. The off-chain prover config sets
+   `BridgeConfig.vault` to the deployed vault (frozen in `nile-usdt.json`).
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
    certified-mode verification of a real live token** (`verify_certified_burn`,

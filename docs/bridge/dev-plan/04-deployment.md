@@ -163,13 +163,39 @@ Goal: exercise the vault's settlement logic on Nile without a real proof. Done:
 1. ✅ `npm run build` in `contracts/tron/` (compile artifacts).
 2. ✅ `node scripts/deploy-nile.js stage-b` — deploys `MockProofVerifier` then the
    vault (stamping `address(this)`), prints addresses + `CONFIG_HASH`.
-3. **(open)** `setTrustBaseAllowed(trustBaseHash, true)` for the testnet2 trust
-   base hash (`canonical_hash` of `bft-trustbase.testnet2.json`).
-4. **(open)** Seed a `lock()` so `lockDigest[nonce]` is set, fund the vault with
-   `TRON_USDT`, then `fulfillBatch(publicValues, proof=<any>, leaves, lockRefs)`
-   with a mock-accepted proof. Confirm `Released` events + TRC20 transfer. (Needs
-   a `BridgeConfig` whose derived fields the off-chain side also commits — the
-   config freeze, #3.)
+3. ✅ `setTrustBaseAllowed(trustBaseHash, true)` for the testnet2 trust base hash
+   `0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0`
+   (`emit-trust-base-hash bft-trustbase.testnet2.json`).
+4. ✅ `lock()` → fund → `fulfillBatch(publicValues, proof, leaves, lockRefs)` with
+   a mock-accepted proof — **succeeded on Nile** (`scripts/mock-smoke.js`):
+   lock SUCCESS, fulfillBatch SUCCESS (~70k energy), 1 unit released back to the
+   recipient via `_safeTransfer`. The crafted `publicValues` satisfied every
+   on-chain check (domain/config/trustbase/spentRoot/returnRoot/lockRefRoot/
+   lockDigest/total).
+
+> **fulfillBatch smoke uses a standard `MockTRC20`, not `TRON_USDT`.** The
+> user-provided Nile "USDT" (`TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`) is
+> **non-standard**: its `transfer` moves funds but returns `false`. The vault's
+> safe-transfer requires a returned `true` (or void, as real Tether returns), so
+> it correctly rejects that token — a `fulfillBatch` against the real-USDT vault
+> reverts `"vault: transfer failed"` at the release (all other checks pass). The
+> smoke therefore deploys a conformant `MockTRC20` + a mock-asset vault to prove
+> the settlement path:
+>
+> | Contract (smoke) | Nile address |
+> |---|---|
+> | `MockTRC20` | `TD14oaT2QX3TYwqFYZ1UGDbLi2EBECsPiH` |
+> | `UnicityBridgeVault` (mock asset) | `TW9JPcZcBAVyuUifftWQbEbZ4nRRzgiR3L` |
+>
+> fulfillBatch tx: `348e744a83f4f51a8a9e275e7e42825d58bc8230daabc168a4100735aa76da34`.
+> Run: `node scripts/mock-smoke.js [existing-token]`. For mainnet/production, use a
+> real Tether-style (void-returning) USDT, or loosen the vault's `_check` if a
+> false-returning token must be supported.
+>
+> Two more TronWeb gotchas the scripts handle: `createSmartContract` returns the
+> tx **directly** while `triggerSmartContract` returns `{transaction}`; and a
+> freshly deployed contract must be polled until its code is queryable before it
+> can be called.
 
 ## Stage C — real proof on Nile (M3) — needs blockers #1, #3, #4
 
