@@ -118,6 +118,14 @@ extensions live in `prover/crates/sdk-ext`.
   token vector; its output currently matches `bridge-vectors/token/token-01.json`.
 - `bridge-return-host emit-b2-token-vector` prints the generated B=2 multi-burn
   token vector; its output currently matches `bridge-vectors/token/token-02.json`.
+- **Froze the canonical Nile-USDT config** (`bridge-vectors/deployment/nile-usdt.json`):
+  the full `BridgeConfig` for the live deployment with derived `token_type` /
+  `coin_id` / `config_hash` / `domain_tag` + the deployed addresses + the
+  testnet2 trust-base `canonical_hash` (`0x72a672…358c0`). The `config_hash`
+  (`0xe06d52…204203`) equals the deployed vault's on-chain `CONFIG_HASH` — the
+  cross-stack freeze (Rust prover == Solidity vault). New host commands
+  `emit-config` (authoritative derivation from inputs) and `emit-trust-base-hash`;
+  `tests/nile_config.rs` re-derives and guards it against drift.
 - Added the **S1 witness package + host precheck** (`crates/host/src/s1.rs`,
   ZK_BACK3 §10.1):
   - `WitnessPackage` wraps the `GuestInput` S1 hands to the prover (S3);

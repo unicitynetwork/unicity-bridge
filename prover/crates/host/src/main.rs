@@ -82,6 +82,14 @@ fn main() {
             );
             Ok(())
         }
+        "emit-config" => {
+            let path = args.next();
+            emit_config(path)
+        }
+        "emit-trust-base-hash" => {
+            let path = args.next();
+            emit_trust_base_hash(path)
+        }
         "precheck-wire" => {
             let wire = args.next();
             precheck_wire(wire)
@@ -138,6 +146,8 @@ fn usage() {
     eprintln!("       bridge-return-host emit-b2-token-vector");
     eprintln!("       bridge-return-host emit-b2-wire-input");
     eprintln!("       bridge-return-host emit-b2-shared-wire-input");
+    eprintln!("       bridge-return-host emit-config <config-in.json>                        # freeze: derive full config + config_hash");
+    eprintln!("       bridge-return-host emit-trust-base-hash <trust-base.json>");
     eprintln!("       bridge-return-host precheck-wire <wire_hex>                            # S1 host precheck, no SP1");
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");
@@ -145,6 +155,95 @@ fn usage() {
     eprintln!("       bridge-return-host sp1-vkey <guest.elf>                                # --features sp1");
     eprintln!("       bridge-return-host sp1-export <guest.elf> <proof.bin> <bundle.json>    # --features sp1");
     eprintln!("       bridge-return-host sp1-proof-info <proof.bin>                         # --features sp1");
+}
+
+// Authoritative config derivation (Rust core): given the deployment inputs
+// (source_chain_id, vault, asset [, reason_tag, lock_domain, nullifier_domain]),
+// emit the full BridgeConfig with derived token_type/coin_id/config_hash/
+// domain_tag. The config_hash equals the on-chain vault CONFIG_HASH (same
+// keccak/ABI + DOMAIN_CONFIG), so this is the canonical "freeze the config" tool.
+fn emit_config(path: Option<String>) -> bridge_return_host::Result<()> {
+    use bridge_return_core::{coin_id, config_hash, domain_tag, token_type, BridgeConfig};
+
+    let path = path.ok_or_else(|| {
+        bridge_return_host::HostError::Check("missing config-in.json".to_string())
+    })?;
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let err = |m: String| bridge_return_host::HostError::Check(m);
+
+    let u64f = |k: &str| -> bridge_return_host::Result<u64> {
+        json[k]
+            .as_u64()
+            .or_else(|| json[k].as_str().and_then(|s| s.parse().ok()))
+            .ok_or_else(|| err(format!("missing u64 field {k}")))
+    };
+    let bytes = |k: &str| -> bridge_return_host::Result<Vec<u8>> {
+        let s = json[k]
+            .as_str()
+            .ok_or_else(|| err(format!("missing hex field {k}")))?;
+        Ok(hex::decode(s.strip_prefix("0x").unwrap_or(s))?)
+    };
+    let arr = |k: &str, n: usize| -> bridge_return_host::Result<Vec<u8>> {
+        let v = bytes(k)?;
+        if v.len() != n {
+            return Err(err(format!("{k} length {}, expected {n}", v.len())));
+        }
+        Ok(v)
+    };
+
+    let source_chain_id = u64f("source_chain_id")?;
+    let vault: [u8; 20] = arr("vault", 20)?.try_into().unwrap();
+    let asset: [u8; 20] = arr("asset", 20)?.try_into().unwrap();
+    let reason_tag = u64f("reason_tag")?;
+    let lock_domain: [u8; 32] = arr("lock_domain", 32)?.try_into().unwrap();
+    let nullifier_domain: [u8; 32] = arr("nullifier_domain", 32)?.try_into().unwrap();
+
+    let chain_id_str = source_chain_id.to_string();
+    let asset_evm_hex = hex::encode(asset); // lowercase, no 0x — matches the SDK derivation
+    let token_type = token_type(&chain_id_str, &asset_evm_hex);
+    let coin_id = coin_id(&chain_id_str, &asset_evm_hex);
+    let cfg = BridgeConfig {
+        source_chain_id,
+        vault,
+        asset,
+        token_type,
+        coin_id,
+        reason_tag,
+        lock_domain,
+        nullifier_domain,
+    };
+    let h = |b: &[u8]| format!("0x{}", hex::encode(b));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "source_chain_id": source_chain_id,
+            "vault": h(&vault),
+            "asset": h(&asset),
+            "token_type": h(&token_type),
+            "coin_id": h(&coin_id),
+            "reason_tag": reason_tag,
+            "lock_domain": h(&lock_domain),
+            "nullifier_domain": h(&nullifier_domain),
+            "config_hash": h(&config_hash(&cfg)),
+            "domain_tag": h(&domain_tag()),
+        }))
+        .expect("serialize config")
+    );
+    Ok(())
+}
+
+// The trust-base hash the vault's `setTrustBaseAllowed` must allow — the SDK
+// `canonical_hash` of a trust-base JSON (SHA-256/CBOR, 00 §1).
+fn emit_trust_base_hash(path: Option<String>) -> bridge_return_host::Result<()> {
+    let path = path.ok_or_else(|| {
+        bridge_return_host::HostError::Check("missing trust-base.json".to_string())
+    })?;
+    let trust_base =
+        unicity_token::api::bft::RootTrustBase::from_json(&std::fs::read_to_string(&path)?)
+            .map_err(|err| bridge_return_host::HostError::Check(format!("trust base: {err}")))?;
+    let hash = bridge_return_sdk_ext::trust::canonical_hash(&trust_base);
+    println!("0x{}", hex::encode(hash));
+    Ok(())
 }
 
 fn precheck_wire(wire: Option<String>) -> bridge_return_host::Result<()> {
