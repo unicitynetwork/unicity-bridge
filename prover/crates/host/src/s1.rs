@@ -13,11 +13,19 @@
 //! over the aggregator's `http` API. This module owns the package shape and the
 //! precheck gate those services feed into.
 
-use bridge_return_core::{BridgeConfig, PublicValues, SourceLockRef, U256};
-use bridge_return_guest::{execute_public_output, execute_wire, wire, GuestInput};
+use bridge_return_core::{
+    config_hash, domain_tag, lock_ref_root, return_root, sum_amounts, BridgeConfig, PublicValues,
+    ReturnLeaf, SourceLockRef, U256,
+};
+use bridge_return_guest::{
+    execute_public_output, execute_wire, wire, BridgeBurnWitness, BurnVerification, GuestInput,
+    RelationWitness,
+};
+use bridge_return_sdk_ext::accumulator::{ordered_insert_witnesses, NullifierTree};
 use bridge_return_sdk_ext::bridge::{
     bridge_lock_obligations_for_token_certified, BridgeConfig as SdkBridgeConfig,
 };
+use bridge_return_sdk_ext::trust::canonical_hash;
 use unicity_token::api::bft::RootTrustBase;
 use unicity_token::payment::PaymentAssetCollection;
 use unicity_token::transaction::Token;
@@ -140,6 +148,58 @@ impl WitnessPackage {
             wire_input,
         })
     }
+}
+
+/// Assemble a B=1 [`GuestInput`] for a single **certified** burn (a real live
+/// token, each transition self-certified) so it can run through the guest
+/// relation. Verifies the token (collecting its source lock ref), builds the
+/// fresh-accumulator transition over the single nullifier, and derives the
+/// `PublicValues`. The caller supplies the settlement `leaf` (the relation
+/// re-checks it against the token's terminal burn).
+pub fn build_certified_guest_input(
+    config: BridgeConfig,
+    token: Token,
+    trust_base: RootTrustBase,
+    lock_justification_tag: u64,
+    leaf: ReturnLeaf,
+) -> Result<GuestInput> {
+    let mut sorted_lock_refs =
+        verify_certified_burn(&token, &trust_base, &config, lock_justification_tag)?;
+    sorted_lock_refs.sort_by_key(|r| r.nonce);
+
+    let tree = NullifierTree::new();
+    let (accumulator_witnesses, spent_root_new) =
+        ordered_insert_witnesses(&tree, &[leaf.nullifier]).map_err(|err| {
+            HostError::Check(format!("accumulator witness build failed: {err:?}"))
+        })?;
+    let leaves = vec![leaf];
+    let public_values = PublicValues {
+        domain_tag: domain_tag(),
+        config_hash: config_hash(&config),
+        trust_base_hash: canonical_hash(&trust_base),
+        spent_root_old: tree.root(),
+        spent_root_new,
+        return_root: return_root(&leaves),
+        lock_ref_root: lock_ref_root(&sorted_lock_refs)
+            .map_err(|err| HostError::Check(format!("lock ref root: {err:?}")))?,
+        batch_size: 1,
+        total_amount: sum_amounts(&leaves),
+    };
+    Ok(GuestInput {
+        config,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs,
+        witness: RelationWitness {
+            accumulator_witnesses,
+            bridge_burns: vec![BridgeBurnWitness {
+                token,
+                trust_base,
+                verification: BurnVerification::Certified,
+                lock_justification_tag,
+            }],
+        },
+    })
 }
 
 /// Decode a wire payload into a [`WitnessPackage`] and precheck it. Useful as a

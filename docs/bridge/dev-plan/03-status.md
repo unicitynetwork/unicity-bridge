@@ -132,6 +132,18 @@ extensions live in `prover/crates/sdk-ext`.
   - `bridge-return-host precheck-wire <wire_hex>` exposes it on the CLI.
   - `crates/host/tests/s1_precheck.rs` covers B=1/split/B=2 accept and tampered
     public-values / truncated-wire reject.
+- **Guest certified-mode relation path.** The guest now carries a per-burn
+  verification mode (`BurnVerification::Anchored(UC*) | Certified`); certified
+  burns verify each transition against its own `UnicityCertificate` (live
+  aggregator tokens), anchored burns keep the §11 shared-`UC*` dedup. Wire format
+  bumped to **v2** (per-burn mode tag); token vectors regenerated.
+  `s1::build_certified_guest_input` assembles a B=1 certified `GuestInput`, and
+  `s1_live.rs::guest_relation_accepts_live_certified_token` runs a **real live
+  token through the full guest relation** (execute + wire round-trip). The same
+  live token runs in the **zkVM** (`sp1-execute`, via
+  `examples/emit_certified_live_wire`) at **1,861,507 cycles** with
+  `public_values == expected` — a real aggregator token validated in-circuit
+  (certified mode does one quorum check per transition: genesis + burn).
 - **S1 certified-mode verification of live tokens** (`s1::verify_certified_burn`,
   ZK_BACK3 §10.1): full cryptographic verification of a real aggregator-served
   token (each transition carries its own `UnicityCertificate`) against the
@@ -353,10 +365,10 @@ anchor saves `(B-1)` quorum checks.
    and reconstructing `LockRecord`s from real Tron `Lock` events (needs the
    deployed vault, blocker #2). Today the sample comes from `npm run e2e:back`
    (live aggregator mint/burn, Tron lock mocked) rather than an in-process fetch.
-   Note the **mode gap**: live tokens are *certified* (per-transition certs); the
-   zk guest relation proves *anchored* mode (one shared `UC*`). Proving a live
-   token in zk needs either a guest certified path or the aggregator serving
-   historical inclusion against one anchor root (ZK_BACK3 §2.1).
+   The earlier **mode gap is closed**: the guest relation now has a *certified*
+   mode (`BurnVerification::Certified`), so a real live token runs through the
+   relation and the zkVM (see implemented list); anchored mode remains the §11
+   batch optimization for when the aggregator serves historical inclusion (§2.1).
 4. **(done)** B>1 JSON token vector (`token/token-02.json`, multi-burn schema)
    emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
    and the `vectors.rs` test covers it. (The B=2 execute path was already covered

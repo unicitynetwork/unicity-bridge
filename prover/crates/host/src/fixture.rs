@@ -3,7 +3,7 @@ use bridge_return_core::{
     reason_cbor, return_root, sum_amounts, BridgeBackReason, BridgeConfig, PublicValues,
     ReturnLeaf, SourceLockRef,
 };
-use bridge_return_guest::{wire, BridgeBurnWitness, GuestInput, RelationWitness};
+use bridge_return_guest::{wire, BridgeBurnWitness, BurnVerification, GuestInput, RelationWitness};
 use bridge_return_sdk_ext::accumulator::{
     ordered_insert_witnesses, NonMembershipTerminal, NonMembershipWitness, NullifierTree,
 };
@@ -143,7 +143,7 @@ pub fn build_b1_direct_bridge_fixture() -> B1Fixture {
             bridge_burns: vec![BridgeBurnWitness {
                 token,
                 trust_base,
-                anchor_certificate: anchor.clone(),
+                verification: BurnVerification::Anchored(anchor.clone()),
                 lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
             }],
         },
@@ -321,13 +321,13 @@ pub fn build_b2_direct_bridge_fixture() -> GuestInput {
                 BridgeBurnWitness {
                     token: token0,
                     trust_base: trust_base.clone(),
-                    anchor_certificate: anchor0,
+                    verification: BurnVerification::Anchored(anchor0),
                     lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
                 },
                 BridgeBurnWitness {
                     token: token1,
                     trust_base,
-                    anchor_certificate: anchor1,
+                    verification: BurnVerification::Anchored(anchor1),
                     lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
                 },
             ],
@@ -447,13 +447,13 @@ pub fn build_b2_shared_anchor_fixture() -> GuestInput {
                 BridgeBurnWitness {
                     token: token0,
                     trust_base: trust_base.clone(),
-                    anchor_certificate: anchor.clone(),
+                    verification: BurnVerification::Anchored(anchor.clone()),
                     lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
                 },
                 BridgeBurnWitness {
                     token: token1,
                     trust_base,
-                    anchor_certificate: anchor,
+                    verification: BurnVerification::Anchored(anchor),
                     lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
                 },
             ],
@@ -781,7 +781,7 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
             bridge_burns: vec![BridgeBurnWitness {
                 token,
                 trust_base,
-                anchor_certificate: anchor.clone(),
+                verification: BurnVerification::Anchored(anchor.clone()),
                 lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
             }],
         },
@@ -820,10 +820,14 @@ fn multi_burn_fixture_json(description: &str, input: &GuestInput) -> serde_json:
 }
 
 fn burn_json(burn: &BridgeBurnWitness) -> serde_json::Value {
+    let anchor = match &burn.verification {
+        BurnVerification::Anchored(anchor) => anchor,
+        BurnVerification::Certified => panic!("certified burn has no anchor certificate to emit"),
+    };
     json!({
         "token_cbor": hex0(&burn.token.to_cbor()),
         "trust_base": trust_base_json(&burn.trust_base),
-        "anchor_certificate_cbor": hex0(&burn.anchor_certificate.to_cbor()),
+        "anchor_certificate_cbor": hex0(&anchor.to_cbor()),
         "lock_justification_tag": burn.lock_justification_tag,
     })
 }

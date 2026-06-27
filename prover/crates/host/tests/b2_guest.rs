@@ -3,8 +3,22 @@
 //! (accumulator witness order, sorted-unique lock refs, batch size, value
 //! conservation) are enforced — the most bug-prone part of the return relation
 //! (ZK_BACK3 §7.4).
-use bridge_return_guest::execute;
+use bridge_return_guest::{execute, BridgeBurnWitness, BurnVerification};
 use bridge_return_host::fixture::{build_b2_direct_bridge_fixture, build_b2_shared_anchor_fixture};
+
+fn anchor_cbor(burn: &BridgeBurnWitness) -> Vec<u8> {
+    match &burn.verification {
+        BurnVerification::Anchored(anchor) => anchor.to_cbor(),
+        BurnVerification::Certified => panic!("expected anchored burn"),
+    }
+}
+
+fn clear_anchor_signatures(burn: &mut BridgeBurnWitness) {
+    match &mut burn.verification {
+        BurnVerification::Anchored(anchor) => anchor.unicity_seal.signatures.clear(),
+        BurnVerification::Certified => panic!("expected anchored burn"),
+    }
+}
 
 #[test]
 fn guest_executes_b2_batch() {
@@ -73,19 +87,15 @@ fn b2_shared_anchor_uses_one_anchor() {
     // Both burns reference the byte-identical anchor certificate — one BFT-quorum
     // certificate covers the batch (vs distinct per-token anchors otherwise).
     let shared = build_b2_shared_anchor_fixture();
-    let a0 = shared.witness.bridge_burns[0].anchor_certificate.to_cbor();
-    let a1 = shared.witness.bridge_burns[1].anchor_certificate.to_cbor();
+    let a0 = anchor_cbor(&shared.witness.bridge_burns[0]);
+    let a1 = anchor_cbor(&shared.witness.bridge_burns[1]);
     assert_eq!(a0, a1, "shared-anchor batch must carry one UC*");
 
     // Sanity: the per-anchor batch instead carries two distinct anchors.
     let per_burn = build_b2_direct_bridge_fixture();
     assert_ne!(
-        per_burn.witness.bridge_burns[0]
-            .anchor_certificate
-            .to_cbor(),
-        per_burn.witness.bridge_burns[1]
-            .anchor_certificate
-            .to_cbor(),
+        anchor_cbor(&per_burn.witness.bridge_burns[0]),
+        anchor_cbor(&per_burn.witness.bridge_burns[1]),
     );
 }
 
@@ -96,7 +106,7 @@ fn b2_shared_anchor_rejects_unsigned_anchor() {
     // makes the single quorum check fail, so the batch rejects.
     let mut input = build_b2_shared_anchor_fixture();
     for burn in &mut input.witness.bridge_burns {
-        burn.anchor_certificate.unicity_seal.signatures.clear();
+        clear_anchor_signatures(burn);
     }
     assert!(execute(&input).is_err());
 }
@@ -106,11 +116,7 @@ fn b2_per_anchor_rejects_unsigned_second_anchor() {
     // Distinct anchors are each verified: unsigning only the second one (which
     // the dedup never folds into the first) must still be caught.
     let mut input = build_b2_direct_bridge_fixture();
-    input.witness.bridge_burns[1]
-        .anchor_certificate
-        .unicity_seal
-        .signatures
-        .clear();
+    clear_anchor_signatures(&mut input.witness.bridge_burns[1]);
     assert!(execute(&input).is_err());
 }
 

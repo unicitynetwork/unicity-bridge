@@ -7,8 +7,8 @@
 use std::fs;
 use std::path::Path;
 
-use bridge_return_core::BridgeConfig;
-use bridge_return_host::s1::verify_certified_burn;
+use bridge_return_core::{u256_from_u64, BridgeConfig, ReturnLeaf};
+use bridge_return_host::s1::{build_certified_guest_input, verify_certified_burn, WitnessPackage};
 use bridge_return_sdk_ext::bridge::TRON_USDT_LOCK_JUSTIFICATION_TAG;
 use serde_json::Value;
 use unicity_token::api::bft::RootTrustBase;
@@ -72,6 +72,54 @@ fn s1_verifies_live_certified_token() {
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].nonce, expected_nonce);
     assert_eq!(refs[0].digest.to_vec(), n(&json["lock"], "lockDigest"));
+}
+
+fn leaf_from(v: &Value) -> ReturnLeaf {
+    // Amounts/deadline are recorded as decimal strings; addresses/nullifier as hex.
+    let u64f = |k: &str| -> u64 {
+        let x = &v[k];
+        x.as_u64()
+            .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+            .expect("u64")
+    };
+    ReturnLeaf {
+        nullifier: n(v, "nullifier").try_into().unwrap(),
+        recipient: n(v, "recipient").try_into().unwrap(),
+        amount: u256_from_u64(u64f("amount")),
+        fee_recipient: n(v, "feeRecipient").try_into().unwrap(),
+        fee_amount: u256_from_u64(u64f("feeAmount")),
+        deadline: u64f("deadline"),
+    }
+}
+
+#[test]
+fn guest_relation_accepts_live_certified_token() {
+    // The full guest relation (execute + wire round-trip) accepts a REAL
+    // aggregator-served token in certified mode — the end-to-end S1->guest path
+    // on live data, not a synthetic fixture.
+    let json: Value = serde_json::from_str(&data("bridge-back-live-sample.json")).unwrap();
+    let trust_base = RootTrustBase::from_json(&data("trustbase.testnet2.json")).unwrap();
+    let config = config_from(&json["proverConfig"]);
+    let token = Token::from_cbor(&unhex(json["burnedTokenCbor"].as_str().unwrap())).unwrap();
+    let leaf = leaf_from(&json["returnLeaf"]);
+
+    let input = build_certified_guest_input(
+        config,
+        token,
+        trust_base,
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+        leaf,
+    )
+    .expect("build certified guest input");
+
+    let report = WitnessPackage::new(input)
+        .precheck()
+        .expect("guest relation accepts the live certified token");
+    assert_eq!(report.batch_size, 1);
+    assert_eq!(
+        report.public_values.total_amount,
+        leaf_from(&json["returnLeaf"]).amount
+    );
 }
 
 #[test]

@@ -11,7 +11,9 @@ use bridge_return_core::{
     return_root, sorted_lock_ref_root, token_type, BridgeBackReason, BridgeConfig, LockRecord,
     PublicValues, ReturnLeaf, SourceLockRef,
 };
-use bridge_return_guest::{execute, execute_wire, BridgeBurnWitness, GuestInput, RelationWitness};
+use bridge_return_guest::{
+    execute, execute_wire, BridgeBurnWitness, BurnVerification, GuestInput, RelationWitness,
+};
 use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, verify_non_member, NonMembershipTerminal, NonMembershipWitness,
     SmtProofStep, EMPTY_TREE_ROOT,
@@ -350,17 +352,24 @@ fn bridge_burn_from_json(v: &Value) -> Result<BridgeBurnWitness> {
     let token = Token::from_cbor(&bytes_field(v, "token_cbor")?)
         .map_err(|err| HostError::Check(format!("token decode: {err}")))?;
     let trust_base = trust_base_from_json(&v["trust_base"])?;
-    let anchor_bytes = bytes_field(v, "anchor_certificate_cbor")?;
-    let anchor_decoder = Decoder::new(&anchor_bytes);
-    anchor_decoder
-        .finish()
-        .map_err(|err| HostError::Check(format!("anchor certificate trailing data: {err}")))?;
-    let anchor_certificate = UnicityCertificate::from_cbor(anchor_decoder)
-        .map_err(|err| HostError::Check(format!("anchor certificate decode: {err}")))?;
+    // Certified mode (`"certified": true`) carries no anchor; otherwise the burn
+    // is anchored and `anchor_certificate_cbor` holds the shared `UC*`.
+    let verification = if v.get("certified").and_then(Value::as_bool) == Some(true) {
+        BurnVerification::Certified
+    } else {
+        let anchor_bytes = bytes_field(v, "anchor_certificate_cbor")?;
+        let anchor_decoder = Decoder::new(&anchor_bytes);
+        anchor_decoder
+            .finish()
+            .map_err(|err| HostError::Check(format!("anchor certificate trailing data: {err}")))?;
+        let anchor_certificate = UnicityCertificate::from_cbor(anchor_decoder)
+            .map_err(|err| HostError::Check(format!("anchor certificate decode: {err}")))?;
+        BurnVerification::Anchored(anchor_certificate)
+    };
     Ok(BridgeBurnWitness {
         token,
         trust_base,
-        anchor_certificate,
+        verification,
         lock_justification_tag: u64_field(v, "lock_justification_tag")?,
     })
 }

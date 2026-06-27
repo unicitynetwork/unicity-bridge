@@ -19,7 +19,8 @@ use bridge_return_core::{
 };
 use bridge_return_sdk_ext::accumulator::{insert as accumulator_insert, NonMembershipWitness};
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligations_for_token_against_root, BridgeConfig as SdkBridgeConfig,
+    bridge_lock_obligations_for_token_against_root, bridge_lock_obligations_for_token_certified,
+    BridgeConfig as SdkBridgeConfig,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
 use bridge_return_sdk_ext::verify::verify_anchor_certificate;
@@ -46,11 +47,24 @@ pub struct RelationWitness {
     pub bridge_burns: Vec<BridgeBurnWitness>,
 }
 
+/// How one burned token's transitions are proven against the trust base.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BurnVerification {
+    /// One shared anchor `UC*`; each transition is proven by anchored inclusion
+    /// against its root. Burns sharing a byte-identical anchor amortize a single
+    /// BFT-quorum check (the §11 one-quorum-check batch shape).
+    Anchored(UnicityCertificate),
+    /// Each transition carries its own `UnicityCertificate`, as served by a live
+    /// aggregator (one quorum check per transition). Used until the aggregator
+    /// serves historical inclusion proofs against a shared anchor (ZK_BACK3 §2.1).
+    Certified,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BridgeBurnWitness {
     pub token: Token,
     pub trust_base: RootTrustBase,
-    pub anchor_certificate: UnicityCertificate,
+    pub verification: BurnVerification,
     pub lock_justification_tag: u64,
 }
 
@@ -126,26 +140,34 @@ fn validate_bridge_burns(
         if canonical_hash(&burn.trust_base) != trust_base_hash {
             return Err(BridgeCoreError::WrongTrustBaseHash);
         }
-        let anchor_root = match anchor_roots
-            .iter()
-            .find(|(anchor, _)| **anchor == burn.anchor_certificate)
-        {
-            Some((_, root)) => *root,
-            None => {
-                let root = verify_anchor_certificate(&burn.trust_base, &burn.anchor_certificate)
-                    .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
-                anchor_roots.push((&burn.anchor_certificate, root));
-                root
+        let burn_obligations = match &burn.verification {
+            BurnVerification::Anchored(anchor) => {
+                let anchor_root = match anchor_roots.iter().find(|(a, _)| *a == anchor) {
+                    Some((_, root)) => *root,
+                    None => {
+                        let root = verify_anchor_certificate(&burn.trust_base, anchor)
+                            .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
+                        anchor_roots.push((anchor, root));
+                        root
+                    }
+                };
+                bridge_lock_obligations_for_token_against_root(
+                    &burn.token,
+                    &burn.trust_base,
+                    &anchor_root,
+                    burn.lock_justification_tag,
+                    &sdk_config,
+                    PaymentAssetCollection::from_cbor_bytes,
+                )
             }
-        };
-        let burn_obligations = bridge_lock_obligations_for_token_against_root(
-            &burn.token,
-            &burn.trust_base,
-            &anchor_root,
-            burn.lock_justification_tag,
-            &sdk_config,
-            PaymentAssetCollection::from_cbor_bytes,
-        )
+            BurnVerification::Certified => bridge_lock_obligations_for_token_certified(
+                &burn.token,
+                &burn.trust_base,
+                burn.lock_justification_tag,
+                &sdk_config,
+                PaymentAssetCollection::from_cbor_bytes,
+            ),
+        }
         .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
         validate_terminal_burn(config, &cfg_hash, leaf, &burn.token)?;
         validate_current_value(config, leaf, &burn.token)?;

@@ -13,9 +13,10 @@ use unicity_token::cbor::Decoder;
 use unicity_token::crypto::signature::PublicKey;
 use unicity_token::transaction::Token;
 
-use crate::{BridgeBurnWitness, GuestInput, RelationWitness};
+use crate::{BridgeBurnWitness, BurnVerification, GuestInput, RelationWitness};
 
-const WIRE_VERSION: u32 = 1;
+// v2 adds the per-burn verification mode tag (anchored vs certified).
+const WIRE_VERSION: u32 = 2;
 
 pub fn encode_guest_input(input: &GuestInput) -> Vec<u8> {
     let mut out = Vec::new();
@@ -122,7 +123,13 @@ fn put_accumulator_witness(out: &mut Vec<u8>, witness: &NonMembershipWitness) {
 fn put_bridge_burn(out: &mut Vec<u8>, burn: &BridgeBurnWitness) {
     put_bytes(out, &burn.token.to_cbor());
     put_trust_base(out, &burn.trust_base);
-    put_bytes(out, &burn.anchor_certificate.to_cbor());
+    match &burn.verification {
+        BurnVerification::Anchored(anchor) => {
+            out.push(0);
+            put_bytes(out, &anchor.to_cbor());
+        }
+        BurnVerification::Certified => out.push(1),
+    }
     put_u64(out, burn.lock_justification_tag);
 }
 
@@ -281,17 +288,24 @@ impl<'a> Cursor<'a> {
         let token =
             Token::from_cbor(self.bytes()?).map_err(|_| BridgeCoreError::WireDecodeFailed)?;
         let trust_base = self.trust_base()?;
-        let anchor_bytes = self.bytes()?;
-        let decoder = Decoder::new(anchor_bytes);
-        decoder
-            .finish()
-            .map_err(|_| BridgeCoreError::WireDecodeFailed)?;
-        let anchor_certificate = UnicityCertificate::from_cbor(decoder)
-            .map_err(|_| BridgeCoreError::WireDecodeFailed)?;
+        let verification = match self.take(1)?[0] {
+            0 => {
+                let anchor_bytes = self.bytes()?;
+                let decoder = Decoder::new(anchor_bytes);
+                decoder
+                    .finish()
+                    .map_err(|_| BridgeCoreError::WireDecodeFailed)?;
+                let anchor_certificate = UnicityCertificate::from_cbor(decoder)
+                    .map_err(|_| BridgeCoreError::WireDecodeFailed)?;
+                BurnVerification::Anchored(anchor_certificate)
+            }
+            1 => BurnVerification::Certified,
+            _ => return Err(BridgeCoreError::WireDecodeFailed),
+        };
         Ok(BridgeBurnWitness {
             token,
             trust_base,
-            anchor_certificate,
+            verification,
             lock_justification_tag: self.u64()?,
         })
     }
