@@ -17,6 +17,7 @@ This README is the map. The detail lives in four sibling documents:
 | [`01-source-chain-contracts.md`](./01-source-chain-contracts.md) | Lock-in vault, return vault, on-chain proof verification, settlement | Solidity / Tron (TVM) + EVM, Hardhat |
 | [`02-ts-sdk-and-wallet.md`](./02-ts-sdk-and-wallet.md) | Bridge-in justification verifier (plugin), bridge-back burn construction, wallet/sphere integration | TypeScript |
 | [`03-prover-service.md`](./03-prover-service.md) | The zk relation (guest circuit) and the off-chain prover pipeline | Rust + SP1 (zkVM) |
+| [`04-deployment.md`](./04-deployment.md) | Nile testnet deployment runbook (verifier + vault) and the on-chain proof smoke | TronWeb / Hardhat |
 
 ## What the bridge does
 
