@@ -9,6 +9,9 @@ publish.workspace = true
 [features]
 default = []
 sp1 = ["dep:sp1-sdk"]
+# `http` pulls the SDK's blocking aggregator HTTP client (TLS stack) for the live
+# S1 witness fetch; off by default so the normal build/test stays lean.
+http = ["unicity-token/http"]
 
 [dependencies]
 bridge-return-core = { path = "../core" }

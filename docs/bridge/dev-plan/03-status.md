@@ -144,6 +144,15 @@ extensions live in `prover/crates/sdk-ext`.
   `examples/emit_certified_live_wire`) at **1,861,507 cycles** with
   `public_values == expected` — a real aggregator token validated in-circuit
   (certified mode does one quorum check per transition: genesis + burn).
+- **S1 aggregator HTTP client** (`s1::aggregator`, host `http` feature): wraps the
+  SDK's blocking `HttpAggregatorClient` — `client_from_env` builds it from
+  `UNICITY_GATEWAY` (+ optional `UNICITY_API_KEY`); `fetch_inclusion_proof` /
+  `fetch_terminal_inclusion_proof` pull a transition's proof from the live
+  gateway. `tests/s1_aggregator.rs` checks construction (no network) and has an
+  `#[ignore]` live fetch (run with the repo `.env` exported) — **verified working
+  against the live testnet2 gateway** (pulled the sample token's terminal
+  inclusion proof over the network). The TLS stack is behind the `http` feature
+  so the default build stays lean.
 - **S1 certified-mode verification of live tokens** (`s1::verify_certified_burn`,
   ZK_BACK3 §10.1): full cryptographic verification of a real aggregator-served
   token (each transition carries its own `UnicityCertificate`) against the
@@ -360,10 +369,11 @@ anchor saves `(B-1)` quorum checks.
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
    certified-mode verification of a real live token** (`verify_certified_burn`,
    `cross_check_live`, `s1_live.rs` over a frozen testnet2 sample). **Still open:**
-   the live *fetch over the network* — an aggregator `http` client (the SDK
-   `http` feature) to pull a burned token + anchored inclusion proofs on demand,
-   and reconstructing `LockRecord`s from real Tron `Lock` events (needs the
-   deployed vault, blocker #2). Today the sample comes from `npm run e2e:back`
+   the live *fetch over the network* — the aggregator `http` client now exists
+   (`s1::aggregator`, verified pulling a proof from the live gateway); what
+   remains is wiring it into an end-to-end witness builder and reconstructing
+   `LockRecord`s from real Tron `Lock` events (needs the deployed vault,
+   blocker #2). Today the sample comes from `npm run e2e:back`
    (live aggregator mint/burn, Tron lock mocked) rather than an in-process fetch.
    The earlier **mode gap is closed**: the guest relation now has a *certified*
    mode (`BurnVerification::Certified`), so a real live token runs through the

@@ -209,3 +209,55 @@ pub fn precheck_wire(wire_input: &[u8]) -> Result<PrecheckReport> {
         .map_err(|err| HostError::Check(format!("wire decode: {err:?}")))?;
     WitnessPackage::new(input).precheck()
 }
+
+/// Live aggregator/gateway fetch for S1 (ZK_BACK3 §10.1). Talks to the Unicity
+/// gateway over the SDK's blocking JSON-RPC client to pull the inclusion proofs
+/// a witness needs. Enabled by the `http` feature (pulls a TLS stack).
+#[cfg(feature = "http")]
+pub mod aggregator {
+    use unicity_token::api::{InclusionProof, StateId};
+    use unicity_token::client::{AggregatorClient, HttpAggregatorClient};
+    use unicity_token::transaction::{Token, Transaction};
+
+    use crate::{HostError, Result};
+
+    /// Build an aggregator client from the environment: `UNICITY_GATEWAY` (the
+    /// base URL, required) and `UNICITY_API_KEY` (optional, sent as the API key).
+    pub fn client_from_env() -> Result<HttpAggregatorClient> {
+        let url = std::env::var("UNICITY_GATEWAY")
+            .map_err(|_| HostError::Check("UNICITY_GATEWAY is not set".to_string()))?;
+        let mut client = HttpAggregatorClient::try_new(url)
+            .map_err(|err| HostError::Check(format!("aggregator URL: {err}")))?;
+        if let Ok(key) = std::env::var("UNICITY_API_KEY") {
+            if !key.is_empty() {
+                client = client.with_api_key(key);
+            }
+        }
+        Ok(client)
+    }
+
+    /// Fetch the inclusion proof for one transition's state id.
+    pub fn fetch_inclusion_proof(
+        client: &HttpAggregatorClient,
+        state_id: &StateId,
+    ) -> Result<InclusionProof> {
+        client
+            .get_inclusion_proof(state_id)
+            .map_err(|err| HostError::Check(format!("get_inclusion_proof: {err}")))
+    }
+
+    /// Fetch the inclusion proof for a token's terminal (burn) transition — the
+    /// state the return relation settles against.
+    pub fn fetch_terminal_inclusion_proof(
+        client: &HttpAggregatorClient,
+        token: &Token,
+    ) -> Result<InclusionProof> {
+        let terminal = token
+            .transactions()
+            .last()
+            .ok_or_else(|| HostError::Check("token has no terminal transition".to_string()))?
+            .transaction();
+        let state_id = StateId::derive(terminal.lock_script(), terminal.source_state_hash());
+        fetch_inclusion_proof(client, &state_id)
+    }
+}
