@@ -10,5 +10,8 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.22.0"
+  },
+  "dependencies": {
+    "tronweb": "^6.3.0"
   }
 }
