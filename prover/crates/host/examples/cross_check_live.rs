@@ -18,6 +18,7 @@ use bridge_return_sdk_ext::bridge::{
     bridge_lock_obligation, BridgeConfig as SdkBridgeConfig, TRON_USDT_LOCK_JUSTIFICATION_TAG,
 };
 use serde_json::Value;
+use unicity_token::api::bft::RootTrustBase;
 use unicity_token::api::StateId;
 use unicity_token::payment::PaymentAssetCollection;
 use unicity_token::transaction::{Token, Transaction};
@@ -56,6 +57,15 @@ fn main() {
     let json: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read state file"))
         .expect("parse state file");
 
+    // Trust base for full quorum verification (arg 2, env, or repo-root default).
+    let trustbase_path = env::args()
+        .nth(2)
+        .or_else(|| env::var("UNICITY_TRUSTBASE").ok())
+        .unwrap_or_else(|| "../bft-trustbase.testnet2.json".to_string());
+    let trust_base =
+        RootTrustBase::from_json(&fs::read_to_string(&trustbase_path).expect("read trust base"))
+            .expect("parse trust base");
+
     let pc = json.get("proverConfig").expect("proverConfig");
     let lock = json.get("lock").expect("lock");
 
@@ -85,6 +95,33 @@ fn main() {
     );
 
     let mut ok = true;
+
+    // Full cryptographic verification of the live token against the testnet2
+    // trust base (quorum + chain linkage + owner auth via certified mode), then
+    // the verified bridge-lock obligation. This is the S1 entry path for real
+    // tokens — stronger than the structural-only derivations below.
+    match bridge_return_host::s1::verify_certified_burn(
+        &token,
+        &trust_base,
+        &config,
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+    ) {
+        Ok(refs) => {
+            let digest_ok = refs.len() == 1 && refs[0].digest == n32(&s(lock, "lockDigest"));
+            ok &= digest_ok;
+            println!(
+                "  [{}] live token VERIFIED vs testnet2 trust base (quorum {} of {} nodes), certified mode\n      verified lockDigest: 0x{}",
+                if digest_ok { "PASS" } else { "FAIL" },
+                trust_base.quorum_threshold,
+                trust_base.root_nodes.len(),
+                refs.first().map(|r| hex::encode(r.digest)).unwrap_or_default(),
+            );
+        }
+        Err(err) => {
+            ok = false;
+            println!("  [FAIL] live token verification: {err}");
+        }
+    }
 
     // E3: structural backing obligation (lockDigest + nonce).
     let obligation = bridge_lock_obligation(

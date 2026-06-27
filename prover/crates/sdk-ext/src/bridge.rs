@@ -303,7 +303,13 @@ fn verify_split_mint(
     Ok(obligations)
 }
 
-fn bridge_lock_obligations_for_token_certified(
+/// Verify a token in **certified** mode (each transition carries its own
+/// `UnicityCertificate`, as served by a live aggregator) and collect its
+/// bridge-lock obligations. This is the S1 entry for real testnet tokens; the
+/// anchored variants ([`bridge_lock_obligations_for_token_anchored`] /
+/// [`bridge_lock_obligations_for_token_against_root`]) apply once the aggregator
+/// serves historical inclusion proofs against one shared anchor (§11 batching).
+pub fn bridge_lock_obligations_for_token_certified(
     token: &Token,
     trust_base: &RootTrustBase,
     bridge_justification_tag: u64,

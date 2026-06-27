@@ -24,4 +24,6 @@ serde_json = "1"
 # artifact bucket and falls back to generating a circuit-specific proving key.
 sp1-sdk = { version = "6.3.1", optional = true, default-features = false, features = ["blocking", "native-gnark"] }
 thiserror = "1"
-unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc", "client"] }
+# `std` adds host-only JSON trust-base parsing (RootTrustBase::from_json) for S1.
+# The zkVM guest is built by a separate `cargo prove` invocation and stays no_std.
+unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["std", "alloc", "client"] }

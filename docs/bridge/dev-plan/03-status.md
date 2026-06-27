@@ -132,6 +132,21 @@ extensions live in `prover/crates/sdk-ext`.
   - `bridge-return-host precheck-wire <wire_hex>` exposes it on the CLI.
   - `crates/host/tests/s1_precheck.rs` covers B=1/split/B=2 accept and tampered
     public-values / truncated-wire reject.
+- **S1 certified-mode verification of live tokens** (`s1::verify_certified_burn`,
+  ZK_BACK3 §10.1): full cryptographic verification of a real aggregator-served
+  token (each transition carries its own `UnicityCertificate`) against the
+  testnet2 trust base — quorum + chain linkage + owner auth + the bridge-lock
+  obligation — not just the structural byte derivations. New public
+  `bridge_lock_obligations_for_token_certified` in `sdk-ext`; the host crate now
+  enables `unicity-token/std` for `RootTrustBase::from_json` (the zkVM guest build
+  is a separate `cargo prove` invocation and stays `no_std`).
+  - `examples/cross_check_live.rs` now runs this full verification (quorum 3-of-4)
+    on the live blob *before* the byte-derivation cross-checks.
+  - `crates/host/tests/s1_live.rs` froze a real `npm run e2e:back` sample
+    (`tests/data/bridge-back-live-sample.json` + `trustbase.testnet2.json`,
+    public testnet artifacts, no secrets) and asserts it verifies (lockDigest +
+    nonce match the TS wallet) and that an unsatisfiable quorum rejects it. This
+    is the first CI test over **real aggregator data**, not synthetic fixtures.
 - Token vectors now include `in.guest_wire_input`, the exact wire payload consumed
   by the SP1 guest binary. `check-vectors` executes both the decoded JSON relation
   input and the raw wire input.
@@ -330,10 +345,18 @@ anchor saves `(B-1)` quorum checks.
    (`04-deployment.md` Stages B/C). Needs the frozen real `BridgeConfig` (#3) and
    a real burn (#4).
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
-   (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`). **Still open:**
-   the live witness *fetch* (decode burned blobs, choose anchor root `R*`, pull
-   anchored inclusion proofs over the aggregator `http` API) that populates a
-   `WitnessPackage` from chain/aggregator data.
+   (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
+   certified-mode verification of a real live token** (`verify_certified_burn`,
+   `cross_check_live`, `s1_live.rs` over a frozen testnet2 sample). **Still open:**
+   the live *fetch over the network* — an aggregator `http` client (the SDK
+   `http` feature) to pull a burned token + anchored inclusion proofs on demand,
+   and reconstructing `LockRecord`s from real Tron `Lock` events (needs the
+   deployed vault, blocker #2). Today the sample comes from `npm run e2e:back`
+   (live aggregator mint/burn, Tron lock mocked) rather than an in-process fetch.
+   Note the **mode gap**: live tokens are *certified* (per-transition certs); the
+   zk guest relation proves *anchored* mode (one shared `UC*`). Proving a live
+   token in zk needs either a guest certified path or the aggregator serving
+   historical inclusion against one anchor root (ZK_BACK3 §2.1).
 4. **(done)** B>1 JSON token vector (`token/token-02.json`, multi-burn schema)
    emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
    and the `vectors.rs` test covers it. (The B=2 execute path was already covered

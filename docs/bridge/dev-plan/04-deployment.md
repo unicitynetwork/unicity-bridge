@@ -141,6 +141,17 @@ Goal: exercise the vault's settlement logic on Nile without a real proof.
 
 ## Stage C — real proof on Nile (M3) — needs blockers #1, #3, #4
 
+> **Mode gap (blocker #4).** A live aggregator token is *certified* (each
+> transition carries its own `UnicityCertificate`); the S1 host path already
+> verifies these (`s1::verify_certified_burn`, validated on a real testnet2
+> sample). But the zk **guest** relation proves *anchored* mode (one shared
+> `UC*`). Producing a real **proof** therefore needs either (a) a guest certified
+> path, or (b) the aggregator serving historical inclusion proofs against one
+> anchor root (ZK_BACK3 §2.1) so S1 can assemble an anchored `WitnessPackage`.
+> The host-side verification + derivations are done; the zk side of a *live* token
+> is the remaining work before Stage C can run.
+
+
 1. Deploy the **real** verifier from Stage A → `TRON_VERIFIER`.
 2. Freeze the real `BridgeConfig` (shared with circuit + wallet) and regenerate a
    **real** proof from live witness data (S1 fetch, blocker #4) so its

@@ -13,10 +13,56 @@
 //! over the aggregator's `http` API. This module owns the package shape and the
 //! precheck gate those services feed into.
 
-use bridge_return_core::{PublicValues, U256};
+use bridge_return_core::{BridgeConfig, PublicValues, SourceLockRef, U256};
 use bridge_return_guest::{execute_public_output, execute_wire, wire, GuestInput};
+use bridge_return_sdk_ext::bridge::{
+    bridge_lock_obligations_for_token_certified, BridgeConfig as SdkBridgeConfig,
+};
+use unicity_token::api::bft::RootTrustBase;
+use unicity_token::payment::PaymentAssetCollection;
+use unicity_token::transaction::Token;
 
 use crate::{HostError, Result};
+
+/// Full cryptographic verification of a live, aggregator-**certified** burned
+/// token — each transition carries its own `UnicityCertificate`, as served by a
+/// real aggregator — returning the source bridge-lock obligations as
+/// [`SourceLockRef`]s. This verifies the trust-base quorum + chain linkage +
+/// owner authorization (not just the structural byte derivations), so it is the
+/// S1 entry point for real testnet tokens.
+///
+/// The anchored batch path ([`WitnessPackage`]/`bridge_burns`) instead amortizes
+/// one quorum check across a shared anchor (§11); it applies once the aggregator
+/// serves historical inclusion proofs against one root.
+pub fn verify_certified_burn(
+    token: &Token,
+    trust_base: &RootTrustBase,
+    config: &BridgeConfig,
+    lock_justification_tag: u64,
+) -> Result<Vec<SourceLockRef>> {
+    let sdk_config = SdkBridgeConfig {
+        source_chain_id: config.source_chain_id,
+        vault: config.vault,
+        asset: config.asset,
+        token_type: config.token_type,
+        coin_id: config.coin_id,
+    };
+    let obligations = bridge_lock_obligations_for_token_certified(
+        token,
+        trust_base,
+        lock_justification_tag,
+        &sdk_config,
+        PaymentAssetCollection::from_cbor_bytes,
+    )
+    .map_err(|err| HostError::Check(format!("certified burn verification failed: {err:?}")))?;
+    Ok(obligations
+        .into_iter()
+        .map(|o| SourceLockRef {
+            nonce: o.nonce,
+            digest: o.digest,
+        })
+        .collect())
+}
 
 /// The assembled witness for one return batch — everything the SP1 guest needs
 /// to produce a proof. Wraps the [`GuestInput`] that S3 (the prover) consumes;
