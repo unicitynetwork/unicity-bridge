@@ -561,6 +561,40 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
     }
 }
 
+/// Emit the B=2 batch as a multi-burn token vector. Unlike the single-burn
+/// schema (`token_cbor`/`trust_base`/… at the top of `in`), this nests one entry
+/// per burn under `in.burns`, keeping `leaves`, `lock_refs`,
+/// `accumulator_witnesses`, and `guest_wire_input` shared at the batch level.
+pub fn b2_fixture_json(input: &GuestInput) -> serde_json::Value {
+    multi_burn_fixture_json(
+        "B=2 batch: two direct bridge-lock tokens burned to distinct BridgeBackReasons under one shared trust base; one ordered accumulator transition over both nullifiers",
+        input,
+    )
+}
+
+fn multi_burn_fixture_json(description: &str, input: &GuestInput) -> serde_json::Value {
+    json!({
+        "description": description,
+        "in": {
+            "guest_wire_input": hex0(&wire::encode_guest_input(input)),
+            "burns": input.witness.bridge_burns.iter().map(burn_json).collect::<Vec<_>>(),
+            "leaves": input.return_leaves.iter().map(return_leaf_json).collect::<Vec<_>>(),
+            "lock_refs": input.sorted_lock_refs.iter().map(lock_ref_json).collect::<Vec<_>>(),
+            "accumulator_witnesses": input.witness.accumulator_witnesses.iter().map(witness_json).collect::<Vec<_>>(),
+        },
+        "out": public_values_json(&input.public_values),
+    })
+}
+
+fn burn_json(burn: &BridgeBurnWitness) -> serde_json::Value {
+    json!({
+        "token_cbor": hex0(&burn.token.to_cbor()),
+        "trust_base": trust_base_json(&burn.trust_base),
+        "anchor_certificate_cbor": hex0(&burn.anchor_certificate.to_cbor()),
+        "lock_justification_tag": burn.lock_justification_tag,
+    })
+}
+
 pub fn split_fixture_json(fixture: &SplitFixture) -> serde_json::Value {
     fixture_json(
         "B=1 split bridge token burned to BridgeBackReason; exercises recursive source-lock extraction",

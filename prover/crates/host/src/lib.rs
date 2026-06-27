@@ -66,6 +66,10 @@ pub fn check_vectors(root: &Path) -> Result<()> {
         &read(root, "token/token-01.json")?,
         &read(root, "config/config-00.json")?,
     )?;
+    check_token(
+        &read(root, "token/token-02.json")?,
+        &read(root, "config/config-00.json")?,
+    )?;
     println!("bridge return prover vectors ok");
     Ok(())
 }
@@ -294,16 +298,18 @@ fn check_token(token: &Value, config: &Value) -> Result<()> {
         .iter()
         .map(non_membership_witness_from_json)
         .collect::<Result<Vec<_>>>()?;
-    let burned_token = Token::from_cbor(&bytes_field(input, "token_cbor")?)
-        .map_err(|err| HostError::Check(format!("token decode: {err}")))?;
-    let trust_base = trust_base_from_json(&input["trust_base"])?;
-    let anchor_bytes = bytes_field(input, "anchor_certificate_cbor")?;
-    let anchor_decoder = Decoder::new(&anchor_bytes);
-    anchor_decoder
-        .finish()
-        .map_err(|err| HostError::Check(format!("anchor certificate trailing data: {err}")))?;
-    let anchor_certificate = UnicityCertificate::from_cbor(anchor_decoder)
-        .map_err(|err| HostError::Check(format!("anchor certificate decode: {err}")))?;
+    // Two schemas: the single-burn vector carries `token_cbor`/`trust_base`/…
+    // directly under `in`; the multi-burn (B>1) vector nests one such entry per
+    // burn under `in.burns`. Treat the legacy single-burn shape as a one-element
+    // batch so both run the identical relation.
+    let burn_values: Vec<&Value> = match input.get("burns").and_then(Value::as_array) {
+        Some(burns) => burns.iter().collect(),
+        None => vec![input],
+    };
+    let bridge_burns = burn_values
+        .into_iter()
+        .map(bridge_burn_from_json)
+        .collect::<Result<Vec<_>>>()?;
     let public_values = public_values_from_json(output)?;
     let relation_input = GuestInput {
         config: cfg,
@@ -312,12 +318,7 @@ fn check_token(token: &Value, config: &Value) -> Result<()> {
         sorted_lock_refs: refs,
         witness: RelationWitness {
             accumulator_witnesses,
-            bridge_burns: vec![BridgeBurnWitness {
-                token: burned_token,
-                trust_base,
-                anchor_certificate,
-                lock_justification_tag: u64_field(input, "lock_justification_tag")?,
-            }],
+            bridge_burns,
         },
     };
     let actual = execute(&relation_input)
@@ -342,6 +343,25 @@ fn check_token(token: &Value, config: &Value) -> Result<()> {
         output,
         "public_values_abi",
     )
+}
+
+fn bridge_burn_from_json(v: &Value) -> Result<BridgeBurnWitness> {
+    let token = Token::from_cbor(&bytes_field(v, "token_cbor")?)
+        .map_err(|err| HostError::Check(format!("token decode: {err}")))?;
+    let trust_base = trust_base_from_json(&v["trust_base"])?;
+    let anchor_bytes = bytes_field(v, "anchor_certificate_cbor")?;
+    let anchor_decoder = Decoder::new(&anchor_bytes);
+    anchor_decoder
+        .finish()
+        .map_err(|err| HostError::Check(format!("anchor certificate trailing data: {err}")))?;
+    let anchor_certificate = UnicityCertificate::from_cbor(anchor_decoder)
+        .map_err(|err| HostError::Check(format!("anchor certificate decode: {err}")))?;
+    Ok(BridgeBurnWitness {
+        token,
+        trust_base,
+        anchor_certificate,
+        lock_justification_tag: u64_field(v, "lock_justification_tag")?,
+    })
 }
 
 fn config_from_json(input: &Value, output: &Value) -> Result<BridgeConfig> {

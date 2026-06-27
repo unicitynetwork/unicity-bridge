@@ -2,9 +2,16 @@ use std::{fs, path::Path, sync::Arc};
 
 use bridge_return_guest::GuestOutput;
 use sp1_sdk::blocking::{Elf, ProveRequest, Prover, ProverClient, SP1Stdin};
-use sp1_sdk::{ProvingKey, SP1Proof, SP1ProofWithPublicValues};
+use sp1_sdk::{HashableKey, ProvingKey, SP1Proof, SP1ProofWithPublicValues};
 
 use crate::{HostError, Result};
+
+/// SP1 release circuit version embedded in this `sp1-sdk` build (e.g. `v6.1.0`).
+/// The on-chain Groth16 verifier bytecode and the downloaded circuit/key archive
+/// are pinned to this string; the published bundle records it for provenance.
+pub fn circuit_version() -> &'static str {
+    sp1_sdk::SP1_CIRCUIT_VERSION
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Sp1Execution {
@@ -19,6 +26,11 @@ pub struct Sp1ProofInfo {
     pub public_values: Vec<u8>,
     pub proof_bytes: Vec<u8>,
     pub sp1_version: String,
+    /// The program verifying-key hash (`bytes32`, "0x"-prefixed) the on-chain
+    /// `verifyProof(programVKey, …)` binds to. `None` when derived from a saved
+    /// proof file alone, which does not carry the vkey — recover it from the ELF
+    /// via [`program_vkey`] / [`export_onchain`].
+    pub vkey_hash: Option<String>,
 }
 
 pub fn execute_elf(elf_path: &Path, wire_input: Vec<u8>) -> Result<Sp1Execution> {
@@ -57,12 +69,13 @@ pub fn mock_groth16(
     client
         .verify(&proof, pk.verifying_key(), None)
         .map_err(|err| HostError::Check(format!("SP1 mock proof verify failed: {err}")))?;
+    let vkey_hash = pk.verifying_key().bytes32();
     let actual = proof.public_values.to_vec();
     ensure_public_values_match(&actual, &expected)?;
     proof
         .save(proof_path)
         .map_err(|err| HostError::Check(format!("save SP1 proof: {err}")))?;
-    Ok(proof_info(&proof))
+    Ok(proof_info(&proof, Some(vkey_hash)))
 }
 
 /// Real CPU Groth16 proof. The complete STARK → recursion → shrink → wrap →
@@ -95,12 +108,45 @@ pub fn real_groth16(
     client
         .verify(&proof, pk.verifying_key(), None)
         .map_err(|err| HostError::Check(format!("SP1 groth16 proof verify failed: {err}")))?;
+    let vkey_hash = pk.verifying_key().bytes32();
     let actual = proof.public_values.to_vec();
     ensure_public_values_match(&actual, &expected)?;
     proof
         .save(proof_path)
         .map_err(|err| HostError::Check(format!("save SP1 proof: {err}")))?;
-    Ok(proof_info(&proof))
+    Ok(proof_info(&proof, Some(vkey_hash)))
+}
+
+/// Derive the program verifying-key hash (`bytes32`) from the guest ELF alone.
+/// This is the `programVKey` the source-chain vault stores and passes to
+/// `verifyProof`; it is deterministic in the ELF and independent of any input.
+/// Only the cheap program key setup runs here — not the full proving pipeline.
+pub fn program_vkey(elf_path: &Path) -> Result<String> {
+    let elf = load_elf(elf_path)?;
+    let client = ProverClient::builder().cpu().build();
+    let pk = client
+        .setup(elf)
+        .map_err(|err| HostError::Check(format!("SP1 setup failed: {err}")))?;
+    Ok(pk.verifying_key().bytes32())
+}
+
+/// Assemble the publishable on-chain verification bundle from a guest ELF and a
+/// previously saved proof. Re-derives `programVKey` from the ELF, re-verifies the
+/// saved proof against it, and returns the proof info with `vkey_hash` populated.
+/// The caller serializes the `(programVKey, publicValues, proofBytes)` triple the
+/// vault's `verifyProof` consumes.
+pub fn export_onchain(elf_path: &Path, proof_path: &Path) -> Result<Sp1ProofInfo> {
+    let elf = load_elf(elf_path)?;
+    let client = ProverClient::builder().cpu().build();
+    let pk = client
+        .setup(elf)
+        .map_err(|err| HostError::Check(format!("SP1 setup failed: {err}")))?;
+    let proof = SP1ProofWithPublicValues::load(proof_path)
+        .map_err(|err| HostError::Check(format!("load SP1 proof: {err}")))?;
+    client
+        .verify(&proof, pk.verifying_key(), None)
+        .map_err(|err| HostError::Check(format!("saved proof fails verification: {err}")))?;
+    Ok(proof_info(&proof, Some(pk.verifying_key().bytes32())))
 }
 
 fn ensure_release_circuit_mode() -> Result<()> {
@@ -116,7 +162,7 @@ fn ensure_release_circuit_mode() -> Result<()> {
 pub fn proof_info_from_file(proof_path: &Path) -> Result<Sp1ProofInfo> {
     let proof = SP1ProofWithPublicValues::load(proof_path)
         .map_err(|err| HostError::Check(format!("load SP1 proof: {err}")))?;
-    Ok(proof_info(&proof))
+    Ok(proof_info(&proof, None))
 }
 
 fn load_elf(path: &Path) -> Result<Elf> {
@@ -153,7 +199,7 @@ fn ensure_public_values_match(actual: &[u8], expected: &GuestOutput) -> Result<(
     Ok(())
 }
 
-fn proof_info(proof: &SP1ProofWithPublicValues) -> Sp1ProofInfo {
+fn proof_info(proof: &SP1ProofWithPublicValues, vkey_hash: Option<String>) -> Sp1ProofInfo {
     Sp1ProofInfo {
         proof_mode: match &proof.proof {
             SP1Proof::Core(_) => "core",
@@ -164,5 +210,6 @@ fn proof_info(proof: &SP1ProofWithPublicValues) -> Sp1ProofInfo {
         public_values: proof.public_values.to_vec(),
         proof_bytes: proof.bytes(),
         sp1_version: proof.sp1_version.clone(),
+        vkey_hash,
     }
 }

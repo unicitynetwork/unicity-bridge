@@ -1,0 +1,292 @@
+# 03 — Prover Service Status
+
+Last updated: 2026-06-27
+
+This status is for parallel-agent coordination. The workspace is multi-repo:
+`prover/`, `bridge-vectors/`, and this file belong to `br`.
+`state-transition-sdk-rust` is treated as a read-only reference; bridge-return
+extensions live in `prover/crates/sdk-ext`.
+
+## Implemented
+
+### `br` repo
+
+- Added `prover/` Cargo workspace with:
+  - `crates/core`: byte-level bridge return derivations and public-value checks.
+  - `crates/guest`: no_std guest relation shell, currently executable under
+    normal Rust tests.
+  - `crates/host`: vector checker CLI.
+  - `crates/sdk-ext`: prover-owned extensions over the read-only Rust SDK.
+- Guest relation now validates through `bridge-return-sdk-ext`:
+  - `PublicValues` roots and totals;
+  - ordered nullifier accumulator transition;
+  - direct bridge-lock burned tokens for B=1;
+  - anchored token verification through the SDK;
+  - `trustBaseHash`;
+  - terminal `BurnPredicate(SHA256(reasonBytes))`;
+  - `BridgeBackReason` fields, fee bound, burn transition id, and nullifier;
+  - bridge-lock obligations `(nonce, lockDigest)`;
+  - payment amount for configured `coinId`.
+- Guest public-output boundary now exposes:
+  - `execute_public_output`;
+  - `execute_wire`;
+  - `wire::{encode_guest_input, decode_guest_input}`;
+  - `public_values_abi`;
+  - `public_values_digest`, the single digest intended for the SP1/Groth16
+    public input boundary.
+- Added feature-gated SP1 guest binary:
+  - `bridge-return-sp1-guest`;
+  - enabled by `bridge-return-guest/sp1`;
+  - reads the byte-oriented `GuestInput` wire payload;
+  - commits `public_values_abi` followed by `public_values_digest`.
+- Added feature-gated SP1 host SDK plumbing:
+  - `bridge-return-host/sp1`;
+  - `sp1-execute <guest.elf> <wire_hex>`;
+  - `sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin>`;
+  - `sp1-proof-info <proof.bin>`;
+  - host prechecks wire input through `execute_wire` and rejects if the SP1
+    public-values stream differs from the expected ABI bytes plus digest.
+- Added project-owned on-chain proof-metadata plumbing:
+  - `Sp1ProofInfo.vkey_hash` now carries the program verifying-key hash
+    (`bytes32`) that the source-chain vault's `verifyProof(programVKey, …)`
+    binds to; the groth16 prove paths populate it from the proving key.
+  - `sp1-vkey <guest.elf>` derives the program vkey hash from the ELF alone
+    (cheap setup only, no proving) and prints it with the SP1 circuit version.
+  - `sp1-export <guest.elf> <proof.bin> <bundle.json>` re-derives the vkey,
+    **re-verifies the saved proof against it**, and writes the publishable
+    `(programVKey, publicValues, proofBytes)` bundle the vault consumes.
+- Published the first real B=1 Groth16 on-chain bundle as
+  `bridge-vectors/proof/b1-groth16.json` (`BRIDGE_PROTO_VERSION=1`):
+  - `vkey = 0x004d100af488ce9a36e6e44a71b8dced18aa6a55cf3634151ac7b5609302133f`
+    (SP1 circuit `v6.1.0`);
+  - `proof_mode = groth16`, `proof_bytes_len = 356` (4-byte selector `0x4388a21c`);
+  - `public_values` ends in the 32-byte digest
+    `0xe95026138c4b607eaaee2146438fd85f19c740e93833d5bbbf28683e09776dae`.
+- Added `prover/crates/host/tests/b1_guest.rs`, an executable B=1 scenario that
+  constructs a direct bridge-lock token, burns it to `BridgeBackReason`, and runs
+  `bridge_return_guest::execute`.
+- Added `prover/crates/host/src/fixture.rs`, a reusable B=1 fixture builder used
+  by the integration test and vector emitter.
+- Added a **B=2 batch** fixture (`build_b2_direct_bridge_fixture`): two independent
+  direct bridge-lock tokens burned to distinct `BridgeBackReason`s, sharing one
+  trust base, with one ordered accumulator transition over both nullifiers and two
+  source lock refs sorted by nonce (per-burn anchors; the single shared-`UC*`
+  cycle optimization is still open and needs a multi-leaf anchor builder).
+- Added `prover/crates/host/tests/b2_guest.rs`: executes the B=2 batch and asserts
+  the order-coupled invariants (swapped accumulator witnesses, unsorted lock refs,
+  wrong batch size, swapped leaves, dropped burn witness all reject). M4 relation
+  validated in execute mode.
+- Added `bridge-vectors/accumulator/accumulator-00.json`.
+- Added `bridge-vectors/token/token-00.json`, the M2 B=1 direct bridge-lock
+  execute fixture.
+- Added `bridge-vectors/token/token-01.json`, the M2 B=1 split-source execute
+  fixture that burns a split output and recursively extracts the original source
+  lock obligation.
+- Added `bridge-vectors/token/token-02.json`, the **B=2 multi-burn** execute
+  fixture. It uses the multi-burn schema: one `(token_cbor, trust_base,
+  anchor_certificate_cbor, lock_justification_tag)` entry per burn under
+  `in.burns`, with `leaves`, `lock_refs`, `accumulator_witnesses`, and
+  `guest_wire_input` shared at the batch level.
+- `bridge-return-host check-vectors` now consumes `token/token-00.json`,
+  `token/token-01.json`, and `token/token-02.json`, then runs the guest relation
+  in execute mode. `check_token` accepts both schemas: the single-burn vector
+  (`token_cbor`/… at the top of `in`) is treated as a one-element batch, and the
+  multi-burn vector iterates `in.burns`.
+- `bridge-return-host emit-b1-token-vector` prints the generated B=1 token vector;
+  its output currently matches `bridge-vectors/token/token-00.json`.
+- `bridge-return-host emit-split-token-vector` prints the generated split-source
+  token vector; its output currently matches `bridge-vectors/token/token-01.json`.
+- `bridge-return-host emit-b2-token-vector` prints the generated B=2 multi-burn
+  token vector; its output currently matches `bridge-vectors/token/token-02.json`.
+- Token vectors now include `in.guest_wire_input`, the exact wire payload consumed
+  by the SP1 guest binary. `check-vectors` executes both the decoded JSON relation
+  input and the raw wire input.
+- `bridge-return-host emit-b1-wire-input` and `emit-split-wire-input` print the
+  fixture wire payloads as hex.
+- `.gitignore` now unignores `prover/Cargo.lock` so the prover host build lockfile
+  can be tracked.
+
+### `prover/crates/sdk-ext`
+
+- Added anchored direct-token verification APIs:
+  - `verify_anchor_certificate`
+  - `verify_inclusion_against_root`
+  - `verify_token_anchored`
+- Added certified-token verification for embedded split sources:
+  - `verify_token_certified`
+  - verifies each embedded source transition against its own stored
+    `UnicityCertificate`, matching the SDK's current certified-token wire format.
+- Added `trust::canonical_hash()` used by the public `trustBaseHash`.
+- Added nullifier accumulator module:
+  - `verify_non_member`
+  - `insert`
+  - host `NullifierTree`
+  - `ordered_insert_witnesses`
+- Added structural bridge-lock backing verifier:
+  - `bridge_lock_obligation`
+  - `bridge_lock_obligations_for_token_anchored`
+  - `TRON_USDT_LOCK_JUSTIFICATION_TAG`
+- Added recursive split-source bridge-token obligation collection:
+  - parses `SplitMintJustification`;
+  - verifies the top-level returned token under the batch anchor;
+  - verifies embedded burned source tokens against their own certificates to avoid
+    a self-referential token hash in the current SDK encoding;
+  - checks manifest burn predicates, token type, payment data, and RSMST proofs;
+  - collects the underlying bridge-lock obligations for the guest relation.
+- This crate depends only on public `state-transition-sdk-rust` APIs.
+
+### `state-transition-sdk-rust` repo
+
+- No files are modified. It is used as a read-only reference dependency.
+
+## Validation Commands Run
+
+From `prover/`:
+
+```bash
+cargo fmt --check
+cargo test
+cargo run -p bridge-return-host -- check-vectors ../bridge-vectors
+cargo run -p bridge-return-host -- emit-b1-token-vector
+cargo run -p bridge-return-host -- emit-split-token-vector
+cargo run -p bridge-return-host -- emit-b2-token-vector
+cargo run -p bridge-return-host -- emit-b1-wire-input
+cargo run -p bridge-return-host -- emit-split-wire-input
+cargo check -p bridge-return-host --example cross_check_live
+cargo check -p bridge-return-guest --features sp1 --bin bridge-return-sp1-guest
+cargo check -p bridge-return-host --features sp1
+cargo prove build -p bridge-return-guest --binaries bridge-return-sp1-guest --features sp1 --output-directory target/sp1 --elf-name bridge-return-sp1-guest
+cargo run --release -p bridge-return-host --features sp1 -- sp1-vkey target/sp1/bridge-return-sp1-guest
+cargo run --release -p bridge-return-host --features sp1 -- \
+  sp1-export target/sp1/bridge-return-sp1-guest \
+  /tmp/bridge-b1-groth16-real.bin ../bridge-vectors/proof/b1-groth16.json
+```
+
+From `state-transition-sdk-rust/`:
+
+```bash
+cargo test --no-default-features --features alloc
+cargo test
+```
+
+All passed on 2026-06-26. The SP1 build produced:
+
+```text
+prover/target/sp1/bridge-return-sp1-guest
+```
+
+SP1 CPU execution **now completes** once two things are fixed:
+
+1. **Accelerated precompiles** are patched in (`prover/Cargo.toml` `[patch.crates-io]`,
+   SP1 6.2.0 patch line): `sha2 0.10.9`, `k256 0.13.4` (+ `crypto-bigint 0.5.5`,
+   `signatures` fork), `tiny-keccak 2.0.2`. These route the SHA-256 / secp256k1-verify /
+   keccak calls to zkVM syscalls. Off-zkVM the forks fall back to stock impls, so host
+   `cargo test` is unaffected.
+2. **Always run the host with `--release`** — debug `sp1-sdk` is prohibitively slow.
+
+```bash
+cargo run --release -p bridge-return-host --features sp1 -- \
+  sp1-execute target/sp1/bridge-return-sp1-guest "$(cat /tmp/bridge-b1-wire.hex)"
+```
+
+Result for the B=1 direct fixture: **921,640 cycles**, and `public_values ==
+expected_public_values` (relation executes correctly in the zkVM). This was
+non-terminating (>15 min) before the precompiles. The RISC-V ELF and the
+public-values/digest boundary are validated.
+
+`sp1-mock-groth16` then produced a `groth16`-mode proof artifact whose
+`public_values` match and which round-trips through `sp1-proof-info`. A real
+`sp1-groth16` (CPU) command was added (`crates/host/src/sp1.rs::real_groth16`).
+Real local-CPU Groth16 proving findings (8-yo Intel Mac, 16 GB):
+
+- SP1's Groth16 prover defaults to **Docker**; enable `sp1-sdk`'s **`native-gnark`**
+  feature (host Cargo.toml) to build the gnark Go lib via local Go (`libsp1gnark.a`),
+  no Docker.
+- Use **release circuit mode** (unset `SP1_CIRCUIT_MODE` or set it to `release`).
+  SP1 6.3.1 embeds circuit version `v6.1.0` and downloads the pre-generated
+  circuit/key archive from
+  `https://sp1-circuits.s3-us-east-2.amazonaws.com/v6.1.0-groth16.tar.gz`.
+  `SP1_CIRCUIT_MODE=dev` instead targets a private S3 bucket and falls back to a
+  local Groth16 setup; the host now rejects that setting before proving.
+- The earlier native `len(points) != len(scalars)` failure was caused by a
+  **truncated cached `groth16_pk.bin`**, not an incompatibility between native
+  gnark and release artifacts. The complete key is 5,862,173,061 bytes with
+  SHA-256 `c3760e0e3b58487f8704680d5b3ad32a9fbca9f3cb0749d69055c4f1271ca167`.
+  Gnark ignored the `ReadDump` error and failed later during multi-exponentiation,
+  which made the symptom misleading. Re-downloading the complete release archive
+  fixes it; no local key generation is needed.
+- Use single-worker (`SP1_WORKER_NUM_*=1`) to stay under the memory ceiling
+  (about 85% peak). A complete B=1 proof succeeded locally in about 52 minutes;
+  native gnark took 6m58s after the recursive wrap. The saved proof is 2,014 bytes
+  (`SP1ProofWithPublicValues` container), contains a 356-byte Groth16 proof, and
+  has SHA-256 `98c6c5d3d9b27aff85ead2bf78543087fe9907f519a66c9d70a731827b2bd0d7`.
+
+The successful no-Docker/no-prover-network/no-GPU command was:
+
+```bash
+RUST_LOG=warn,sp1_prover=info,sp1_sdk=info \
+SP1_PROVER=cpu SP1_CIRCUIT_MODE=release \
+SP1_WORKER_NUM_CORE_WORKERS=1 \
+SP1_WORKER_NUM_SETUP_WORKERS=1 \
+SP1_WORKER_NUM_SPLICING_WORKERS=1 \
+SP1_WORKER_NUM_PREPARE_REDUCE_WORKERS=1 \
+SP1_WORKER_NUM_RECURSION_EXECUTOR_WORKERS=1 \
+SP1_WORKER_NUM_RECURSION_PROVER_WORKERS=1 \
+SP1_WORKER_NUM_DEFERRED_WORKERS=1 \
+cargo run --release -p bridge-return-host --features sp1 -- \
+  sp1-groth16 target/sp1/bridge-return-sp1-guest \
+  "$(cat /tmp/bridge-b1-wire.hex)" /tmp/bridge-b1-groth16-real.bin
+```
+
+A `emit-b2-wire-input` command was added; the B=2 batch fixture runs under
+`sp1-execute` at **1,796,330 cycles** (~2× B=1's 921,640, linear in batch size)
+with `public_values == expected`, validating M4 in the zkVM, not just host
+execute mode.
+
+## Current Scope Limits
+
+- The split-source path is covered by a deterministic synthetic fixture
+  (`token/token-01.json`). It uses the SDK's current `SplitMintJustification`
+  shape, where the embedded burned source token carries its own certificates.
+  A future compact anchored witness type can remove the embedded-cert duplication
+  once the SDK exposes anchored proof blobs separately from certified tokens.
+- Real SP1 B=1 Groth16 generation and SDK verification are wired and validated.
+  The SP1 release verifier key is present in the downloaded v6.1.0 artifacts.
+  Project-owned proof/vkey metadata is now **published**
+  (`bridge-vectors/proof/b1-groth16.json` via `sp1-export`); the on-chain proof
+  smoke against the vault's Solidity SP1 verifier bytecode is still open.
+- B>1 batching is validated in **execute mode** for B=2 (`b2_guest.rs`), and now
+  also as a published JSON conformance vector (`token/token-02.json`, multi-burn
+  schema) consumed by `check-vectors` and the `vectors.rs` integration test.
+  Still open: a single shared `UC*` across burns (multi-leaf anchor builder) and
+  any SP1 proof at B>1.
+- The B=1 fixture uses synthetic local certificates and keys suitable for
+  deterministic execute-mode conformance, not live aggregator data.
+
+## Suggested Next Work
+
+1. **(done — metadata half)** SP1 v6.1.0 verifier/proof metadata is persisted as
+   `bridge-vectors/proof/b1-groth16.json`. **Still open:** verify this exact
+   `(programVKey, publicValues, proofBytes)` bundle against the same Solidity
+   `SP1Verifier`/`Groth16Verifier` bytecode the vault uses (needs the `01` track's
+   verifier deployment; the v6.1.0 verifier address/bytecode pin must match this
+   bundle's `vkey` + circuit version).
+2. Complete the on-chain proof smoke (`01` M3).
+3. Add S1 host witness package structs and a precheck path that mirrors
+   `GuestInput`.
+4. **(done)** B>1 JSON token vector (`token/token-02.json`, multi-burn schema)
+   emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
+   and the `vectors.rs` test covers it. (The B=2 execute path was already covered
+   by `b2_guest.rs`.)
+5. Add a single shared-`UC*` anchor across burns (multi-leaf inclusion-path
+   builder) to realize the §11 one-quorum-check batching optimization.
+
+## Dirty Workspace Notes
+
+As of this update, the top-level workspace contains unrelated changes in
+`bridge-plugin-tron-usdt/` and a root `bft-trustbase.testnet2.json` file from
+other work. The file `prover/crates/host/examples/cross_check_live.rs` was
+produced by the substream 01/02 agents and was only adjusted to import the
+prover-owned `sdk-ext` crate after SDK changes were moved out. Do not revert or
+include unrelated files in prover-service commits unless explicitly coordinating
+with the owning agent.
