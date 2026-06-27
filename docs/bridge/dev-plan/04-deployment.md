@@ -94,20 +94,36 @@ roots match → each `lockDigest[nonce]` bound (set by a prior `lock()`).
 
 ---
 
-## Stage A — verifier smoke (local, no Tron) — blocker #1
+## Stage A — verifier smoke (local, no Tron) — blocker #1 ✅ DONE
 
 Goal: prove the published bundle verifies against the **same** SP1 verifier
 bytecode the vault will call, before spending anything on Nile.
 
-1. Generate SP1's `v6.1.0` Groth16 verifier Solidity (`SP1Verifier.sol` +
-   `Groth16Verifier.sol`) and add it under `contracts/tron/contracts/verifier/`.
-   Confirm its `ISP1Verifier`/`verifyProof` shape matches `IProofVerifier`.
-2. Hardhat test (`contracts/tron/test/`): deploy the verifier, call
-   `verifyProof(vkey, publicValues, proof)` with the three fields from
-   `bridge-vectors/proof/b1-groth16.json`. **Expect: no revert.**
-3. Negative: flip one byte of `proof` / `publicValues` → expect revert.
+**Result:** done. The SP1 `v6.1.0` Groth16 verifier is vendored under
+`contracts/tron/contracts/verifier/` (from the locally downloaded circuit
+artifacts `~/.sp1/circuits/groth16/v6.1.0/`, byte-for-byte):
+- `verifier/v6.1.0/Groth16Verifier.sol` — gnark-generated `Verifier` (embeds the
+  v6.1.0 vk; pins `pragma solidity 0.8.20`);
+- `verifier/v6.1.0/SP1VerifierGroth16.sol` — the `SP1Verifier` wrapper exposing
+  `verifyProof(bytes32 programVKey, bytes publicValues, bytes proofBytes)` (the
+  exact `IProofVerifier` shape; `VERSION()==v6.1.0`, `VERIFIER_HASH()` begins
+  `0x4388a21c` = the bundle's proof selector);
+- `verifier/ISP1Verifier.sol` — the interface it imports.
 
-When green, the verifier is ready to deploy.
+`hardhat.config.js` now lists both `0.8.24` (bridge contracts) and `0.8.20`
+(verifier subtree, pinned via `overrides`); the two never link (the vault depends
+only on `IProofVerifier`).
+
+`test/verifier.test.js` deploys `SP1Verifier` and calls
+`verifyProof(vkey, publicValues, proofBytes)` with the three fields from
+`bridge-vectors/proof/b1-groth16.json`: **the real B=1 proof verifies**, and a
+flipped proof / publicValues / vkey each revert. Run:
+
+```bash
+cd contracts/tron && npx hardhat test test/verifier.test.js
+```
+
+This `SP1Verifier` contract is the one to deploy in Stage C (`TRON_VERIFIER`).
 
 ## Stage B — mock end-to-end on Nile (M2)
 

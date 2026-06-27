@@ -298,8 +298,12 @@ anchor saves `(B-1)` quorum checks.
 - Real SP1 B=1 Groth16 generation and SDK verification are wired and validated.
   The SP1 release verifier key is present in the downloaded v6.1.0 artifacts.
   Project-owned proof/vkey metadata is now **published**
-  (`bridge-vectors/proof/b1-groth16.json` via `sp1-export`); the on-chain proof
-  smoke against the vault's Solidity SP1 verifier bytecode is still open.
+  (`bridge-vectors/proof/b1-groth16.json` via `sp1-export`) **and verified against
+  the real SP1 v6.1.0 Groth16 verifier bytecode** (vendored under
+  `contracts/tron/contracts/verifier/`; `test/verifier.test.js` confirms the
+  published B=1 proof verifies and tampered proof/publicValues/vkey revert). The
+  on-chain *settlement* smoke (deploy + `fulfillBatch` on Nile) is still open —
+  see `04-deployment.md`.
 - B>1 batching is validated in **execute mode** for B=2 (`b2_guest.rs`), both
   per-anchor and **shared-anchor** (`build_b2_shared_anchor_fixture` +
   `multi_leaf_paths`), and as a published JSON conformance vector
@@ -315,13 +319,16 @@ anchor saves `(B-1)` quorum checks.
 
 ## Suggested Next Work
 
-1. **(done — metadata half)** SP1 v6.1.0 verifier/proof metadata is persisted as
-   `bridge-vectors/proof/b1-groth16.json`. **Still open:** verify this exact
-   `(programVKey, publicValues, proofBytes)` bundle against the same Solidity
-   `SP1Verifier`/`Groth16Verifier` bytecode the vault uses (needs the `01` track's
-   verifier deployment; the v6.1.0 verifier address/bytecode pin must match this
-   bundle's `vkey` + circuit version).
-2. Complete the on-chain proof smoke (`01` M3).
+1. **(done)** SP1 v6.1.0 verifier/proof metadata persisted
+   (`bridge-vectors/proof/b1-groth16.json`) **and** verified against the real
+   `SP1Verifier`/`Groth16Verifier` bytecode the vault calls — vendored under
+   `contracts/tron/contracts/verifier/`, `test/verifier.test.js` green (the B=1
+   bundle verifies; tampered proof/publicValues/vkey revert). Stage A of
+   `04-deployment.md`.
+2. Complete the on-chain *settlement* smoke (`01` M3): deploy the vendored
+   `SP1Verifier` + vault on Nile and run `fulfillBatch` with the real proof
+   (`04-deployment.md` Stages B/C). Needs the frozen real `BridgeConfig` (#3) and
+   a real burn (#4).
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`). **Still open:**
    the live witness *fetch* (decode burned blobs, choose anchor root `R*`, pull
