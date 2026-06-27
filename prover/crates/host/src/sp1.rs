@@ -65,6 +65,54 @@ pub fn mock_groth16(
     Ok(proof_info(&proof))
 }
 
+/// Real CPU Groth16 proof. The complete STARK → recursion → shrink → wrap →
+/// BN254 Groth16 pipeline runs natively on local CPU. In release circuit mode,
+/// SP1 downloads its pre-generated circuit and proving key on first use; no
+/// Docker, prover network, GPU, or local Groth16 setup is required.
+/// Otherwise identical to {mock_groth16}: it sets up the program key, proves in
+/// `groth16` mode, verifies the proof against the program vkey, checks the
+/// committed public values equal the guest precheck, and saves.
+pub fn real_groth16(
+    elf_path: &Path,
+    wire_input: Vec<u8>,
+    proof_path: &Path,
+) -> Result<Sp1ProofInfo> {
+    ensure_release_circuit_mode()?;
+    // Install SP1's tracing subscriber so RUST_LOG stage logs (and any OOM/abort
+    // reason) are visible — the host otherwise initializes no subscriber.
+    sp1_sdk::utils::setup_logger();
+    let elf = load_elf(elf_path)?;
+    let expected = expected_output(&wire_input)?;
+    let client = ProverClient::builder().cpu().build();
+    let pk = client
+        .setup(elf)
+        .map_err(|err| HostError::Check(format!("SP1 setup failed: {err}")))?;
+    let proof = client
+        .prove(&pk, stdin(wire_input))
+        .groth16()
+        .run()
+        .map_err(|err| HostError::Check(format!("SP1 groth16 prove failed: {err:?}")))?;
+    client
+        .verify(&proof, pk.verifying_key(), None)
+        .map_err(|err| HostError::Check(format!("SP1 groth16 proof verify failed: {err}")))?;
+    let actual = proof.public_values.to_vec();
+    ensure_public_values_match(&actual, &expected)?;
+    proof
+        .save(proof_path)
+        .map_err(|err| HostError::Check(format!("save SP1 proof: {err}")))?;
+    Ok(proof_info(&proof))
+}
+
+fn ensure_release_circuit_mode() -> Result<()> {
+    if std::env::var("SP1_CIRCUIT_MODE").as_deref() == Ok("dev") {
+        return Err(HostError::Check(
+            "SP1_CIRCUIT_MODE=dev would use a private artifact bucket and fall back to local Groth16 key generation; unset it or set SP1_CIRCUIT_MODE=release"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn proof_info_from_file(proof_path: &Path) -> Result<Sp1ProofInfo> {
     let proof = SP1ProofWithPublicValues::load(proof_path)
         .map_err(|err| HostError::Check(format!("load SP1 proof: {err}")))?;

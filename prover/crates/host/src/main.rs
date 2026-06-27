@@ -76,6 +76,12 @@ fn main() {
             let proof = args.next().map(PathBuf::from);
             sp1_mock_groth16(elf, wire, proof)
         }
+        "sp1-groth16" => {
+            let elf = args.next().map(PathBuf::from);
+            let wire = args.next();
+            let proof = args.next().map(PathBuf::from);
+            sp1_real_groth16(elf, wire, proof)
+        }
         "sp1-proof-info" => {
             let proof = args.next().map(PathBuf::from);
             sp1_proof_info(proof)
@@ -101,6 +107,7 @@ fn usage() {
     eprintln!("       bridge-return-host emit-b2-wire-input");
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");
+    eprintln!("       bridge-return-host sp1-groth16 <guest.elf> <wire_hex> <proof.bin>      # --features sp1 (real CPU prove)");
     eprintln!("       bridge-return-host sp1-proof-info <proof.bin>                         # --features sp1");
 }
 
@@ -155,6 +162,31 @@ fn sp1_mock_groth16(
 
 #[cfg(not(feature = "sp1"))]
 fn sp1_mock_groth16(
+    _elf: Option<PathBuf>,
+    _wire: Option<String>,
+    _proof: Option<PathBuf>,
+) -> bridge_return_host::Result<()> {
+    Err(bridge_return_host::HostError::Check(
+        "rebuild bridge-return-host with --features sp1".to_string(),
+    ))
+}
+
+#[cfg(feature = "sp1")]
+fn sp1_real_groth16(
+    elf: Option<PathBuf>,
+    wire: Option<String>,
+    proof: Option<PathBuf>,
+) -> bridge_return_host::Result<()> {
+    let elf = require_arg(elf, "guest.elf")?;
+    let wire = decode_hex_arg(require_arg(wire, "wire_hex")?, "wire_hex")?;
+    let proof = require_arg(proof, "proof.bin")?;
+    let info = bridge_return_host::sp1::real_groth16(&elf, wire, &proof)?;
+    print_proof_info(&info);
+    Ok(())
+}
+
+#[cfg(not(feature = "sp1"))]
+fn sp1_real_groth16(
     _elf: Option<PathBuf>,
     _wire: Option<String>,
     _proof: Option<PathBuf>,
