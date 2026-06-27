@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 pub mod fixture;
+pub mod s1;
 #[cfg(feature = "sp1")]
 pub mod sp1;
 

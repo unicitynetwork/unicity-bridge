@@ -98,6 +98,20 @@ extensions live in `prover/crates/sdk-ext`.
   token vector; its output currently matches `bridge-vectors/token/token-01.json`.
 - `bridge-return-host emit-b2-token-vector` prints the generated B=2 multi-burn
   token vector; its output currently matches `bridge-vectors/token/token-02.json`.
+- Added the **S1 witness package + host precheck** (`crates/host/src/s1.rs`,
+  ZK_BACK3 §10.1):
+  - `WitnessPackage` wraps the `GuestInput` S1 hands to the prover (S3);
+  - `WitnessPackage::precheck` mirrors the guest by running the exact entry
+    points (`execute_public_output` + `execute_wire`), confirms the committed
+    public values equal the computed ones, and round-trips the wire encoding to
+    catch encode/decode drift before the expensive prove — no SP1 dependency, so
+    it runs under plain `cargo test`;
+  - `PrecheckReport` returns the public values, ABI bytes, digest, batch size,
+    total amount, and the exact wire payload for the prover;
+  - `s1::precheck_wire(bytes)` is the standalone gate over a raw wire payload.
+  - `bridge-return-host precheck-wire <wire_hex>` exposes it on the CLI.
+  - `crates/host/tests/s1_precheck.rs` covers B=1/split/B=2 accept and tampered
+    public-values / truncated-wire reject.
 - Token vectors now include `in.guest_wire_input`, the exact wire payload consumed
   by the SP1 guest binary. `check-vectors` executes both the decoded JSON relation
   input and the raw wire input.
@@ -152,6 +166,8 @@ cargo run -p bridge-return-host -- emit-split-token-vector
 cargo run -p bridge-return-host -- emit-b2-token-vector
 cargo run -p bridge-return-host -- emit-b1-wire-input
 cargo run -p bridge-return-host -- emit-split-wire-input
+cargo run -p bridge-return-host -- emit-b2-wire-input
+cargo run -p bridge-return-host -- precheck-wire "$(cargo run -q -p bridge-return-host -- emit-b2-wire-input)"
 cargo check -p bridge-return-host --example cross_check_live
 cargo check -p bridge-return-guest --features sp1 --bin bridge-return-sp1-guest
 cargo check -p bridge-return-host --features sp1
@@ -272,8 +288,11 @@ execute mode.
    verifier deployment; the v6.1.0 verifier address/bytecode pin must match this
    bundle's `vkey` + circuit version).
 2. Complete the on-chain proof smoke (`01` M3).
-3. Add S1 host witness package structs and a precheck path that mirrors
-   `GuestInput`.
+3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
+   (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`). **Still open:**
+   the live witness *fetch* (decode burned blobs, choose anchor root `R*`, pull
+   anchored inclusion proofs over the aggregator `http` API) that populates a
+   `WitnessPackage` from chain/aggregator data.
 4. **(done)** B>1 JSON token vector (`token/token-02.json`, multi-burn schema)
    emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
    and the `vectors.rs` test covers it. (The B=2 execute path was already covered

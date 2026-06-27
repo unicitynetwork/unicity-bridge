@@ -74,6 +74,10 @@ fn main() {
             );
             Ok(())
         }
+        "precheck-wire" => {
+            let wire = args.next();
+            precheck_wire(wire)
+        }
         "sp1-execute" => {
             let elf = args.next().map(PathBuf::from);
             let wire = args.next();
@@ -125,12 +129,32 @@ fn usage() {
     eprintln!("       bridge-return-host emit-split-wire-input");
     eprintln!("       bridge-return-host emit-b2-token-vector");
     eprintln!("       bridge-return-host emit-b2-wire-input");
+    eprintln!("       bridge-return-host precheck-wire <wire_hex>                            # S1 host precheck, no SP1");
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");
     eprintln!("       bridge-return-host sp1-groth16 <guest.elf> <wire_hex> <proof.bin>      # --features sp1 (real CPU prove)");
     eprintln!("       bridge-return-host sp1-vkey <guest.elf>                                # --features sp1");
     eprintln!("       bridge-return-host sp1-export <guest.elf> <proof.bin> <bundle.json>    # --features sp1");
     eprintln!("       bridge-return-host sp1-proof-info <proof.bin>                         # --features sp1");
+}
+
+fn precheck_wire(wire: Option<String>) -> bridge_return_host::Result<()> {
+    let wire =
+        wire.ok_or_else(|| bridge_return_host::HostError::Check("missing wire_hex".to_string()))?;
+    let bytes = hex::decode(wire.strip_prefix("0x").unwrap_or(&wire))?;
+    let report = bridge_return_host::s1::precheck_wire(&bytes)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "batch_size": report.batch_size,
+            "total_amount": format!("0x{}", hex::encode(report.total_amount)),
+            "public_values_abi": format!("0x{}", hex::encode(&report.public_values_abi)),
+            "public_values_digest": format!("0x{}", hex::encode(report.public_values_digest)),
+            "wire_input_len": report.wire_input.len(),
+        }))
+        .expect("serialize precheck report")
+    );
+    Ok(())
 }
 
 #[cfg(feature = "sp1")]
