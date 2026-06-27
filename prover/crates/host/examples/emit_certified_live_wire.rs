@@ -34,7 +34,8 @@ fn main() {
         .nth(2)
         .unwrap_or_else(|| "../bft-trustbase.testnet2.json".to_string());
     let json: Value = serde_json::from_str(&fs::read_to_string(blob).expect("blob")).unwrap();
-    let trust_base = RootTrustBase::from_json(&fs::read_to_string(tb).expect("trust base")).unwrap();
+    let trust_base =
+        RootTrustBase::from_json(&fs::read_to_string(tb).expect("trust base")).unwrap();
 
     let pc = &json["proverConfig"];
     let config = BridgeConfig {
@@ -58,8 +59,13 @@ fn main() {
     };
     let token = Token::from_cbor(&unhex(json["burnedTokenCbor"].as_str().unwrap())).unwrap();
 
-    let input =
-        build_certified_guest_input(config, token, trust_base, TRON_USDT_LOCK_JUSTIFICATION_TAG, leaf)
-            .expect("build certified guest input");
+    let input = build_certified_guest_input(
+        config,
+        token,
+        trust_base,
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+        leaf,
+    )
+    .expect("build certified guest input");
     println!("0x{}", hex::encode(wire::encode_guest_input(&input)));
 }
