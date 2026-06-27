@@ -335,6 +335,239 @@ pub fn build_b2_direct_bridge_fixture() -> GuestInput {
     }
 }
 
+/// A B=2 batch in which **both tokens' transitions share one anchor `UC*`**
+/// (the §11 one-quorum-check shape), instead of a separate 2-leaf tree and
+/// anchor per token. All four transitions (each token's mint + burn) are leaves
+/// of a single sparse Merkle tree; one `UC*` signs its root and every transition
+/// proves inclusion against that shared root. The public values are identical to
+/// [`build_b2_direct_bridge_fixture`] — only the anchoring shape differs.
+pub fn build_b2_shared_anchor_fixture() -> GuestInput {
+    let config = core_config();
+    let node = signer(0x11);
+    let trust_base = trust_base(&node);
+
+    let reason0 = BridgeBackReason {
+        version: 1,
+        recipient: [0xB2; 20],
+        amount: bridge_return_core::u256_from_u64(1_000_000),
+        fee_recipient: [0xC3; 20],
+        fee_amount: bridge_return_core::u256_from_u64(1_000),
+        deadline: 1_900_000_000,
+    };
+    let reason1 = BridgeBackReason {
+        version: 1,
+        recipient: [0xD4; 20],
+        amount: bridge_return_core::u256_from_u64(600_000),
+        fee_recipient: [0u8; 20],
+        fee_amount: [0u8; 32],
+        deadline: 0,
+    };
+    let owner0 = signer(0x22);
+    let owner1 = signer(0x23);
+
+    // Two independent tokens; matches build_b2_direct_bridge_fixture's inputs so
+    // the public values come out identical.
+    let mint0 = bridge_mint_with_salt(&config, &owner0, 1_000_000, 7, [0x42; 32]);
+    let burn0 = bridge_burn(&mint0, reason_cbor(&config, &reason0));
+    let mint1 = bridge_mint_with_salt(&config, &owner1, 600_000, 9, [0x43; 32]);
+    let burn1 = bridge_burn(&mint1, reason_cbor(&config, &reason1));
+
+    let mint0_sid =
+        unicity_token::api::StateId::derive(mint0.lock_script(), mint0.source_state_hash());
+    let burn0_sid =
+        unicity_token::api::StateId::derive(burn0.lock_script(), burn0.source_state_hash());
+    let mint1_sid =
+        unicity_token::api::StateId::derive(mint1.lock_script(), mint1.source_state_hash());
+    let burn1_sid =
+        unicity_token::api::StateId::derive(burn1.lock_script(), burn1.source_state_hash());
+
+    // One SMT over all four transitions -> one shared root h*, one anchor UC*.
+    let (root, paths) = multi_leaf_paths(&[
+        (*mint0_sid.bytes(), mint0.calculate_transaction_hash()),
+        (*burn0_sid.bytes(), burn0.calculate_transaction_hash()),
+        (*mint1_sid.bytes(), mint1.calculate_transaction_hash()),
+        (*burn1_sid.bytes(), burn1.calculate_transaction_hash()),
+    ]);
+    let anchor = signed_uc(&node, root);
+
+    let minter0 = Minter::signer(mint0.token_id()).unwrap();
+    let token0 = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint0.clone(),
+            proof(&mint0, &minter0, paths[0].clone(), anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn0.clone(),
+            proof(&burn0, &owner0, paths[1].clone(), anchor.clone()),
+        )],
+    );
+    let minter1 = Minter::signer(mint1.token_id()).unwrap();
+    let token1 = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint1.clone(),
+            proof(&mint1, &minter1, paths[2].clone(), anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn1.clone(),
+            proof(&burn1, &owner1, paths[3].clone(), anchor.clone()),
+        )],
+    );
+
+    let (leaf0, ref0) = leaf_and_lock_ref(&config, &token0, burn0_sid.bytes(), &burn0, &reason0);
+    let (leaf1, ref1) = leaf_and_lock_ref(&config, &token1, burn1_sid.bytes(), &burn1, &reason1);
+
+    let leaves = vec![leaf0, leaf1];
+    let tree = NullifierTree::new();
+    let (accumulator_witnesses, spent_root_new) =
+        ordered_insert_witnesses(&tree, &[leaves[0].nullifier, leaves[1].nullifier]).unwrap();
+    let lock_refs = vec![ref0, ref1]; // sorted by nonce (7, 9)
+
+    let cfg_hash = config_hash(&config);
+    let public_values = PublicValues {
+        domain_tag: domain_tag(),
+        config_hash: cfg_hash,
+        trust_base_hash: canonical_hash(&trust_base),
+        spent_root_old: tree.root(),
+        spent_root_new,
+        return_root: return_root(&leaves),
+        lock_ref_root: lock_ref_root(&lock_refs).unwrap(),
+        batch_size: 2,
+        total_amount: sum_amounts(&leaves),
+    };
+
+    GuestInput {
+        config,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs: lock_refs,
+        witness: RelationWitness {
+            accumulator_witnesses,
+            // Both burns reference the *same* anchor UC*.
+            bridge_burns: vec![
+                BridgeBurnWitness {
+                    token: token0,
+                    trust_base: trust_base.clone(),
+                    anchor_certificate: anchor.clone(),
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+                BridgeBurnWitness {
+                    token: token1,
+                    trust_base,
+                    anchor_certificate: anchor,
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+            ],
+        },
+    }
+}
+
+/// Derive the settlement `ReturnLeaf` and source `SourceLockRef` for one burned
+/// token — anchor-independent, so per-anchor and shared-anchor batches agree.
+fn leaf_and_lock_ref(
+    config: &BridgeConfig,
+    token: &unicity_token::transaction::Token,
+    burn_state_id: &[u8; 32],
+    burn: &TransferTransaction,
+    reason: &BridgeBackReason,
+) -> (ReturnLeaf, SourceLockRef) {
+    let cfg_hash = config_hash(config);
+    let burn_tx_hash: [u8; 32] = burn.calculate_transaction_hash().data().try_into().unwrap();
+    let burn_id = burn_transition_id(burn_state_id, &burn_tx_hash);
+    let leaf = ReturnLeaf {
+        nullifier: nullifier(&cfg_hash, &burn_id),
+        recipient: reason.recipient,
+        amount: reason.amount,
+        fee_recipient: reason.fee_recipient,
+        fee_amount: reason.fee_amount,
+        deadline: reason.deadline,
+    };
+    let obligation = bridge_lock_obligation(
+        token.genesis(),
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+        &sdk_config(config),
+        PaymentAssetCollection::from_cbor_bytes,
+    )
+    .unwrap();
+    let lock_ref = SourceLockRef {
+        nonce: obligation.nonce,
+        digest: obligation.digest,
+    };
+    (leaf, lock_ref)
+}
+
+/// Build one sparse Merkle tree over many `(state_id, tx_hash)` leaves and return
+/// the shared root plus a per-leaf `InclusionCertificate` that folds to it. This
+/// is the multi-leaf generalization of [`one_sibling_path`]: it lets every
+/// transition in a batch share a single anchor `UC*`, instead of one 2-leaf tree
+/// (and one anchor) per token. Leaf/branch hashing matches the SDK's
+/// `InclusionCertificate::verify` convention (LSB-first key bits; depth 255 is
+/// nearest the leaf, depth 0 nearest the root).
+fn multi_leaf_paths(leaves: &[([u8; 32], DataHash)]) -> ([u8; 32], Vec<InclusionCertificate>) {
+    let entries: Vec<([u8; 32], [u8; 32])> = leaves
+        .iter()
+        .map(|(state_id, tx_hash)| (*state_id, leaf_hash(state_id, tx_hash)))
+        .collect();
+    // Per-leaf (bitmap, siblings) accumulators.
+    let mut paths: Vec<([u8; 32], Vec<[u8; 32]>)> = (0..entries.len())
+        .map(|_| ([0u8; 32], Vec::new()))
+        .collect();
+    let indices: Vec<usize> = (0..entries.len()).collect();
+    let root = build_subtree(&indices, &entries, 0, &mut paths);
+    let certs = paths
+        .into_iter()
+        .map(|(bitmap, mut siblings)| {
+            // build_subtree pushes deepest-first; verify consumes root-first.
+            siblings.reverse();
+            let mut raw = bitmap.to_vec();
+            for sibling in &siblings {
+                raw.extend_from_slice(sibling);
+            }
+            InclusionCertificate::decode(&raw).unwrap()
+        })
+        .collect();
+    (root, certs)
+}
+
+fn build_subtree(
+    indices: &[usize],
+    entries: &[([u8; 32], [u8; 32])],
+    depth: usize,
+    paths: &mut [([u8; 32], Vec<[u8; 32]>)],
+) -> [u8; 32] {
+    if indices.len() == 1 {
+        return entries[indices[0]].1;
+    }
+    // Descend (compressing single-child levels) until the keys split.
+    let mut d = depth;
+    let (zeros, ones) = loop {
+        let mut zeros = Vec::new();
+        let mut ones = Vec::new();
+        for &i in indices {
+            if bit_at(&entries[i].0, d) {
+                ones.push(i);
+            } else {
+                zeros.push(i);
+            }
+        }
+        if !zeros.is_empty() && !ones.is_empty() {
+            break (zeros, ones);
+        }
+        d += 1;
+        assert!(d <= 255, "duplicate SMT keys");
+    };
+    let zero_hash = build_subtree(&zeros, entries, d + 1, paths);
+    let one_hash = build_subtree(&ones, entries, d + 1, paths);
+    for &i in &zeros {
+        paths[i].0[d / 8] |= 1 << (d % 8);
+        paths[i].1.push(one_hash);
+    }
+    for &i in &ones {
+        paths[i].0[d / 8] |= 1 << (d % 8);
+        paths[i].1.push(zero_hash);
+    }
+    node_hash(d as u8, &zero_hash, &one_hash)
+}
+
 pub fn build_split_bridge_fixture() -> SplitFixture {
     let config = core_config();
     let source_amount = 1_000_000;

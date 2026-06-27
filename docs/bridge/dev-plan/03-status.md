@@ -70,11 +70,21 @@ extensions live in `prover/crates/sdk-ext`.
 - Added a **B=2 batch** fixture (`build_b2_direct_bridge_fixture`): two independent
   direct bridge-lock tokens burned to distinct `BridgeBackReason`s, sharing one
   trust base, with one ordered accumulator transition over both nullifiers and two
-  source lock refs sorted by nonce (per-burn anchors; the single shared-`UC*`
-  cycle optimization is still open and needs a multi-leaf anchor builder).
-- Added `prover/crates/host/tests/b2_guest.rs`: executes the B=2 batch and asserts
-  the order-coupled invariants (swapped accumulator witnesses, unsorted lock refs,
-  wrong batch size, swapped leaves, dropped burn witness all reject). M4 relation
+  source lock refs sorted by nonce. This variant uses **per-burn anchors** (one
+  2-leaf tree + one `UC*` per token).
+- Added a **shared-anchor B=2** fixture (`build_b2_shared_anchor_fixture`) +
+  multi-leaf inclusion-path builder (`multi_leaf_paths`): all four transitions
+  (each token's mint + burn) are leaves of a **single** sparse Merkle tree, so
+  one shared `UC*` anchors the whole batch (the §11 one-quorum-check shape). The
+  builder matches the SDK `InclusionCertificate::verify` convention (LSB-first
+  key bits; depth 255 nearest the leaf, depth 0 nearest the root). The committed
+  public values are byte-identical to the per-anchor B=2 fixture — only the
+  anchoring shape differs.
+- Added `prover/crates/host/tests/b2_guest.rs`: executes both B=2 variants and
+  asserts the order-coupled invariants (swapped accumulator witnesses, unsorted
+  lock refs, wrong batch size, swapped leaves, dropped burn witness all reject),
+  plus that the shared-anchor batch carries one byte-identical `UC*` (vs two
+  distinct anchors per-burn) and yields the same public values. M4 relation
   validated in execute mode.
 - Added `bridge-vectors/accumulator/accumulator-00.json`.
 - Added `bridge-vectors/token/token-00.json`, the M2 B=1 direct bridge-lock
@@ -271,11 +281,14 @@ execute mode.
   Project-owned proof/vkey metadata is now **published**
   (`bridge-vectors/proof/b1-groth16.json` via `sp1-export`); the on-chain proof
   smoke against the vault's Solidity SP1 verifier bytecode is still open.
-- B>1 batching is validated in **execute mode** for B=2 (`b2_guest.rs`), and now
-  also as a published JSON conformance vector (`token/token-02.json`, multi-burn
-  schema) consumed by `check-vectors` and the `vectors.rs` integration test.
-  Still open: a single shared `UC*` across burns (multi-leaf anchor builder) and
-  any SP1 proof at B>1.
+- B>1 batching is validated in **execute mode** for B=2 (`b2_guest.rs`), both
+  per-anchor and **shared-anchor** (`build_b2_shared_anchor_fixture` +
+  `multi_leaf_paths`), and as a published JSON conformance vector
+  (`token/token-02.json`, multi-burn schema) consumed by `check-vectors` and the
+  `vectors.rs` integration test. Still open: a guest-side **one-quorum dedup**
+  (the relation still verifies the shared `UC*` once per burn rather than once
+  per distinct anchor — hoisting the anchor/trust-base to the batch level in the
+  witness model realizes the full §11 cost saving), and any SP1 proof at B>1.
 - The B=1 fixture uses synthetic local certificates and keys suitable for
   deterministic execute-mode conformance, not live aggregator data.
 
@@ -297,8 +310,12 @@ execute mode.
    emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
    and the `vectors.rs` test covers it. (The B=2 execute path was already covered
    by `b2_guest.rs`.)
-5. Add a single shared-`UC*` anchor across burns (multi-leaf inclusion-path
-   builder) to realize the §11 one-quorum-check batching optimization.
+5. **(done — builder + fixture)** Single shared-`UC*` anchor across burns via the
+   multi-leaf inclusion-path builder (`multi_leaf_paths`,
+   `build_b2_shared_anchor_fixture`, `b2_guest.rs`). **Still open:** the guest-side
+   one-quorum dedup — hoist the shared anchor/trust-base to the batch level in the
+   witness model so the relation runs one BFT-quorum check per distinct anchor
+   instead of one per burn, realizing the full §11 cost saving.
 
 ## Dirty Workspace Notes
 
