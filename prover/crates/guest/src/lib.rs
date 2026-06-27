@@ -19,9 +19,10 @@ use bridge_return_core::{
 };
 use bridge_return_sdk_ext::accumulator::{insert as accumulator_insert, NonMembershipWitness};
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligations_for_token_anchored, BridgeConfig as SdkBridgeConfig,
+    bridge_lock_obligations_for_token_against_root, BridgeConfig as SdkBridgeConfig,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
+use bridge_return_sdk_ext::verify::verify_anchor_certificate;
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
 use unicity_token::api::StateId;
 use unicity_token::cbor::Decoder;
@@ -117,14 +118,30 @@ fn validate_bridge_burns(
     let sdk_config = sdk_bridge_config(config);
     let cfg_hash = config_hash(config);
     let mut obligations = Vec::with_capacity(burns.len());
+    // One BFT-quorum check per *distinct* anchor `UC*` (ZK_BACK3 §11): burns that
+    // share a byte-identical anchor reuse the verified root, so a batch under one
+    // shared anchor pays a single quorum verification instead of one per burn.
+    let mut anchor_roots: Vec<(&UnicityCertificate, [u8; 32])> = Vec::new();
     for (burn, leaf) in burns.iter().zip(leaves) {
         if canonical_hash(&burn.trust_base) != trust_base_hash {
             return Err(BridgeCoreError::WrongTrustBaseHash);
         }
-        let burn_obligations = bridge_lock_obligations_for_token_anchored(
+        let anchor_root = match anchor_roots
+            .iter()
+            .find(|(anchor, _)| **anchor == burn.anchor_certificate)
+        {
+            Some((_, root)) => *root,
+            None => {
+                let root = verify_anchor_certificate(&burn.trust_base, &burn.anchor_certificate)
+                    .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
+                anchor_roots.push((&burn.anchor_certificate, root));
+                root
+            }
+        };
+        let burn_obligations = bridge_lock_obligations_for_token_against_root(
             &burn.token,
             &burn.trust_base,
-            &burn.anchor_certificate,
+            &anchor_root,
             burn.lock_justification_tag,
             &sdk_config,
             PaymentAssetCollection::from_cbor_bytes,

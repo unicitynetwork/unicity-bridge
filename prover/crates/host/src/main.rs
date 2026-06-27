@@ -74,6 +74,14 @@ fn main() {
             );
             Ok(())
         }
+        "emit-b2-shared-wire-input" => {
+            let input = bridge_return_host::fixture::build_b2_shared_anchor_fixture();
+            println!(
+                "0x{}",
+                hex::encode(bridge_return_guest::wire::encode_guest_input(&input))
+            );
+            Ok(())
+        }
         "precheck-wire" => {
             let wire = args.next();
             precheck_wire(wire)
@@ -129,6 +137,7 @@ fn usage() {
     eprintln!("       bridge-return-host emit-split-wire-input");
     eprintln!("       bridge-return-host emit-b2-token-vector");
     eprintln!("       bridge-return-host emit-b2-wire-input");
+    eprintln!("       bridge-return-host emit-b2-shared-wire-input");
     eprintln!("       bridge-return-host precheck-wire <wire_hex>                            # S1 host precheck, no SP1");
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");

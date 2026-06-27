@@ -15,7 +15,7 @@ use unicity_token::rsmst::encode_amount;
 use unicity_token::transaction::Token;
 use unicity_token::transaction::{CertifiedMintTransaction, Transaction};
 
-use crate::verify::{verify_token_anchored, verify_token_certified};
+use crate::verify::{verify_token_against_root, verify_token_anchored, verify_token_certified};
 use crate::{BridgeExtError, Result};
 
 const DOMAIN_LOCK: &str = "unicity-bridge-lock:v1";
@@ -153,6 +153,29 @@ pub fn bridge_lock_obligations_for_token_anchored(
     decode_payment_data: PaymentDataDecoder,
 ) -> Result<Vec<BridgeLockObligation>> {
     verify_token_anchored(token, trust_base, anchor_certificate)?;
+    bridge_lock_obligations_for_verified_token(
+        token,
+        trust_base,
+        bridge_justification_tag,
+        config,
+        decode_payment_data,
+    )
+}
+
+/// Like [`bridge_lock_obligations_for_token_anchored`], but against an
+/// **already-verified** anchor root. The caller runs one
+/// [`verify_anchor_certificate`](crate::verify::verify_anchor_certificate) per
+/// distinct anchor and reuses the root here, so a batch sharing one `UC*` pays a
+/// single BFT-quorum check (the §11 one-quorum-check shape).
+pub fn bridge_lock_obligations_for_token_against_root(
+    token: &Token,
+    trust_base: &RootTrustBase,
+    anchor_root: &[u8; 32],
+    bridge_justification_tag: u64,
+    config: &BridgeConfig,
+    decode_payment_data: PaymentDataDecoder,
+) -> Result<Vec<BridgeLockObligation>> {
+    verify_token_against_root(token, trust_base, anchor_root)?;
     bridge_lock_obligations_for_verified_token(
         token,
         trust_base,

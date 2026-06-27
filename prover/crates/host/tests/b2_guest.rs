@@ -90,6 +90,31 @@ fn b2_shared_anchor_uses_one_anchor() {
 }
 
 #[test]
+fn b2_shared_anchor_rejects_unsigned_anchor() {
+    // The dedup amortizes the quorum check to one per distinct anchor — but it
+    // must still *run* it: stripping the seal signatures from the shared anchor
+    // makes the single quorum check fail, so the batch rejects.
+    let mut input = build_b2_shared_anchor_fixture();
+    for burn in &mut input.witness.bridge_burns {
+        burn.anchor_certificate.unicity_seal.signatures.clear();
+    }
+    assert!(execute(&input).is_err());
+}
+
+#[test]
+fn b2_per_anchor_rejects_unsigned_second_anchor() {
+    // Distinct anchors are each verified: unsigning only the second one (which
+    // the dedup never folds into the first) must still be caught.
+    let mut input = build_b2_direct_bridge_fixture();
+    input.witness.bridge_burns[1]
+        .anchor_certificate
+        .unicity_seal
+        .signatures
+        .clear();
+    assert!(execute(&input).is_err());
+}
+
+#[test]
 fn b2_shared_anchor_matches_per_anchor_public_values() {
     // Anchoring shape is a witness detail; the committed public values (the x the
     // vault verifies) are identical to the per-anchor batch.

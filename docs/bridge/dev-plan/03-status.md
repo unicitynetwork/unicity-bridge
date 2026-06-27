@@ -80,12 +80,22 @@ extensions live in `prover/crates/sdk-ext`.
   key bits; depth 255 nearest the leaf, depth 0 nearest the root). The committed
   public values are byte-identical to the per-anchor B=2 fixture — only the
   anchoring shape differs.
+- **Guest-side one-quorum dedup (§11):** `validate_bridge_burns` now verifies
+  each *distinct* anchor `UC*` exactly once — burns sharing a byte-identical
+  anchor reuse the cached verified root — so a shared-anchor batch pays one
+  BFT-quorum (secp256k1) check instead of one per burn. New `sdk-ext` entry
+  points support this without re-running the quorum: `verify_token_against_root`
+  and `bridge_lock_obligations_for_token_against_root` (verify a token in
+  anchored mode against an already-verified root); `verify_token_anchored` is
+  refactored to `verify_anchor_certificate` + `verify_token_against_root`.
 - Added `prover/crates/host/tests/b2_guest.rs`: executes both B=2 variants and
   asserts the order-coupled invariants (swapped accumulator witnesses, unsorted
   lock refs, wrong batch size, swapped leaves, dropped burn witness all reject),
   plus that the shared-anchor batch carries one byte-identical `UC*` (vs two
-  distinct anchors per-burn) and yields the same public values. M4 relation
-  validated in execute mode.
+  distinct anchors per-burn), yields the same public values, and that the dedup
+  still enforces the quorum (unsigned shared anchor rejects; unsigned second
+  anchor in a per-burn batch rejects). M4 relation validated in execute mode.
+- Added `emit-b2-shared-wire-input` (the shared-anchor B=2 wire payload).
 - Added `bridge-vectors/accumulator/accumulator-00.json`.
 - Added `bridge-vectors/token/token-00.json`, the M2 B=1 direct bridge-lock
   execute fixture.
@@ -177,6 +187,7 @@ cargo run -p bridge-return-host -- emit-b2-token-vector
 cargo run -p bridge-return-host -- emit-b1-wire-input
 cargo run -p bridge-return-host -- emit-split-wire-input
 cargo run -p bridge-return-host -- emit-b2-wire-input
+cargo run -p bridge-return-host -- emit-b2-shared-wire-input
 cargo run -p bridge-return-host -- precheck-wire "$(cargo run -q -p bridge-return-host -- emit-b2-wire-input)"
 cargo check -p bridge-return-host --example cross_check_live
 cargo check -p bridge-return-guest --features sp1 --bin bridge-return-sp1-guest
@@ -269,6 +280,14 @@ A `emit-b2-wire-input` command was added; the B=2 batch fixture runs under
 with `public_values == expected`, validating M4 in the zkVM, not just host
 execute mode.
 
+**§11 one-quorum dedup, measured in the zkVM** (`sp1-execute`, B=2, after the
+dedup landed): the per-anchor batch (two distinct `UC*`) runs at **1,800,100
+cycles**; the shared-anchor batch (`emit-b2-shared-wire-input`, one `UC*`) runs
+at **1,678,330 cycles** — a **121,770-cycle (~6.8%) saving**, i.e. exactly one
+secp256k1 BFT-quorum verification avoided. Both commit `public_values ==
+expected`. The saving scales with batch size: a B-burn batch under one shared
+anchor saves `(B-1)` quorum checks.
+
 ## Current Scope Limits
 
 - The split-source path is covered by a deterministic synthetic fixture
@@ -285,10 +304,12 @@ execute mode.
   per-anchor and **shared-anchor** (`build_b2_shared_anchor_fixture` +
   `multi_leaf_paths`), and as a published JSON conformance vector
   (`token/token-02.json`, multi-burn schema) consumed by `check-vectors` and the
-  `vectors.rs` integration test. Still open: a guest-side **one-quorum dedup**
-  (the relation still verifies the shared `UC*` once per burn rather than once
-  per distinct anchor — hoisting the anchor/trust-base to the batch level in the
-  witness model realizes the full §11 cost saving), and any SP1 proof at B>1.
+  `vectors.rs` integration test. The guest-side **one-quorum dedup** (§11) is
+  implemented: the relation verifies each distinct anchor `UC*` once, so a
+  shared-anchor batch pays a single BFT-quorum check (measured below). Still
+  open: an optional witness-model slimming (hoist the shared anchor/trust-base to
+  the batch level so it is carried once instead of per burn — a serialization-size
+  win on top of the quorum-count win), and any SP1 proof at B>1.
 - The B=1 fixture uses synthetic local certificates and keys suitable for
   deterministic execute-mode conformance, not live aggregator data.
 
@@ -310,12 +331,12 @@ execute mode.
    emitted via `emit-b2-token-vector`; `check_token` now consumes a `burns` array
    and the `vectors.rs` test covers it. (The B=2 execute path was already covered
    by `b2_guest.rs`.)
-5. **(done — builder + fixture)** Single shared-`UC*` anchor across burns via the
-   multi-leaf inclusion-path builder (`multi_leaf_paths`,
-   `build_b2_shared_anchor_fixture`, `b2_guest.rs`). **Still open:** the guest-side
-   one-quorum dedup — hoist the shared anchor/trust-base to the batch level in the
-   witness model so the relation runs one BFT-quorum check per distinct anchor
-   instead of one per burn, realizing the full §11 cost saving.
+5. **(done)** Single shared-`UC*` anchor across burns: multi-leaf inclusion-path
+   builder (`multi_leaf_paths`, `build_b2_shared_anchor_fixture`) **and** the
+   guest-side one-quorum dedup (`validate_bridge_burns` verifies each distinct
+   anchor once via `bridge_lock_obligations_for_token_against_root`). zkVM cycle
+   saving measured below. **Still open (optional):** witness-model slimming to
+   carry the shared anchor once instead of per burn (serialization-size win).
 
 ## Dirty Workspace Notes
 

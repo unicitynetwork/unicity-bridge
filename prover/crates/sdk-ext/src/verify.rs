@@ -18,14 +18,27 @@ pub fn verify_token_anchored(
     trust_base: &RootTrustBase,
     anchor_certificate: &UnicityCertificate,
 ) -> Result<()> {
+    let anchor_root = verify_anchor_certificate(trust_base, anchor_certificate)?;
+    verify_token_against_root(token, trust_base, &anchor_root)
+}
+
+/// Verify a token in anchored mode against an **already-verified** anchor root.
+/// Pair this with one [`verify_anchor_certificate`] call to amortize a single
+/// BFT-quorum check across every token sharing the same anchor `UC*` (the §11
+/// one-quorum-check shape): verify the anchor once, then verify each token's
+/// transitions against the cached root without re-running the quorum.
+pub fn verify_token_against_root(
+    token: &Token,
+    trust_base: &RootTrustBase,
+    anchor_root: &[u8; 32],
+) -> Result<()> {
     trust_base
         .validate()
         .map_err(|_| BridgeExtError::InvalidTrustBase)?;
-    let anchor_root = verify_anchor_certificate(trust_base, anchor_certificate)?;
-    verify_genesis_against_root(token, trust_base, &anchor_root)?;
+    verify_genesis_against_root(token, trust_base, anchor_root)?;
     for transfer in token.transactions() {
         verify_inclusion_against_root(
-            &anchor_root,
+            anchor_root,
             transfer.inclusion_proof(),
             transfer.transaction(),
         )
