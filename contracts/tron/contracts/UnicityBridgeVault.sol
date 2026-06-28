@@ -57,6 +57,16 @@ contract UnicityBridgeVault {
     /// @notice The replay accumulator root; advances once per settled batch.
     bytes32 public spentRoot;
 
+    /// @notice Pull-payment mode (set at deploy). When true, {fulfillBatch}
+    ///         credits {owed} instead of transferring, so a single reverting or
+    ///         blocklisted recipient can't brick the whole batch (ZK_BACK3 §9
+    ///         batch-atomicity note). Recipients claim via {withdraw}. Recommended
+    ///         for assets with transfer hooks/blocklists (e.g. USDT); push mode is
+    ///         fine for plain assets and keeps single-tx UX.
+    bool public immutable PULL_PAYMENTS;
+    /// @notice Accrued pull-payment balances (used only when PULL_PAYMENTS).
+    mapping(address => uint256) public owed;
+
     uint256 private _entered;
 
     event Lock(
@@ -82,6 +92,8 @@ contract UnicityBridgeVault {
     );
     event TrustBaseAllowedUpdated(bytes32 indexed trustBaseHash, bool allowed);
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    /// @notice Emitted when an account claims its accrued pull-payment balance.
+    event Withdrawn(address indexed account, uint256 amount);
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "vault: not admin");
@@ -108,7 +120,15 @@ contract UnicityBridgeVault {
     /// @param verifier_ The proof verifier (mock at M2, SP1 Groth16 at M3).
     /// @param vkey      The circuit verification key (placeholder until M3).
     /// @param admin_    Trust-base allow-list manager.
-    constructor(BridgeConfig memory cfg, IProofVerifier verifier_, bytes32 vkey, address admin_) {
+    /// @param pullPayments If true, settle by crediting {owed} (claim via
+    ///                  {withdraw}) instead of pushing transfers — see {PULL_PAYMENTS}.
+    constructor(
+        BridgeConfig memory cfg,
+        IProofVerifier verifier_,
+        bytes32 vkey,
+        address admin_,
+        bool pullPayments
+    ) {
         cfg.vault = address(this);
         require(cfg.asset != address(0), "vault: zero asset");
         require(address(verifier_) != address(0), "vault: zero verifier");
@@ -126,6 +146,7 @@ contract UnicityBridgeVault {
 
         admin = admin_;
         spentRoot = EMPTY_TREE_ROOT;
+        PULL_PAYMENTS = pullPayments;
     }
 
     // ---------------------------------------------------------------------
@@ -219,17 +240,40 @@ contract UnicityBridgeVault {
         spentRoot = pv.spentRootNew;
         emit BatchFulfilled(pv.spentRootOld, pv.spentRootNew, pv.batchSize, pv.totalAmount);
 
-        // 6. settle each leaf; deadline gates the FEE only, principal is always paid
+        // 6. settle each leaf; deadline gates the FEE only, principal is always paid.
+        //    In pull mode we only credit {owed} (no external calls), so a hostile
+        //    recipient can revert at most its own {withdraw}, never the batch.
         for (uint256 i = 0; i < leaves.length; i++) {
             ReturnLeaf calldata l = leaves[i];
             uint256 fee =
                 (l.feeRecipient != address(0) && block.timestamp <= l.deadline) ? l.feeAmount : 0;
-            _safeTransfer(l.recipient, l.amount - fee);
-            if (fee > 0) {
-                _safeTransfer(l.feeRecipient, fee);
+            uint256 principal = l.amount - fee;
+            if (PULL_PAYMENTS) {
+                owed[l.recipient] += principal;
+                if (fee > 0) {
+                    owed[l.feeRecipient] += fee;
+                }
+            } else {
+                _safeTransfer(l.recipient, principal);
+                if (fee > 0) {
+                    _safeTransfer(l.feeRecipient, fee);
+                }
             }
             emit Released(l.nullifier, l.recipient, l.amount, l.feeRecipient, fee, l.deadline);
         }
+    }
+
+    /// @notice Claim the caller's accrued pull-payment balance (PULL_PAYMENTS mode).
+    /// @dev Checks-effects-interactions: zero the balance before the transfer, and
+    ///      nonReentrant for defence in depth. A recipient that can't receive the
+    ///      asset only blocks its own withdrawal — never others' settlements.
+    /// @return amount The amount transferred to the caller.
+    function withdraw() external nonReentrant returns (uint256 amount) {
+        amount = owed[msg.sender];
+        require(amount > 0, "vault: nothing owed");
+        owed[msg.sender] = 0;
+        emit Withdrawn(msg.sender, amount);
+        _safeTransfer(msg.sender, amount);
     }
 
     // ---------------------------------------------------------------------

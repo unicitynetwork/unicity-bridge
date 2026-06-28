@@ -97,6 +97,10 @@ async function deployVault(tronWeb, env, addr, verifierBase58, opts = {}) {
   const chainId = Number(env.TRON_CHAIN_ID || 3448148188);
   const assetBase58 = opts.assetBase58 || env.TRON_USDT;
   const vkey = opts.vkey || VKEY_PLACEHOLDER;
+  // Pull-payment mode: settle by crediting owed[] (recipients withdraw), so a
+  // blocklisted/reverting recipient can't brick the batch (§9). Opt in per deploy
+  // via opts.pullPayments or TRON_PULL_PAYMENTS=1 (recommended for USDT).
+  const pullPayments = (opts.pullPayments ?? env.TRON_PULL_PAYMENTS === "1") === true;
   const assetEvmHex = tronWeb.address.toHex(assetBase58).slice(2).toLowerCase(); // drop 41 prefix
   const ownerHex = tronWeb.address.toHex(addr);
   const cfg = [
@@ -110,13 +114,16 @@ async function deployVault(tronWeb, env, addr, verifierBase58, opts = {}) {
     NULLIFIER_DOMAIN,
   ];
   const vaultArt = artifact("UnicityBridgeVault", "UnicityBridgeVault.sol/UnicityBridgeVault.json");
-  console.log(`(cfg.vault stamped to address(this); asset ${assetBase58}, vkey ${vkey.slice(0, 12)}…)`);
+  console.log(
+    `(cfg.vault stamped to address(this); asset ${assetBase58}, vkey ${vkey.slice(0, 12)}…, ` +
+      `${pullPayments ? "PULL" : "push"}-payment)`,
+  );
   const { base58: vaultBase58, hexAddr } = await deployWithCtor(
     tronWeb,
     ownerHex,
     "UnicityBridgeVault",
     vaultArt,
-    [cfg, toEvm(tronWeb, verifierBase58), vkey, toEvm(tronWeb, addr)],
+    [cfg, toEvm(tronWeb, verifierBase58), vkey, toEvm(tronWeb, addr), pullPayments],
   );
 
   // Poll for the deployed code, then read CONFIG_HASH to confirm the stamp.
@@ -204,7 +211,7 @@ async function main() {
     const asset = process.argv[3];
     // Default = current guest ELF vkey (sp1-vkey target/sp1/bridge-return-sp1-guest);
     // pass argv[4] to override. MUST match the ELF the proof is generated with.
-    const vkey = process.argv[4] || "0x00d57c9253f1ed4e34b7fb3690fe7fae7040084579e6c5b05be5c29a5c2af00e";
+    const vkey = process.argv[4] || "0x002b42fa331ad29852eca758fb92cc64c41b349c2d982242a6b60f94a0ff0fb3";
     if (!env.TRON_VERIFIER_SP1 || !asset)
       throw new Error("usage: real-vault <asset base58>  (needs TRON_VERIFIER_SP1 in .env)");
     await deployVault(tronWeb, env, addr, env.TRON_VERIFIER_SP1, { assetBase58: asset, vkey });

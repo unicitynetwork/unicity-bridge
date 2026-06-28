@@ -80,12 +80,17 @@ vault address, and `CONFIG_HASH = keccak(abi.encode(cfg))` is recomputed on-chai
 The vault constructor:
 
 ```solidity
-constructor(BridgeConfig cfg, IProofVerifier verifier_, bytes32 vkey, address admin_)
+constructor(BridgeConfig cfg, IProofVerifier verifier_, bytes32 vkey, address admin_, bool pullPayments)
 ```
 
 - `verifier_` = `TRON_VERIFIER`
-- `vkey` = the `vkey` from `b1-groth16.json` (`0x004d100af488ce9a36e6e44a71b8dced18aa6a55cf3634151ac7b5609302133f` for the current B=1 circuit; regenerate per circuit version with `sp1-vkey`)
+- `vkey` = the current circuit's `vkey` (`0x002b42fa331ad29852eca758fb92cc64c41b349c2d982242a6b60f94a0ff0fb3` after the SMT-accumulator rework; regenerate per circuit version with `sp1-vkey` — it changes whenever the guest ELF changes)
 - `admin_` = `TRON_ACCOUNT`
+- `pullPayments` = settlement mode (§9 batch atomicity). `false` (default) pushes
+  transfers inline — simplest, but **one reverting/blocklisted recipient bricks the
+  whole batch**. `true` credits `owed[]` and recipients call `withdraw()`, so a bad
+  recipient blocks only itself. **Use `true` for USDT** (blocklist) and any asset
+  with transfer hooks; set via `TRON_PULL_PAYMENTS=1` for `deploy-nile.js`.
 
 `fulfillBatch(publicValues, proof, leaves, lockRefs)` then requires, in order:
 `verifyProof` passes → `domainTag == DOMAIN_TAG` → `configHash == CONFIG_HASH` →

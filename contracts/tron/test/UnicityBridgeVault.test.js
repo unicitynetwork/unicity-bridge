@@ -54,7 +54,11 @@ function encodePV(pv) {
   );
 }
 
-async function deployVault({ assetName = "MockTRC20", verifierName = "MockProofVerifier" } = {}) {
+async function deployVault({
+  assetName = "MockTRC20",
+  verifierName = "MockProofVerifier",
+  pullPayments = false,
+} = {}) {
   const [deployer, admin, alice, bob, feeRcpt] = await ethers.getSigners();
 
   const Asset = await ethers.getContractFactory(assetName);
@@ -85,7 +89,8 @@ async function deployVault({ assetName = "MockTRC20", verifierName = "MockProofV
     cfg,
     await verifier.getAddress(),
     VKEY,
-    admin.address
+    admin.address,
+    pullPayments
   );
   await vault.waitForDeployment();
   expect(await vault.getAddress()).to.equal(predicted);
@@ -161,7 +166,8 @@ describe("UnicityBridgeVault — constructor & lock (bridge-in)", () => {
       { ...cfgBase, vault: deployer.address },
       await verifier.getAddress(),
       VKEY,
-      admin.address
+      admin.address,
+      false
     );
     await vault.waitForDeployment();
 
@@ -462,5 +468,108 @@ describe("UnicityBridgeVault — admin", () => {
       .to.emit(vault, "AdminTransferred")
       .withArgs(admin.address, alice.address);
     expect(await vault.admin()).to.equal(alice.address);
+  });
+});
+
+describe("UnicityBridgeVault — pull-payment mode (§9 batch atomicity)", () => {
+  it("credits owed instead of transferring; recipient claims via withdraw()", async () => {
+    const { vault, asset, alice, bob, feeRcpt } = await deployVault({ pullPayments: true });
+    expect(await vault.PULL_PAYMENTS()).to.equal(true);
+    const nonce = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
+    const digest = await vault.lockDigest(nonce);
+
+    const amount = 400_000n;
+    const fee = 1_000n;
+    const future = 1_900_000_000n;
+    const leaf = [ethers.id("nul-1"), bob.address, amount, feeRcpt.address, fee, future];
+    const { encoded } = await buildBatch(vault, { leaves: [leaf], lockRefs: [[nonce, digest]] });
+
+    // Settlement records the release and advances the root, but pays nothing yet.
+    await expect(vault.fulfillBatch(encoded, "0x", [leaf], [[nonce, digest]]))
+      .to.emit(vault, "Released")
+      .withArgs(ethers.id("nul-1"), bob.address, amount, feeRcpt.address, fee, future);
+    expect(await asset.balanceOf(bob.address)).to.equal(0n);
+    expect(await vault.owed(bob.address)).to.equal(amount - fee);
+    expect(await vault.owed(feeRcpt.address)).to.equal(fee);
+    expect(await vault.spentRoot()).to.equal(NEW_ROOT);
+
+    // Each party pulls independently.
+    await expect(vault.connect(bob).withdraw())
+      .to.emit(vault, "Withdrawn")
+      .withArgs(bob.address, amount - fee);
+    expect(await asset.balanceOf(bob.address)).to.equal(amount - fee);
+    expect(await vault.owed(bob.address)).to.equal(0n);
+
+    await vault.connect(feeRcpt).withdraw();
+    expect(await asset.balanceOf(feeRcpt.address)).to.equal(fee);
+  });
+
+  it("withdraw() reverts when nothing is owed", async () => {
+    const { vault, bob } = await deployVault({ pullPayments: true });
+    await expect(vault.connect(bob).withdraw()).to.be.revertedWith("vault: nothing owed");
+  });
+
+  it("a blocklisted recipient does NOT brick the batch; only its own withdraw fails", async () => {
+    const { vault, asset, alice, bob } = await deployVault({
+      assetName: "MockBlocklistTRC20",
+      pullPayments: true,
+    });
+    const carol = (await ethers.getSigners())[5];
+
+    const n0 = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
+    const d0 = await vault.lockDigest(n0);
+    const n1 = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-2"));
+    const d1 = await vault.lockDigest(n1);
+    await asset.setBlocked(carol.address, true);
+
+    const zero = ethers.ZeroAddress;
+    const good = [ethers.id("nul-good"), bob.address, 400_000n, zero, 0n, 0n];
+    const bad = [ethers.id("nul-bad"), carol.address, 300_000n, zero, 0n, 0n];
+    const leaves = [good, bad];
+    const lockRefs = [[n0, d0], [n1, d1]];
+    const { encoded } = await buildBatch(vault, { leaves, lockRefs });
+
+    // The whole batch settles even though carol can't receive the asset.
+    await vault.fulfillBatch(encoded, "0x", leaves, lockRefs);
+    expect(await vault.spentRoot()).to.equal(NEW_ROOT);
+    expect(await vault.owed(bob.address)).to.equal(400_000n);
+    expect(await vault.owed(carol.address)).to.equal(300_000n);
+
+    // The good recipient is paid; the blocklisted one only blocks itself
+    // (the vault wraps the asset's revert as "vault: transfer failed").
+    await vault.connect(bob).withdraw();
+    expect(await asset.balanceOf(bob.address)).to.equal(400_000n);
+    await expect(vault.connect(carol).withdraw()).to.be.revertedWith("vault: transfer failed");
+    expect(await vault.owed(carol.address)).to.equal(300_000n); // preserved; claimable if unblocked
+  });
+
+  it("PUSH mode (the bug this fixes): one blocklisted recipient bricks the whole batch", async () => {
+    const { vault, asset, alice, bob } = await deployVault({
+      assetName: "MockBlocklistTRC20",
+      pullPayments: false,
+    });
+    const carol = (await ethers.getSigners())[5];
+
+    const n0 = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
+    const d0 = await vault.lockDigest(n0);
+    const n1 = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-2"));
+    const d1 = await vault.lockDigest(n1);
+    await asset.setBlocked(carol.address, true);
+
+    const zero = ethers.ZeroAddress;
+    const good = [ethers.id("nul-good"), bob.address, 400_000n, zero, 0n, 0n];
+    const bad = [ethers.id("nul-bad"), carol.address, 300_000n, zero, 0n, 0n];
+    const leaves = [good, bad];
+    const lockRefs = [[n0, d0], [n1, d1]];
+    const { encoded } = await buildBatch(vault, { leaves, lockRefs });
+
+    // carol's transfer reverts -> the entire batch reverts -> bob is NOT paid and
+    // the root does NOT advance (the burns are stuck). This is the griefing vector
+    // pull mode removes.
+    await expect(vault.fulfillBatch(encoded, "0x", leaves, lockRefs)).to.be.revertedWith(
+      "vault: transfer failed"
+    );
+    expect(await asset.balanceOf(bob.address)).to.equal(0n);
+    expect(await vault.spentRoot()).to.equal(ethers.ZeroHash);
   });
 });

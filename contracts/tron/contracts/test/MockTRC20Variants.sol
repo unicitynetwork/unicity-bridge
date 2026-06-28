@@ -93,3 +93,51 @@ contract MockReentrantTRC20 {
         balanceOf[to] += value;
     }
 }
+
+/// @dev A standard TRC20 with a USDT-style blocklist: `transfer` to a blocked
+///      address reverts. Used to show that one blocklisted recipient bricks a
+///      push-mode batch but only its own withdrawal in pull-payment mode.
+contract MockBlocklistTRC20 {
+    string public name = "Blocklist USDT";
+    string public symbol = "bUSDT";
+    uint8 public decimals = 6;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    mapping(address => bool) public blocked;
+
+    function mint(address to, uint256 value) external {
+        balanceOf[to] += value;
+    }
+
+    function setBlocked(address who, bool isBlocked) external {
+        blocked[who] = isBlocked;
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        return true;
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= value, "blocklist: allowance");
+        if (allowed != type(uint256).max) {
+            allowance[from][msg.sender] = allowed - value;
+        }
+        _transfer(from, to, value);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 value) private {
+        require(!blocked[to], "blocklist: recipient blocked");
+        require(balanceOf[from] >= value, "blocklist: balance");
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
+    }
+}

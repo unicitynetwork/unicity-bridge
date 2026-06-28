@@ -415,6 +415,18 @@ anchor saves `(B-1)` quorum checks.
     compress witnesses). Root hashes changed, so the M3/M4 test vaults' on-chain
     `spentRoot` no longer reproduces — re-deploy throwaway vaults to demo a live
     multi-batch settle.
+- **Batch atomicity / blockable recipients (§9): pull-payment mode added.**
+  Push-mode `fulfillBatch` transfers to each recipient inline, so one reverting or
+  **blocklisted recipient (e.g. USDT) bricks the entire batch** — every other burn
+  in it is stuck permanently (a griefing/liveness vector). Added a deploy flag
+  `PULL_PAYMENTS` (constructor bool; CLI `TRON_PULL_PAYMENTS=1`): settlement
+  credits `owed[recipient]` (no external calls in the batch) and recipients claim
+  via `withdraw()` (CEI + `nonReentrant`). A hostile recipient can then revert at
+  most its **own** withdrawal, never the batch. Hardhat suite (47 passing) proves
+  both: in pull mode a blocklisted recipient settles + the good recipient
+  withdraws; in push mode the same batch reverts (`vault: transfer failed`). New
+  `MockBlocklistTRC20`. Push remains the default (single-tx UX for plain assets);
+  pull is recommended for assets with transfer hooks/blocklists.
 
 ## Suggested Next Work
 
