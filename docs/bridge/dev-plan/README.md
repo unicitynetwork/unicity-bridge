@@ -18,6 +18,7 @@ This README is the map. The detail lives in four sibling documents:
 | [`02-ts-sdk-and-wallet.md`](./02-ts-sdk-and-wallet.md) | Bridge-in justification verifier (plugin), bridge-back burn construction, wallet/sphere integration | TypeScript |
 | [`03-prover-service.md`](./03-prover-service.md) | The zk relation (guest circuit) and the off-chain prover pipeline | Rust + SP1 (zkVM) |
 | [`04-deployment.md`](./04-deployment.md) | Nile testnet deployment runbook (verifier + vault) and the on-chain proof smoke | TronWeb / Hardhat |
+| [`05-cost-analysis.md`](./05-cost-analysis.md) | Tron mainnet tx-fee + proving-fee cost model (grounded in measured energy) | analysis |
 
 ## What the bridge does
 
