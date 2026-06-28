@@ -364,8 +364,26 @@ anchor saves `(B-1)` quorum checks.
   _fixture_b2`, `stage-c-settle-b2.js`. Still open: an optional witness-model
   slimming (carry the shared anchor once instead of per burn), and larger
   B (measure `B_max` / per-burn energy + proving cost).
-- The B=1 fixture uses synthetic local certificates and keys suitable for
-  deterministic execute-mode conformance, not live aggregator data.
+- The B=1/B=2 settlement fixtures use synthetic local certificates and keys
+  (deterministic, tailored to the deployed vault for the on-chain settles).
+- **Real-data proof (live aggregator): done in CERTIFIED mode.** A real Groth16
+  proof of a **real testnet2 token** (the `npm run e2e:back` token, certified by
+  the live Unicity validators — `trust_base_hash 0x72a672…`) was generated
+  (`sp1-groth16`) and **verifies on the deployed Tron `SP1Verifier`** (energy
+  218,165; tamper cases reject). Published as
+  `bridge-vectors/proof/live-testnet2-certified.json`; reproduce with
+  `scripts/verify-onchain.js <bundle>`.
+  - **Anchored mode for a live token is blocked by the aggregator API**
+    (`s1::aggregator::fetch_anchored_token` + `examples/s1_anchored_live.rs`):
+    `get_inclusion_proof.v2` takes only a `stateId` and serves the *current* root
+    (per-transition rounds differ + advance between calls), with no target-root/
+    snapshot param, so a multi-transition live token's proofs can't be pinned to
+    one shared root. Anchored batching of *live* tokens needs an aggregator
+    "inclusion-against-a-specified-root" endpoint; certified mode is the live path
+    until then.
+  - **Still open:** full on-chain *settlement* of a live token (lock+fulfillBatch)
+    needs `e2e:back` reconfigured to a deployed vault (config.vault = A, a real
+    Tron recipient, a standard TRC20) so the live token's config matches.
 
 ## Suggested Next Work
 

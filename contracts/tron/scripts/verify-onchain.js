@@ -26,7 +26,10 @@ async function main() {
   const verifier = env.TRON_VERIFIER_SP1;
   if (!verifier) throw new Error("TRON_VERIFIER_SP1 not set");
   const verifierHex = tw.address.toHex(verifier);
-  const b = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "bridge-vectors/proof/b1-groth16.json"), "utf8"));
+  // Default bundle = the published B=1; pass a path (argv[2]) to verify another.
+  const bundlePath = process.argv[2] || path.join(__dirname, "..", "..", "..", "bridge-vectors/proof/b1-groth16.json");
+  const b = JSON.parse(fs.readFileSync(bundlePath, "utf8"));
+  console.log("bundle:", bundlePath);
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
   async function call(publicValues, proofBytes) {
