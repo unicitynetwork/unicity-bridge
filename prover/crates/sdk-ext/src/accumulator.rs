@@ -1,16 +1,31 @@
-//! Plain radix sparse-Merkle presence accumulator for bridge return nullifiers.
+//! Sparse Merkle presence accumulator (depth-256) for bridge return nullifiers.
+//!
+//! Each present key occupies a leaf at depth 256 and the root is framed from
+//! depth 0 using empty-subtree default hashes, so **every prefix bit is bound**.
+//! This replaces the earlier path-compressed radix tree, whose root was the top
+//! branch node and therefore did not bind the bits above it — a key diverging in
+//! that compressed prefix had no representable non-membership witness (it failed
+//! its own verifier for ~21% of >=2-element trees). A full SMT has a sound,
+//! representable non-membership proof for every key at every tree size.
+//!
+//! Witness shape (unchanged on the wire): `terminal` is always `Empty` (an absent
+//! key's slot is empty) and `steps` carries the sibling hash at every depth from
+//! the terminal up to the root (deepest first), so `td` (the terminal depth) is
+//! `steps[0].depth + 1`, or 0 for the empty tree (no steps). `verify`/`insert`
+//! are stateless: they rebuild the root from the witness alone.
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use unicity_token::crypto::hash::sha256;
 use unicity_token::Error;
 
+/// Sentinel root of the empty accumulator (matches the vault's initial `spentRoot`).
 pub const EMPTY_TREE_ROOT: [u8; 32] = [0u8; 32];
 
 const LEAF_PREFIX: u8 = 0x00;
 const NODE_PREFIX: u8 = 0x01;
 const PRESENCE_VALUE: u8 = 0x01;
+const DEPTH: usize = 256;
 const MAX_STEPS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,37 +77,27 @@ impl NonMembershipWitness {
     }
 }
 
+/// Verify that `key` is absent from the tree committed by `root`.
 pub fn verify_non_member(root: &[u8; 32], key: &[u8; 32], witness: &NonMembershipWitness) -> bool {
-    rebuild_absent_root(key, witness).is_some_and(|rebuilt| rebuilt == *root)
+    let empties = empty_hashes();
+    rebuild_absent_root(key, witness, &empties).is_some_and(|rebuilt| rebuilt == *root)
 }
 
+/// Given a verified non-membership `witness` for `key` against `root`, return the
+/// root after inserting `key`. `None` if the witness does not prove absence.
 pub fn insert(root: &[u8; 32], key: &[u8; 32], witness: &NonMembershipWitness) -> Option<[u8; 32]> {
-    if !verify_non_member(root, key, witness) {
+    let empties = empty_hashes();
+    if rebuild_absent_root(key, witness, &empties)? != *root {
         return None;
     }
-
-    let inserted = leaf_hash(key);
-    let hash = match witness.terminal {
-        NonMembershipTerminal::Empty => inserted,
-        NonMembershipTerminal::Occupied { key: other } => {
-            if other == *key {
-                return None;
-            }
-            let depth = first_differing_bit(key, &other)?;
-            let other_hash = leaf_hash(&other);
-            let first_step_depth = witness.steps.first().map(SmtProofStep::depth);
-            if first_step_depth.is_some_and(|step_depth| step_depth >= depth) {
-                return None;
-            }
-            if bit_at(key, depth as usize) {
-                node_hash(depth, &other_hash, &inserted)
-            } else {
-                node_hash(depth, &inserted, &other_hash)
-            }
-        }
-    };
-
-    fold_steps(key, hash, &witness.steps)
+    if witness.steps.is_empty() {
+        // First insert into the empty tree.
+        return Some(single_key_hash(key, 0, &empties));
+    }
+    // Replace the empty terminal slot with `key` and fold back up the same path.
+    let td = terminal_depth(&witness.steps)?;
+    let terminal = single_key_hash(key, td, &empties);
+    fold_steps(key, terminal, &witness.steps)
 }
 
 #[derive(Default, Debug, Clone)]
@@ -106,12 +111,61 @@ impl NullifierTree {
     }
 
     pub fn root(&self) -> [u8; 32] {
-        build_root(&self.keys)
+        if self.keys.is_empty() {
+            return EMPTY_TREE_ROOT;
+        }
+        subtree_hash(&self.keys, 0, &empty_hashes())
     }
 
+    /// Non-membership witness for `key`; `None` if `key` is already present.
     pub fn non_membership_witness(&self, key: &[u8; 32]) -> Option<NonMembershipWitness> {
-        let root = build_node(&self.keys, 0)?;
-        Some(root.non_membership_witness(key))
+        if self.keys.iter().any(|existing| existing == key) {
+            return None;
+        }
+        let empties = empty_hashes();
+        let mut steps = Vec::new();
+        let mut current: Vec<[u8; 32]> = self.keys.clone();
+        let mut depth = 0usize;
+        loop {
+            if current.is_empty() {
+                break; // key's slot is empty at `depth`
+            }
+            if current.len() == 1 {
+                let other = current[0];
+                let f = first_differing_bit(key, &other)?; // >= depth, exists since absent
+                for d in depth..f {
+                    steps.push(SmtProofStep::new(d as u8, empties[d + 1]));
+                }
+                steps.push(SmtProofStep::new(
+                    f as u8,
+                    single_key_hash(&other, f + 1, &empties),
+                ));
+                break;
+            }
+            // >= 2 keys: branch at `depth`. The sibling subtree is everything on
+            // the opposite side of `key`'s bit (possibly empty -> default hash).
+            let go_right = bit_at(key, depth);
+            let mut mine = Vec::new();
+            let mut sibling = Vec::new();
+            for k in &current {
+                if bit_at(k, depth) == go_right {
+                    mine.push(*k);
+                } else {
+                    sibling.push(*k);
+                }
+            }
+            steps.push(SmtProofStep::new(
+                depth as u8,
+                subtree_hash(&sibling, depth + 1, &empties),
+            ));
+            current = mine;
+            depth += 1;
+        }
+        steps.reverse(); // deepest first, for the fold
+        Some(NonMembershipWitness::new(
+            NonMembershipTerminal::Empty,
+            steps,
+        ))
     }
 
     pub fn insert(&mut self, key: [u8; 32]) -> core::result::Result<(), Error> {
@@ -139,133 +193,46 @@ pub fn ordered_insert_witnesses(
     Ok((witnesses, tree.root()))
 }
 
-#[derive(Debug)]
-enum Node {
-    Empty,
-    Leaf {
-        key: [u8; 32],
-        hash: [u8; 32],
-    },
-    Branch {
-        depth: u8,
-        left: Box<Node>,
-        right: Box<Node>,
-        hash: [u8; 32],
-    },
-}
+// --- internals ---------------------------------------------------------------
 
-impl Node {
-    fn hash(&self) -> [u8; 32] {
-        match self {
-            Node::Empty => EMPTY_TREE_ROOT,
-            Node::Leaf { hash, .. } | Node::Branch { hash, .. } => *hash,
-        }
+/// Rebuild the root of the tree in which `key` is absent, from the witness alone.
+fn rebuild_absent_root(
+    key: &[u8; 32],
+    witness: &NonMembershipWitness,
+    empties: &[[u8; 32]; DEPTH + 1],
+) -> Option<[u8; 32]> {
+    // Only the `Empty` terminal is produced; an absent key's slot is empty.
+    if witness.terminal != NonMembershipTerminal::Empty {
+        return None;
     }
-
-    fn non_membership_witness(&self, key: &[u8; 32]) -> NonMembershipWitness {
-        let mut steps = Vec::new();
-        let terminal = self.collect_non_membership(key, &mut steps);
-        steps.reverse();
-        NonMembershipWitness { terminal, steps }
+    if witness.steps.is_empty() {
+        return Some(EMPTY_TREE_ROOT); // empty tree
     }
-
-    fn collect_non_membership(
-        &self,
-        key: &[u8; 32],
-        steps: &mut Vec<SmtProofStep>,
-    ) -> NonMembershipTerminal {
-        match self {
-            Node::Empty => NonMembershipTerminal::Empty,
-            Node::Leaf { key: existing, .. } => NonMembershipTerminal::Occupied { key: *existing },
-            Node::Branch {
-                depth, left, right, ..
-            } => {
-                let (next, sibling) = if bit_at(key, *depth as usize) {
-                    (right, left)
-                } else {
-                    (left, right)
-                };
-                let terminal = next.collect_non_membership(key, steps);
-                steps.push(SmtProofStep::new(*depth, sibling.hash()));
-                terminal
-            }
-        }
-    }
-}
-
-fn build_root(keys: &[[u8; 32]]) -> [u8; 32] {
-    build_node(keys, 0).map_or(EMPTY_TREE_ROOT, |node| node.hash())
-}
-
-fn build_node(keys: &[[u8; 32]], start_bit: u16) -> Option<Node> {
-    if keys.is_empty() {
-        return Some(Node::Empty);
-    }
-    if keys.len() == 1 {
-        let key = keys[0];
-        return Some(Node::Leaf {
-            key,
-            hash: leaf_hash(&key),
-        });
-    }
-
-    let mut depth = start_bit;
-    let bifurcation = loop {
-        if depth > 255 {
-            return None;
-        }
-        let first = bit_at(&keys[0], depth as usize);
-        if keys.iter().any(|key| bit_at(key, depth as usize) != first) {
-            break depth as u8;
-        }
-        depth += 1;
-    };
-
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    for key in keys {
-        if bit_at(key, bifurcation as usize) {
-            right.push(*key);
-        } else {
-            left.push(*key);
-        }
-    }
-
-    let left = Box::new(build_node(&left, u16::from(bifurcation) + 1)?);
-    let right = Box::new(build_node(&right, u16::from(bifurcation) + 1)?);
-    let hash = node_hash(bifurcation, &left.hash(), &right.hash());
-    Some(Node::Branch {
-        depth: bifurcation,
-        left,
-        right,
-        hash,
-    })
-}
-
-fn rebuild_absent_root(key: &[u8; 32], witness: &NonMembershipWitness) -> Option<[u8; 32]> {
     if witness.steps.len() > MAX_STEPS {
         return None;
     }
-
-    let first_step_depth = witness.steps.first().map(SmtProofStep::depth);
-    let terminal_hash = match witness.terminal {
-        NonMembershipTerminal::Empty => EMPTY_TREE_ROOT,
-        NonMembershipTerminal::Occupied { key: other } => {
-            if other == *key {
-                return None;
-            }
-            let divergence = first_differing_bit(key, &other)?;
-            if first_step_depth.is_some_and(|depth| depth >= divergence) {
-                return None;
-            }
-            leaf_hash(&other)
-        }
-    };
-    fold_steps(key, terminal_hash, &witness.steps)
+    let td = terminal_depth(&witness.steps)?;
+    fold_steps(key, empties[td], &witness.steps)
 }
 
+/// Terminal depth = one below the deepest (first) step. Requires the steps to
+/// descend contiguously to depth 0 (the canonical shape the prover emits).
+fn terminal_depth(steps: &[SmtProofStep]) -> Option<usize> {
+    let top = steps.first()?.depth as usize;
+    for (i, step) in steps.iter().enumerate() {
+        if step.depth as usize != top - i {
+            return None;
+        }
+    }
+    if steps.last()?.depth != 0 {
+        return None;
+    }
+    Some(top + 1)
+}
+
+/// Fold `hash` (at the terminal depth) up to the root using `steps` (deepest first).
 fn fold_steps(key: &[u8; 32], mut hash: [u8; 32], steps: &[SmtProofStep]) -> Option<[u8; 32]> {
-    let mut previous_depth: u16 = 256;
+    let mut previous_depth: u16 = u16::try_from(DEPTH).ok()? + 1;
     for step in steps {
         if u16::from(step.depth) >= previous_depth {
             return None;
@@ -280,10 +247,58 @@ fn fold_steps(key: &[u8; 32], mut hash: [u8; 32], steps: &[SmtProofStep]) -> Opt
     Some(hash)
 }
 
-fn first_differing_bit(left: &[u8; 32], right: &[u8; 32]) -> Option<u8> {
-    (0..=255)
-        .find(|&depth| bit_at(left, depth) != bit_at(right, depth))
-        .map(|depth| depth as u8)
+/// Hash of the subtree holding `keys`, all sharing the prefix down to `depth`.
+fn subtree_hash(keys: &[[u8; 32]], depth: usize, empties: &[[u8; 32]; DEPTH + 1]) -> [u8; 32] {
+    match keys.len() {
+        0 => empties[depth],
+        1 => single_key_hash(&keys[0], depth, empties),
+        _ => {
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for k in keys {
+                if bit_at(k, depth) {
+                    right.push(*k);
+                } else {
+                    left.push(*k);
+                }
+            }
+            node_hash(
+                depth as u8,
+                &subtree_hash(&left, depth + 1, empties),
+                &subtree_hash(&right, depth + 1, empties),
+            )
+        }
+    }
+}
+
+/// Hash of a subtree containing exactly `key`, occupying the slot from `depth`
+/// down to the leaf at depth 256 (single-child path with empty siblings).
+fn single_key_hash(key: &[u8; 32], depth: usize, empties: &[[u8; 32]; DEPTH + 1]) -> [u8; 32] {
+    let mut hash = leaf_hash(key);
+    for level in (depth..DEPTH).rev() {
+        let sibling = &empties[level + 1];
+        hash = if bit_at(key, level) {
+            node_hash(level as u8, sibling, &hash)
+        } else {
+            node_hash(level as u8, &hash, sibling)
+        };
+    }
+    hash
+}
+
+/// Default hashes of empty subtrees by depth: `E[256]` = empty leaf, `E[d]` =
+/// `node(d, E[d+1], E[d+1])`. Computed once per call (256 hashes).
+fn empty_hashes() -> [[u8; 32]; DEPTH + 1] {
+    let mut table = [[0u8; 32]; DEPTH + 1];
+    table[DEPTH] = EMPTY_TREE_ROOT;
+    for depth in (0..DEPTH).rev() {
+        table[depth] = node_hash(depth as u8, &table[depth + 1], &table[depth + 1]);
+    }
+    table
+}
+
+fn first_differing_bit(left: &[u8; 32], right: &[u8; 32]) -> Option<usize> {
+    (0..DEPTH).find(|&depth| bit_at(left, depth) != bit_at(right, depth))
 }
 
 fn leaf_hash(key: &[u8; 32]) -> [u8; 32] {

@@ -390,25 +390,31 @@ anchor saves `(B-1)` quorum checks.
     already-settled batch (the B=2 vault `TN4n2jy…`, `spentRoot` now advanced)
     reverts with **`vault: stale root`** — `spentRootOld(0) != spentRoot`. A
     settled batch cannot be replayed.
-  - **Continuity (a 2nd batch building on the 1st's `spentRoot`) is blocked by a
-    real E2-accumulator bug.** Built the continued fixture
-    (`build_settlement_fixture_continued` + `emit-settlement-continued`): its
-    `spent_root_old` correctly reproduced the vault's live `spentRoot` from the
-    prior batch's nullifiers, but the burn's non-membership witness **fails its
-    own verifier**. Root cause: the nullifier accumulator
-    (`sdk-ext/src/accumulator.rs`) is a **path-compressed radix tree whose root
-    does not bind prefix bits above the top branch**, so a key diverging in that
-    compressed prefix has no representable non-membership witness (~21–35% of
-    random ≥2-element trees). Regression locked in
-    `sdk-ext/tests/accumulator_nonmembership.rs` (`#[ignore]`d).
-  - **Impact:** non-membership is sound only for ≤1-element trees, so **M3 (B=1)
-    and M4 (B=2) are correct** (the 2nd burn is witnessed vs a 1-element tree) but
-    **B≥3 batches and all multi-batch continuity are blocked**. Effective
-    `B_max = 2` until fixed.
-  - **Fix:** rework the accumulator into a proper sparse Merkle tree (root framed
-    from depth 0, empty-subtree-hash compression) so every prefix bit is bound;
-    this changes root hashes (throwaway test vaults only). The continued
-    fixture/emit machinery is correct and ready once the accumulator is fixed.
+  - **Continuity machinery + a real E2-accumulator bug — now FIXED.** Built the
+    continued fixture (`build_settlement_fixture_continued` +
+    `emit-settlement-continued`): its `spent_root_old` correctly reproduced the
+    vault's live `spentRoot` from the prior batch's nullifiers, but the burn's
+    non-membership witness **failed its own verifier**. Root cause: the nullifier
+    accumulator was a **path-compressed radix tree whose root did not bind prefix
+    bits above the top branch**, so a key diverging in that compressed prefix had
+    no representable non-membership witness (~21–35% of random ≥2-element trees).
+    This was sound only for ≤1-element trees (so M3 B=1 / M4 B=2 were correct) but
+    broke **B≥3 and all multi-batch continuity** (effective `B_max = 2`).
+  - **Fix:** reworked `sdk-ext/src/accumulator.rs` (and the independent
+    `bridge-vectors/gen` reference) into a **depth-256 sparse Merkle tree framed
+    from depth 0** (empty-subtree default hashes), so every prefix bit is bound
+    and non-membership is provable at any tree size. Correctness suite
+    `sdk-ext/tests/accumulator_nonmembership.rs` (now passing, not ignored:
+    multi-size self-verify + insert-vs-rebuild agreement); the cross-stack vector
+    check passes (gen ↔ sdk-ext agree byte-for-byte); regenerated
+    `bridge-vectors/{token,public,accumulator}`. Rebuilt the guest ELF (new vkey
+    `0x002b42fa…`) and confirmed **in-circuit**: B=1 and B=2 public values match,
+    and the previously-broken **multi-batch / ≥2-element-tree witness now executes
+    and matches**. Cost: ~2.6× more cycles (B=1 0.92M→2.40M, B=2 1.80M→4.76M) for
+    the 256-deep folds — optimizable later (memoize empty-subtree table per batch,
+    compress witnesses). Root hashes changed, so the M3/M4 test vaults' on-chain
+    `spentRoot` no longer reproduces — re-deploy throwaway vaults to demo a live
+    multi-batch settle.
 
 ## Suggested Next Work
 

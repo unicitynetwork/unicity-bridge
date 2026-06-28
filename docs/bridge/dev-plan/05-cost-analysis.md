@@ -136,8 +136,13 @@ batch-shaped). Measured cycle counts (SP1 `execute`):
 
 | Batch | RISC-V cycles |
 |---|---:|
-| B=1 | 921,640 |
-| B=2 | 1,796,330 (≈ linear, ~875k/burn) |
+| B=1 | 2,402,300 |
+| B=2 | 4,760,367 (≈ linear, ~2.36M/burn) |
+
+> Updated after the accumulator was reworked into a depth-256 sparse Merkle tree
+> (the prior radix tree was unsound for ≥2-element trees). The 256-deep hash folds
+> raised cycles ~2.6× (B=1 was 0.92M, B=2 1.80M). Optimizable (memoize the
+> empty-subtree table per batch, compress witnesses), but correctness first.
 
 The proof itself is STARK → recursion → shrink → **Groth16 wrap**; the wrap is a
 large fixed cost (the v6.1.0 circuit) independent of N.
@@ -148,14 +153,14 @@ large fixed cost (the v6.1.0 circuit) independent of N.
   ≈ 1 proof/hour/machine; effectively free in $ (electricity) but a hard
   **latency/throughput bottleneck** — unusable for production volume.
 - **SP1 prover network / a GPU prover** (recommended for production): prices by
-  proving units (≈ cycles) plus the Groth16 wrap. At ~0.9–1.8M cycles per batch
+  proving units (≈ cycles) plus the Groth16 wrap. At ~2.4–4.8M cycles per batch
   this is a small per-batch $ cost and removes the latency/OOM bottleneck. Exact
   $/proof depends on the provider's current rate (parameter — get a quote);
   budget it as a **fixed per-batch** cost amortized over N burns, same `1/N`
   shape as the on-chain verify.
 
-For batches, proving cost per burn = `(wrap + ~875k·N PGU) / N` → dominated by the
-fixed wrap at small N, approaching the linear ~875k-cycle/burn term at large N.
+For batches, proving cost per burn = `(wrap + ~2.36M·N PGU) / N` → dominated by the
+fixed wrap at small N, approaching the linear ~2.36M-cycle/burn term at large N.
 
 ## 6. All-in cost of one bridge-back transfer
 

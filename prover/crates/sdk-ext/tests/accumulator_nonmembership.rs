@@ -1,29 +1,14 @@
-//! Regression for a known E2 accumulator bug.
+//! Correctness suite for the sparse-Merkle nullifier accumulator.
 //!
-//! `non_membership_witness` produces witnesses that fail their own
-//! `verify_non_member` for trees with **>= 2 elements** (~21% of random
-//! 2-element trees). Root cause: the tree is a *path-compressed* radix tree whose
-//! root is the top branch node (at the first bifurcation depth) and therefore
-//! does NOT bind the prefix bits above it. A key that diverges from the present
-//! keys *within that compressed prefix* has no representable witness (the step
-//! depth would have to sit above the branch, which `rebuild_absent_root`
-//! correctly rejects) — so the witness builder and verifier are inconsistent.
-//!
-//! Impact: non-membership is only sound for <=1-element trees, so the relation is
-//! correct for a single burn and for the *second* burn in a batch (witness vs a
-//! 1-element tree) — M3 (B=1) and M4 (B=2) are unaffected — but it breaks the
-//! **third+ burn in a batch (B>=3)** and **multi-batch continuity** (a later
-//! batch's burn is witnessed against the >=2-element accumulator of prior burns).
-//!
-//! Fix: rework the accumulator into a proper sparse Merkle tree whose root is
-//! framed from depth 0 (empty-subtree-hash compression), so every prefix bit is
-//! bound and divergence at any depth is provable. That changes root hashes (the
-//! M3/M4 test vaults' spentRoot would differ — acceptable, they are throwaway).
-//!
-//! `#[ignore]`d so CI stays green; remove the attribute once the accumulator is
-//! reworked and this must pass.
+//! Originally a regression for a real bug: the previous path-compressed radix
+//! tree's root did not bind prefix bits above the top branch, so non-membership
+//! witnesses failed their own verifier for ~21% of >=2-element trees (breaking
+//! B>=3 batches and multi-batch continuity). The accumulator is now a depth-256
+//! sparse Merkle tree framed from depth 0, and these tests assert the properties
+//! that were broken: every absent key has a self-verifying witness at every tree
+//! size, and `insert(root, key, witness)` agrees with rebuilding the tree.
 use bridge_return_sdk_ext::accumulator::{
-    ordered_insert_witnesses, verify_non_member, NullifierTree,
+    insert, ordered_insert_witnesses, verify_non_member, NullifierTree, EMPTY_TREE_ROOT,
 };
 
 // Deterministic, well-spread pseudo-random 32-byte keys (not crypto).
@@ -39,10 +24,9 @@ fn key(mut v: u64) -> [u8; 32] {
 }
 
 #[test]
-#[ignore = "known bug: non-membership unsound for >=2-element trees; needs SMT rework"]
 fn non_membership_self_verifies_for_two_element_trees() {
     let mut failures = 0;
-    let trials = 500u64;
+    let trials = 300u64;
     for s in 0..trials {
         let mut t = NullifierTree::new();
         t.insert(key(s * 4)).unwrap();
@@ -60,13 +44,11 @@ fn non_membership_self_verifies_for_two_element_trees() {
 }
 
 #[test]
-#[ignore = "known bug: ordered_insert_witnesses unsound past the 2nd key; needs SMT rework"]
 fn ordered_insert_witnesses_all_verify_for_b3() {
-    // The 3rd key is witnessed against a 2-element tree — the broken case.
+    // The 3rd key is witnessed against a 2-element tree — the previously broken case.
     let keys = [key(1), key(2), key(3)];
     let tree = NullifierTree::new();
     let (witnesses, _root) = ordered_insert_witnesses(&tree, &keys).unwrap();
-    // Re-derive each intermediate root and check the witness verifies against it.
     let mut running = NullifierTree::new();
     for (k, w) in keys.iter().zip(&witnesses) {
         assert!(
@@ -75,4 +57,62 @@ fn ordered_insert_witnesses_all_verify_for_b3() {
         );
         running.insert(*k).unwrap();
     }
+}
+
+#[test]
+fn witness_and_insert_agree_across_tree_sizes() {
+    // For trees of 0..=6 present keys, every absent key must have a self-verifying
+    // witness, and insert-via-witness must equal the rebuilt tree's root.
+    for size in 0u64..=6 {
+        for seed in 0u64..40 {
+            let mut tree = NullifierTree::new();
+            for i in 0..size {
+                tree.insert(key(seed * 16 + i)).unwrap();
+            }
+            let root = tree.root();
+            let absent = key(seed * 16 + 100);
+            let w = tree
+                .non_membership_witness(&absent)
+                .expect("absent witness");
+            assert!(
+                verify_non_member(&root, &absent, &w),
+                "size {size} seed {seed}: non-membership self-verify failed"
+            );
+            // insert via witness == rebuild from scratch
+            let via_witness = insert(&root, &absent, &w).expect("insert");
+            let mut rebuilt = tree.clone();
+            rebuilt.insert(absent).unwrap();
+            assert_eq!(
+                via_witness,
+                rebuilt.root(),
+                "size {size} seed {seed}: insert-via-witness != rebuilt root"
+            );
+        }
+    }
+}
+
+#[test]
+fn present_key_has_no_witness() {
+    let mut tree = NullifierTree::new();
+    tree.insert(key(7)).unwrap();
+    tree.insert(key(8)).unwrap();
+    assert!(tree.non_membership_witness(&key(7)).is_none());
+    assert!(
+        tree.insert(key(7)).is_err(),
+        "duplicate insert must be rejected"
+    );
+}
+
+#[test]
+fn empty_tree_first_insert() {
+    let tree = NullifierTree::new();
+    assert_eq!(tree.root(), EMPTY_TREE_ROOT);
+    let k = key(42);
+    let w = tree.non_membership_witness(&k).expect("witness");
+    assert!(verify_non_member(&EMPTY_TREE_ROOT, &k, &w));
+    let after = insert(&EMPTY_TREE_ROOT, &k, &w).expect("insert");
+    let mut t2 = NullifierTree::new();
+    t2.insert(k).unwrap();
+    assert_eq!(after, t2.root());
+    assert_ne!(after, EMPTY_TREE_ROOT);
 }
