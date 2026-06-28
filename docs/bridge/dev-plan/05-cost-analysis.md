@@ -1,10 +1,12 @@
 # 05 — Cost analysis (Tron mainnet)
 
-Tx-fee and proving-fee analysis for running the bridge-back path on **Tron
-mainnet**, grounded in **measured on-chain energy** from the live Nile M3/M4
-runs. Energy consumption is deterministic in the executed opcodes, so the
-measured energy transfers 1:1 to mainnet; only the *TRX price* and the *energy
-unit price* (sun/energy) differ, and those are parametrized below.
+Tx-fee and proving-fee analysis for running the bridge **both directions**
+(bridge-in: lock→mint; bridge-back: burn→release) on **Tron mainnet**, grounded
+in **measured on-chain energy** from the live Nile M3/M4 runs. Energy
+consumption is deterministic in the executed opcodes, so the measured energy
+transfers 1:1 to mainnet; only the *TRX price* and the *energy unit price*
+(sun/energy) differ, and those are parametrized below. §8 gives an
+order-of-magnitude comparison to running the same vault on Ethereum mainnet.
 
 > All energy figures are **measured** on Nile (see `04-deployment.md` tx hashes).
 > All TRX/USD figures are **derived** under the stated assumptions — treat them as
@@ -15,7 +17,9 @@ unit price* (sun/energy) differ, and those are parametrized below.
 
 | Operation | Energy | Nile fee (TRX) | Notes |
 |---|---:|---:|---|
+| `approve` (TRC20, bridge-in) | 22,688 | 0.35 | one-time per user/allowance |
 | `lock()` (bridge-in deposit) | 125,734 | 12.95 | per user deposit; sets `lockDigest` + pulls TRC20 |
+| `setTrustBaseAllowed` (admin) | 22,044 | 2.20 | one-time per trust base |
 | `fulfillBatch` B=1 | 287,126 | 30.21 | verify proof + settle + 1 transfer |
 | `fulfillBatch` B=2 | 306,473 | 32.40 | verify proof + settle + 2 transfers |
 | — marginal per extra burn | **19,347** | 2.04 | one transfer + leaf/lock-ref checks |
@@ -31,6 +35,28 @@ fulfillBatch(N) ≈ 267,779 + 19,347·N   energy
 ```
 
 The Nile effective rate was ~105 sun/energy (e.g. 30.21 TRX / 287,126).
+
+### The two directions (who pays what, where)
+
+**Bridge-in (Tron → Unicity): lock → mint.** The user, on **Tron**, calls
+`approve` (once per allowance, 22,688 energy) then `lock()` (125,734 energy) —
+~**148k energy total** (~$4.7 central, burn). That funds the vault and records
+`lockDigest`. A bridged token is then **minted on Unicity** via the aggregator/
+gateway; Unicity is not gas-metered like an EVM chain — its cost is the gateway's
+per-state-transition fee (flat/small, off-Tron). The receiving wallet re-verifies
+the lock over a Tron RPC read (free).
+
+**Bridge-back (Unicity → Tron): burn → release.** The user **burns** the token on
+**Unicity** (an aggregator state transition, small/flat). A relayer then submits
+`fulfillBatch` on **Tron** (287k energy B=1, amortized 1/N — §4) which verifies
+one Groth16 proof and releases the TRC20.
+
+So the **Tron-side** (settlement-chain) costs are: bridge-in `approve+lock`
+(~148k energy, user-paid) and bridge-back `fulfillBatch` (~287k/N, relayer-paid).
+The **Unicity-side** mint/burn costs are the same regardless of which L1 is the
+settlement chain, so they fall out of the Tron-vs-Ethereum comparison (§8).
+Round-trip Tron-side, B=1, central (210 sun, $0.15): ~**$4.7 in + ~$9.0 back ≈
+$13.7** (burn); ~**$0** recurring if the operator/user stakes for energy.
 
 ## 2. Assumptions (the levers)
 
@@ -170,3 +196,40 @@ holds, so the relayer cannot over-charge.
   test "USDT" would revert settlement (see `04-deployment.md` Stage B).
 - `B_max` and per-burn proving wall-clock at large B are **not yet measured**
   (ZK_BACK3 §14) — the `1/N` claims hold structurally but want an empirical sweep.
+
+## 8. Tron vs Ethereum (order of magnitude)
+
+Same vault/verifier logic on Ethereum mainnet instead of Tron. The **compute
+units are similar** (Tron energy ≈ EVM gas for the same opcodes — the contract is
+the same Solidity); the cost gap is the **fee market**. Rough USD, central
+assumptions — Ethereum: ~15 gwei, ETH ~$3,000; Tron: ~210 sun/energy, TRX ~$0.15.
+Order of magnitude only.
+
+| Operation (settlement chain) | units (gas≈energy) | Ethereum $ | Tron $ (burn) | Tron $ (staked) |
+|---|---:|---:|---:|---:|
+| `approve` (ERC20/TRC20) | ~25k | ~$1 | ~$0.7 | ~$0 |
+| **bridge-in: `lock`** (+approve) | ~150k | ~$7 | ~$4.7 | ~$0 |
+| Groth16 verify (alone) | ~220–270k | ~$12 | ~$7 | ~$0 |
+| **bridge-back: `fulfillBatch` B=1** | ~290–320k | ~$15 | ~$9 | ~$0 |
+| bridge-back per-burn, large batch | ~20k | ~$1 | ~$0.6 | ~$0 |
+| off-chain proving (per batch) | — | identical (chain-agnostic) | — | — |
+
+Takeaways:
+- **Same gas/energy count, different price.** At calm gas (~15 gwei) Tron is
+  ~1.5–2× cheaper; the gap widens to **5–10×** when ETH gas spikes (50–100 gwei
+  → Ethereum `fulfillBatch` ~$50–100, Tron unchanged). Tron's energy price is
+  governance-stable, not a live auction.
+- **Staking is Tron-only.** A Tron operator stakes TRX for energy and pays ~$0
+  recurring (refundable capital); Ethereum has no equivalent — every tx burns ETH.
+- **Proving is identical** on both: one off-chain Groth16 proof per batch,
+  chain-agnostic. It is the same line item whichever L1 settles.
+- **Batching dominates either way:** the ~220–270k verify is per *batch*, so at
+  large B the per-transfer on-chain cost collapses to the ~20k/burn marginal
+  (~$1 ETH / ~$0.6 Tron / ~$0 staked) on both chains.
+- The **Unicity-side** mint/burn is the same regardless of L1 and is small
+  (aggregator-fee model), so it does not change this comparison.
+
+Net: Tron is the cheaper settlement chain by ~2× at calm gas and ~5–10× under
+congestion, with a ~free staked-energy option; Ethereum's per-op cost is
+gas-price-driven and can dominate during congestion. The zk proving cost is a
+wash between them.
