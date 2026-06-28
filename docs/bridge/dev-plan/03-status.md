@@ -427,6 +427,21 @@ anchor saves `(B-1)` quorum checks.
   withdraws; in push mode the same batch reverts (`vault: transfer failed`). New
   `MockBlocklistTRC20`. Push remains the default (single-tx UX for plain assets);
   pull is recommended for assets with transfer hooks/blocklists.
+- **S2 accumulator-builder (rebuild from chain events).** New `host::s2`
+  reconstructs the nullifier accumulator from the vault's `Released` /
+  `BatchFulfilled` events and **verifies it against the chain**: it replays each
+  batch's nullifiers through the (fixed SMT) accumulator and checks every
+  `spentRootOld → spentRootNew` transition, so an out-of-order/incomplete/tampered
+  log is rejected before anyone settles on top of it. `next_batch()` then produces
+  the `spent_root_old` + per-leaf non-membership witnesses + `spent_root_new` a
+  prover needs for the next batch (folded exactly as the guest verifies; rejects
+  double-spends). It reuses the one Rust SMT (no third implementation) so a relayer
+  can call it rather than re-deriving roots. Tests `tests/s2_rebuild.rs` (5):
+  multi-batch rebuild matches the chain (incl. ≥2-element trees), next-batch
+  witnesses verify and fold to `spent_root_new`, and tampered-root / out-of-order /
+  double-spend logs are rejected. CLI `bridge-return-host s2-rebuild <events.json>`
+  (smoke-verified the B=2 vector's root). This is the load-bearing primitive for
+  multi-batch operation (S4 relayer / a live multi-batch settle build on it).
 
 ## Suggested Next Work
 

@@ -103,6 +103,7 @@ fn main() {
             emit_settlement_b2(config, recipient, amount)
         }
         "emit-settlement-continued" => emit_settlement_continued(args.next()),
+        "s2-rebuild" => s2_rebuild(args.next()),
         "precheck-wire" => {
             let wire = args.next();
             precheck_wire(wire)
@@ -163,6 +164,7 @@ fn usage() {
     eprintln!("       bridge-return-host emit-trust-base-hash <trust-base.json>");
     eprintln!("       bridge-return-host emit-settlement <config.json> <recipient_hex> <amount>     # B=1 deploy-tailored");
     eprintln!("       bridge-return-host emit-settlement-b2 <config.json> <recipient_hex> <amount>  # B=2 deploy-tailored");
+    eprintln!("       bridge-return-host s2-rebuild <events.json>                           # S2 rebuild accumulator from Released/BatchFulfilled, verify vs chain");
     eprintln!("       bridge-return-host precheck-wire <wire_hex>                            # S1 host precheck, no SP1");
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");
@@ -355,6 +357,66 @@ fn emit_settlement(
         }))
         .expect("serialize settlement")
     );
+    Ok(())
+}
+
+// S2: rebuild the nullifier accumulator from a dumped event log and verify it
+// against the chain. Input JSON: { "batches": [ { "nullifiers": ["0x..", ...],
+// "spent_root_old": "0x..", "spent_root_new": "0x.." }, ... ],
+// "next_nullifiers": ["0x..", ...]? }. Prints the reconstructed root + spent
+// count and, if `next_nullifiers` is given, the next batch's root transition.
+fn s2_rebuild(input_path: Option<String>) -> bridge_return_host::Result<()> {
+    use bridge_return_host::s2::{next_batch, rebuild, SettledBatch};
+
+    let err = |m: String| bridge_return_host::HostError::Check(m);
+    let path = input_path.ok_or_else(|| err("missing events.json".to_string()))?;
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let b32 = |v: &serde_json::Value| -> bridge_return_host::Result<[u8; 32]> {
+        let s = v
+            .as_str()
+            .ok_or_else(|| err("expected hex string".to_string()))?;
+        let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s))?;
+        bytes
+            .try_into()
+            .map_err(|_| err("expected 32 bytes".to_string()))
+    };
+    let b32_arr = |v: &serde_json::Value| -> bridge_return_host::Result<Vec<[u8; 32]>> {
+        v.as_array()
+            .ok_or_else(|| err("expected array".to_string()))?
+            .iter()
+            .map(b32)
+            .collect()
+    };
+
+    let mut batches = Vec::new();
+    for b in json["batches"]
+        .as_array()
+        .ok_or_else(|| err("missing batches array".to_string()))?
+    {
+        batches.push(SettledBatch {
+            nullifiers: b32_arr(&b["nullifiers"])?,
+            spent_root_old: b32(&b["spent_root_old"])?,
+            spent_root_new: b32(&b["spent_root_new"])?,
+        });
+    }
+
+    let acc = rebuild(&batches)?;
+    let h = |b: &[u8]| format!("0x{}", hex::encode(b));
+    let mut out = serde_json::json!({
+        "batches_replayed": batches.len(),
+        "spent_count": acc.spent_count,
+        "spent_root": h(&acc.spent_root),
+        "verified_against_chain": true,
+    });
+    if let Some(next) = json.get("next_nullifiers") {
+        let nb = next_batch(&acc, &b32_arr(next)?)?;
+        out["next_batch"] = serde_json::json!({
+            "spent_root_old": h(&nb.spent_root_old),
+            "spent_root_new": h(&nb.spent_root_new),
+            "witnesses": nb.witnesses.len(),
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
     Ok(())
 }
 
