@@ -442,6 +442,22 @@ anchor saves `(B-1)` quorum checks.
   double-spend logs are rejected. CLI `bridge-return-host s2-rebuild <events.json>`
   (smoke-verified the B=2 vector's root). This is the load-bearing primitive for
   multi-batch operation (S4 relayer / a live multi-batch settle build on it).
+- **S4 relayer (permissionless self-settle, §13).** `contracts/tron/scripts/
+  relayer.js` orchestrates the return path without re-implementing any crypto: it
+  delegates accumulator math to the host (`s2-rebuild`) and proving to the host
+  (`sp1-groth16`), and owns event decoding, state verification, and submission.
+  - `relayer scan` — fetches the vault's `BatchFulfilled`/`Released` from TronGrid,
+    groups them into the S2 `events.json` (pure `relayer-lib.js`: a `BatchFulfilled`
+    claims its next `batchSize` `Released`), runs `s2-rebuild`, and asserts the
+    rebuilt root == the on-chain `spentRoot` → SYNCED / refuses on divergence.
+  - `relayer settle <bundle> <settle>` — submits `fulfillBatch` (B≥1) via TronWeb.
+  - Tests `test/relayer.test.js` (5): grouping, ordering, TronGrid decode,
+    truncated-log rejection. Hardhat suite now 52 passing.
+  - Live smoke (vault `TN4n2jy…`): scan fetched + decoded 3 events → 1 batch and
+    S2 **correctly refused** (the vault predates the SMT fix, so its root can't be
+    reproduced) — the safety gate firing as intended. A clean SYNCED scan needs a
+    post-fix vault. The end-to-end self-settle loop is scan → host `s2 next_batch`
+    → host `sp1-groth16` → settle.
 
 ## Suggested Next Work
 
