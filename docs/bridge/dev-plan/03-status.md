@@ -384,6 +384,31 @@ anchor saves `(B-1)` quorum checks.
   - **Still open:** full on-chain *settlement* of a live token (lock+fulfillBatch)
     needs `e2e:back` reconfigured to a deployed vault (config.vault = A, a real
     Tron recipient, a standard TRC20) so the live token's config matches.
+- **Multi-batch (a): replay rejection done; continuity blocked by an accumulator
+  bug.**
+  - **Replay/double-spend guard verified on-chain.** Re-submitting an
+    already-settled batch (the B=2 vault `TN4n2jy…`, `spentRoot` now advanced)
+    reverts with **`vault: stale root`** — `spentRootOld(0) != spentRoot`. A
+    settled batch cannot be replayed.
+  - **Continuity (a 2nd batch building on the 1st's `spentRoot`) is blocked by a
+    real E2-accumulator bug.** Built the continued fixture
+    (`build_settlement_fixture_continued` + `emit-settlement-continued`): its
+    `spent_root_old` correctly reproduced the vault's live `spentRoot` from the
+    prior batch's nullifiers, but the burn's non-membership witness **fails its
+    own verifier**. Root cause: the nullifier accumulator
+    (`sdk-ext/src/accumulator.rs`) is a **path-compressed radix tree whose root
+    does not bind prefix bits above the top branch**, so a key diverging in that
+    compressed prefix has no representable non-membership witness (~21–35% of
+    random ≥2-element trees). Regression locked in
+    `sdk-ext/tests/accumulator_nonmembership.rs` (`#[ignore]`d).
+  - **Impact:** non-membership is sound only for ≤1-element trees, so **M3 (B=1)
+    and M4 (B=2) are correct** (the 2nd burn is witnessed vs a 1-element tree) but
+    **B≥3 batches and all multi-batch continuity are blocked**. Effective
+    `B_max = 2` until fixed.
+  - **Fix:** rework the accumulator into a proper sparse Merkle tree (root framed
+    from depth 0, empty-subtree-hash compression) so every prefix bit is bound;
+    this changes root hashes (throwaway test vaults only). The continued
+    fixture/emit machinery is correct and ready once the accumulator is fixed.
 
 ## Suggested Next Work
 

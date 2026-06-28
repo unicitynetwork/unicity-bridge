@@ -167,11 +167,28 @@ pub fn build_settlement_fixture(
     amount: u64,
     nonce: u64,
 ) -> B1Fixture {
+    build_settlement_fixture_continued(config, recipient, amount, nonce, 0x42, &[])
+}
+
+/// Like [`build_settlement_fixture`] but for a **second/Nth batch** on a vault
+/// whose nullifier accumulator already holds `prior_nullifiers` (the burns of
+/// earlier batches, in order). `spent_root_old` is the accumulator after those
+/// priors (= the vault's current `spentRoot`), and this burn's non-membership
+/// witness is built against it — proving multi-batch continuity. `salt_byte`
+/// distinguishes the token from earlier batches (use a fresh value).
+pub fn build_settlement_fixture_continued(
+    config: BridgeConfig,
+    recipient: [u8; 20],
+    amount: u64,
+    nonce: u64,
+    salt_byte: u8,
+    prior_nullifiers: &[[u8; 32]],
+) -> B1Fixture {
     let owner = signer(0x22);
     let node = signer(0x11);
     let trust_base = trust_base(&node);
 
-    let mint = bridge_mint(&config, &owner, amount, nonce);
+    let mint = bridge_mint_with_salt(&config, &owner, amount, nonce, [salt_byte; 32]);
     let reason = BridgeBackReason {
         version: 1,
         recipient,
@@ -225,9 +242,15 @@ pub fn build_settlement_fixture(
         fee_amount: reason.fee_amount,
         deadline: reason.deadline,
     };
+    // Accumulator continuity: insert prior batches' nullifiers first (spent_root_old
+    // = the tree after them = the vault's current spentRoot), then this burn's
+    // nullifier with a witness against that root.
     let tree = NullifierTree::new();
-    let (accumulator_witnesses, spent_root_new) =
-        ordered_insert_witnesses(&tree, &[leaf.nullifier]).unwrap();
+    let (_, spent_root_old) = ordered_insert_witnesses(&tree, prior_nullifiers).unwrap();
+    let mut all = prior_nullifiers.to_vec();
+    all.push(leaf.nullifier);
+    let (mut all_witnesses, spent_root_new) = ordered_insert_witnesses(&tree, &all).unwrap();
+    let accumulator_witnesses = vec![all_witnesses.pop().unwrap()];
     let obligation = bridge_lock_obligation(
         token.genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
@@ -244,7 +267,7 @@ pub fn build_settlement_fixture(
         domain_tag: domain_tag(),
         config_hash: cfg_hash,
         trust_base_hash: canonical_hash(&trust_base),
-        spent_root_old: tree.root(),
+        spent_root_old,
         spent_root_new,
         return_root: return_root(&leaves),
         lock_ref_root: lock_ref_root(&lock_refs).unwrap(),

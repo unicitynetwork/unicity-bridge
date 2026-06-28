@@ -102,6 +102,7 @@ fn main() {
             let amount = args.next();
             emit_settlement_b2(config, recipient, amount)
         }
+        "emit-settlement-continued" => emit_settlement_continued(args.next()),
         "precheck-wire" => {
             let wire = args.next();
             precheck_wire(wire)
@@ -349,6 +350,107 @@ fn emit_settlement(
                 "amount": amount,
                 "unicity_token_id": h(unicity_token_id),
                 "recipient_commitment": h(recipient_commitment.data()),
+                "nonce": lref.nonce,
+            },
+        }))
+        .expect("serialize settlement")
+    );
+    Ok(())
+}
+
+// Continued (Nth-batch) settlement: one input JSON with the config fields plus
+// `recipient`, `amount`, `nonce`, `salt` (a byte), and `prior_nullifiers` (the
+// earlier batches' nullifiers, in order). Builds a burn whose accumulator
+// `spent_root_old` = the tree after the priors (= the vault's current spentRoot),
+// proving multi-batch continuity. Emits the same shape as emit-settlement.
+fn emit_settlement_continued(input_path: Option<String>) -> bridge_return_host::Result<()> {
+    use bridge_return_core::{coin_id, token_type, BridgeConfig};
+    use unicity_token::crypto::hash::sha256;
+    use unicity_token::transaction::Transaction;
+
+    let err = |m: String| bridge_return_host::HostError::Check(m);
+    let path = input_path.ok_or_else(|| err("missing input.json".to_string()))?;
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let u64f = |k: &str| -> bridge_return_host::Result<u64> {
+        json[k]
+            .as_u64()
+            .or_else(|| json[k].as_str().and_then(|s| s.parse().ok()))
+            .ok_or_else(|| err(format!("missing u64 field {k}")))
+    };
+    let arr = |v: &serde_json::Value, n: usize| -> bridge_return_host::Result<Vec<u8>> {
+        let s = v
+            .as_str()
+            .ok_or_else(|| err("expected hex string".to_string()))?;
+        let b = hex::decode(s.strip_prefix("0x").unwrap_or(s))?;
+        if b.len() != n {
+            return Err(err(format!("expected {n} bytes, got {}", b.len())));
+        }
+        Ok(b)
+    };
+    let field = |k: &str, n: usize| arr(&json[k], n);
+
+    let source_chain_id = u64f("source_chain_id")?;
+    let asset: [u8; 20] = field("asset", 20)?.try_into().unwrap();
+    let chain_id_str = source_chain_id.to_string();
+    let asset_evm_hex = hex::encode(asset);
+    let config = BridgeConfig {
+        source_chain_id,
+        vault: field("vault", 20)?.try_into().unwrap(),
+        asset,
+        token_type: token_type(&chain_id_str, &asset_evm_hex),
+        coin_id: coin_id(&chain_id_str, &asset_evm_hex),
+        reason_tag: u64f("reason_tag")?,
+        lock_domain: field("lock_domain", 32)?.try_into().unwrap(),
+        nullifier_domain: field("nullifier_domain", 32)?.try_into().unwrap(),
+    };
+    let recipient: [u8; 20] = field("recipient", 20)?.try_into().unwrap();
+    let amount = u64f("amount")?;
+    let nonce = u64f("nonce")?;
+    let salt = u8::try_from(u64f("salt")?).map_err(|_| err("salt must be a byte".to_string()))?;
+    let prior: Vec<[u8; 32]> = json["prior_nullifiers"]
+        .as_array()
+        .ok_or_else(|| err("missing prior_nullifiers array".to_string()))?
+        .iter()
+        .map(|v| Ok(arr(v, 32)?.try_into().unwrap()))
+        .collect::<bridge_return_host::Result<_>>()?;
+
+    let fx = bridge_return_host::fixture::build_settlement_fixture_continued(
+        config, recipient, amount, nonce, salt, &prior,
+    );
+    let input = &fx.input;
+    let pv = &input.public_values;
+    let leaf = &input.return_leaves[0];
+    let lref = &input.sorted_lock_refs[0];
+    let mint = input.witness.bridge_burns[0].token.genesis().transaction();
+    let h = |b: &[u8]| format!("0x{}", hex::encode(b));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "guest_wire_input": h(&bridge_return_guest::wire::encode_guest_input(input)),
+            "public_values": {
+                "domain_tag": h(&pv.domain_tag),
+                "config_hash": h(&pv.config_hash),
+                "trust_base_hash": h(&pv.trust_base_hash),
+                "spent_root_old": h(&pv.spent_root_old),
+                "spent_root_new": h(&pv.spent_root_new),
+                "return_root": h(&pv.return_root),
+                "lock_ref_root": h(&pv.lock_ref_root),
+                "batch_size": pv.batch_size,
+                "total_amount": h(&pv.total_amount),
+            },
+            "leaf": {
+                "nullifier": h(&leaf.nullifier),
+                "recipient": h(&leaf.recipient),
+                "amount": h(&leaf.amount),
+                "fee_recipient": h(&leaf.fee_recipient),
+                "fee_amount": h(&leaf.fee_amount),
+                "deadline": leaf.deadline,
+            },
+            "lock_ref": { "nonce": lref.nonce, "digest": h(&lref.digest) },
+            "lock_seed": {
+                "amount": amount,
+                "unicity_token_id": h(mint.token_id().bytes()),
+                "recipient_commitment": h(sha256(&mint.recipient().to_cbor()).data()),
                 "nonce": lref.nonce,
             },
         }))
