@@ -156,6 +156,124 @@ pub fn build_b1_direct_bridge_fixture() -> B1Fixture {
     }
 }
 
+/// Settlement fixture tailored to a live vault deployment: a direct bridge-lock
+/// token whose `config` (including the on-chain `vault` address) and burn
+/// `recipient` are caller-supplied, burned to a `BridgeBackReason` with no fee at
+/// `nonce` (use 0 to match a vault's first `lock()`). Used to generate a real
+/// proof that `fulfillBatch` accepts against the deployed vault.
+pub fn build_settlement_fixture(
+    config: BridgeConfig,
+    recipient: [u8; 20],
+    amount: u64,
+    nonce: u64,
+) -> B1Fixture {
+    let owner = signer(0x22);
+    let node = signer(0x11);
+    let trust_base = trust_base(&node);
+
+    let mint = bridge_mint(&config, &owner, amount, nonce);
+    let reason = BridgeBackReason {
+        version: 1,
+        recipient,
+        amount: bridge_return_core::u256_from_u64(amount),
+        fee_recipient: [0u8; 20],
+        fee_amount: [0u8; 32],
+        deadline: 0,
+    };
+    let reason_bytes = reason_cbor(&config, &reason);
+    let burn = bridge_burn(&mint, reason_bytes);
+
+    let mint_state_id =
+        unicity_token::api::StateId::derive(mint.lock_script(), mint.source_state_hash());
+    let burn_state_id =
+        unicity_token::api::StateId::derive(burn.lock_script(), burn.source_state_hash());
+    let (mint_path, root) = one_sibling_path(
+        mint_state_id.bytes(),
+        &mint.calculate_transaction_hash(),
+        burn_state_id.bytes(),
+        &burn.calculate_transaction_hash(),
+    );
+    let (burn_path, burn_root) = one_sibling_path(
+        burn_state_id.bytes(),
+        &burn.calculate_transaction_hash(),
+        mint_state_id.bytes(),
+        &mint.calculate_transaction_hash(),
+    );
+    assert_eq!(root, burn_root);
+    let anchor = signed_uc(&node, root);
+
+    let minter = Minter::signer(mint.token_id()).unwrap();
+    let token = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint.clone(),
+            proof(&mint, &minter, mint_path, anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn.clone(),
+            proof(&burn, &owner, burn_path, anchor.clone()),
+        )],
+    );
+
+    let cfg_hash = config_hash(&config);
+    let burn_tx_hash: [u8; 32] = burn.calculate_transaction_hash().data().try_into().unwrap();
+    let burn_id = burn_transition_id(burn_state_id.bytes(), &burn_tx_hash);
+    let leaf = ReturnLeaf {
+        nullifier: nullifier(&cfg_hash, &burn_id),
+        recipient: reason.recipient,
+        amount: reason.amount,
+        fee_recipient: reason.fee_recipient,
+        fee_amount: reason.fee_amount,
+        deadline: reason.deadline,
+    };
+    let tree = NullifierTree::new();
+    let (accumulator_witnesses, spent_root_new) =
+        ordered_insert_witnesses(&tree, &[leaf.nullifier]).unwrap();
+    let obligation = bridge_lock_obligation(
+        token.genesis(),
+        TRON_USDT_LOCK_JUSTIFICATION_TAG,
+        &sdk_config(&config),
+        PaymentAssetCollection::from_cbor_bytes,
+    )
+    .unwrap();
+    let lock_refs = vec![SourceLockRef {
+        nonce: obligation.nonce,
+        digest: obligation.digest,
+    }];
+    let leaves = vec![leaf];
+    let public_values = PublicValues {
+        domain_tag: domain_tag(),
+        config_hash: cfg_hash,
+        trust_base_hash: canonical_hash(&trust_base),
+        spent_root_old: tree.root(),
+        spent_root_new,
+        return_root: return_root(&leaves),
+        lock_ref_root: lock_ref_root(&lock_refs).unwrap(),
+        batch_size: 1,
+        total_amount: sum_amounts(&leaves),
+    };
+    let input = GuestInput {
+        config,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs: lock_refs,
+        witness: RelationWitness {
+            accumulator_witnesses: accumulator_witnesses.clone(),
+            bridge_burns: vec![BridgeBurnWitness {
+                token,
+                trust_base,
+                verification: BurnVerification::Anchored(anchor.clone()),
+                lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+            }],
+        },
+    };
+
+    B1Fixture {
+        input,
+        anchor_certificate: anchor,
+        accumulator_witnesses,
+    }
+}
+
 pub fn b1_fixture_json(fixture: &B1Fixture) -> serde_json::Value {
     fixture_json(
         "B=1 direct bridge-lock token burned to BridgeBackReason; full guest relation execute vector",

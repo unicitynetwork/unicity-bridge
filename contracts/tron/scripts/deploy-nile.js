@@ -93,9 +93,10 @@ async function deployWithCtor(tronWeb, ownerHex, name, art, ctorValues) {
 }
 
 // Deploy the Tron-compatible vault against a given verifier (base58).
-async function deployVault(tronWeb, env, addr, verifierBase58) {
+async function deployVault(tronWeb, env, addr, verifierBase58, opts = {}) {
   const chainId = Number(env.TRON_CHAIN_ID || 3448148188);
-  const assetBase58 = env.TRON_USDT;
+  const assetBase58 = opts.assetBase58 || env.TRON_USDT;
+  const vkey = opts.vkey || VKEY_PLACEHOLDER;
   const assetEvmHex = tronWeb.address.toHex(assetBase58).slice(2).toLowerCase(); // drop 41 prefix
   const ownerHex = tronWeb.address.toHex(addr);
   const cfg = [
@@ -109,13 +110,13 @@ async function deployVault(tronWeb, env, addr, verifierBase58) {
     NULLIFIER_DOMAIN,
   ];
   const vaultArt = artifact("UnicityBridgeVault", "UnicityBridgeVault.sol/UnicityBridgeVault.json");
-  console.log("(cfg.vault is stamped to address(this) by the constructor)");
+  console.log(`(cfg.vault stamped to address(this); asset ${assetBase58}, vkey ${vkey.slice(0, 12)}…)`);
   const { base58: vaultBase58, hexAddr } = await deployWithCtor(
     tronWeb,
     ownerHex,
     "UnicityBridgeVault",
     vaultArt,
-    [cfg, toEvm(tronWeb, verifierBase58), VKEY_PLACEHOLDER, toEvm(tronWeb, addr)],
+    [cfg, toEvm(tronWeb, verifierBase58), vkey, toEvm(tronWeb, addr)],
   );
 
   // Poll for the deployed code, then read CONFIG_HASH to confirm the stamp.
@@ -198,6 +199,15 @@ async function main() {
     const verifierAddr = process.argv[3];
     if (!verifierAddr) throw new Error("usage: vault-only <verifier base58 address>");
     await deployVault(tronWeb, env, addr, verifierAddr);
+  } else if (cmd === "real-vault") {
+    // Stage C vault: real SP1Verifier + bundle vkey + a chosen asset (argv[3]).
+    const asset = process.argv[3];
+    // Default = current guest ELF vkey (sp1-vkey target/sp1/bridge-return-sp1-guest);
+    // pass argv[4] to override. MUST match the ELF the proof is generated with.
+    const vkey = process.argv[4] || "0x00d57c9253f1ed4e34b7fb3690fe7fae7040084579e6c5b05be5c29a5c2af00e";
+    if (!env.TRON_VERIFIER_SP1 || !asset)
+      throw new Error("usage: real-vault <asset base58>  (needs TRON_VERIFIER_SP1 in .env)");
+    await deployVault(tronWeb, env, addr, env.TRON_VERIFIER_SP1, { assetBase58: asset, vkey });
   } else {
     console.error(`unknown command: ${cmd}`);
     process.exit(1);
