@@ -472,6 +472,22 @@ anchor saves `(B-1)` quorum checks.
     reproduced) — the safety gate firing as intended. A clean SYNCED scan needs a
     post-fix vault. The end-to-end self-settle loop is scan → host `s2 next_batch`
     → host `sp1-groth16` → settle.
+- **Multi-batch continuity settled LIVE on Nile (definitive (a) close + clean
+  relayer SYNCED).** On a fresh post-SMT-fix vault `TLXkafFeuPdNFd3XczCzHSXztbqKCytHWW`
+  (real SP1 verifier `TN4nQ…`, vkey `0x002b42fa`, asset `TR49RU…`), two batches
+  settled in sequence, each with a **real Groth16 proof**:
+  - Batch 1 (nonce 0): `spentRoot` 0 → **R1 `0xd50fb851…`**, released 1e6
+    (tx `55be7be0…`, energy 287,181).
+  - Batch 2 (nonce 1): proof commits **`spentRootOld = R1`** (the cross-batch
+    binding, built via `emit-settlement-continued` from batch 1's nullifier);
+    settled R1 → **R2 `0x4b54c0a2…`**, released 1e6 (tx `9b7feddb…`, energy 272,181).
+  - **`relayer scan` → SYNCED**: decoded 4 events → 2 batches → S2 rebuilt root
+    `0x4b54c0a2…` == on-chain `spentRoot` (the post-fix happy path that the
+    pre-fix vault could not satisfy).
+  - **Replay rejected**: re-submitting batch 1 reverts `vault: stale root`.
+  This proves multi-batch accumulator continuity on-chain with the depth-256 SMT
+  (the previously-broken regime), and exercises the full S2/S4 loop live. Note:
+  `.env TRON_VAULT` now points at this vault.
 
 ## Suggested Next Work
 
