@@ -251,6 +251,23 @@ Pre-flight checks (`stage-c-settle.js prepare`, the abi.decode test) made the
 ~50-min prove safe to run: config_hash / spentRoot / lockDigest / publicValues
 decode were all confirmed before proving.
 
+### M4 — batched B=2 real proof on Nile ✅
+
+A **2-burn batch** (shared anchor, §11) settled in **one** `fulfillBatch` with a
+single real proof:
+
+| B=2 settlement | Nile |
+|---|---|
+| Vault (fresh; real verifier + ELF vkey, MockTRC20) | `TN4n2jyHWCxZFc8W5Bqy4SzYhfvx9cENHV` |
+| `fulfillBatch(B=2)` tx | `e212bc9e4f9a48ab5cd80a249c32fff65ec8374339426509a7a63be9df0c77bd` |
+
+Tooling: `emit-settlement-b2`, `stage-c-settle-b2.js prepare|fulfill`. Flow is
+identical to B=1 but with two `lock()`s (nonces 0,1) and `leaves[]`/`lockRefs[]`
+of length 2. **Energy: B=1 287,126 vs B=2 306,473** — the shared-anchor batching
+amortizes the ~218k proof verification across burns (~19k marginal per extra
+burn), so batching is markedly cheaper than N separate settlements. Both
+`lockDigest`s were verified on-chain before proving.
+
 ---
 
 ## Post-deploy

@@ -356,10 +356,14 @@ anchor saves `(B-1)` quorum checks.
   (`token/token-02.json`, multi-burn schema) consumed by `check-vectors` and the
   `vectors.rs` integration test. The guest-side **one-quorum dedup** (§11) is
   implemented: the relation verifies each distinct anchor `UC*` once, so a
-  shared-anchor batch pays a single BFT-quorum check (measured below). Still
-  open: an optional witness-model slimming (hoist the shared anchor/trust-base to
-  the batch level so it is carried once instead of per burn — a serialization-size
-  win on top of the quorum-count win), and any SP1 proof at B>1.
+  shared-anchor batch pays a single BFT-quorum check (measured below).
+  **M4 done — a real B=2 Groth16 proof settled a 2-burn batch on Nile in one
+  `fulfillBatch`** (vault `TN4n2jy…`, tx `e212bc9e…`, energy 306,473 vs B=1's
+  287,126 — the shared anchor amortizes the ~218k proof verification, ~19k
+  marginal per extra burn). Tooling: `emit-settlement-b2`, `build_settlement
+  _fixture_b2`, `stage-c-settle-b2.js`. Still open: an optional witness-model
+  slimming (carry the shared anchor once instead of per burn), and larger
+  B (measure `B_max` / per-burn energy + proving cost).
 - The B=1 fixture uses synthetic local certificates and keys suitable for
   deterministic execute-mode conformance, not live aggregator data.
 
