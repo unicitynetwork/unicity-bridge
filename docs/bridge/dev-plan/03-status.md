@@ -345,9 +345,11 @@ anchor saves `(B-1)` quorum checks.
   (`bridge-vectors/proof/b1-groth16.json` via `sp1-export`) **and verified against
   the real SP1 v6.1.0 Groth16 verifier bytecode** (vendored under
   `contracts/tron/contracts/verifier/`; `test/verifier.test.js` confirms the
-  published B=1 proof verifies and tampered proof/publicValues/vkey revert). The
-  on-chain *settlement* smoke (deploy + `fulfillBatch` on Nile) is still open —
-  see `04-deployment.md`.
+  published B=1 proof verifies and tampered proof/publicValues/vkey revert).
+  **The same verifier is deployed to Nile (`TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR`)
+  and verifies the published proof on-chain at ~218k energy within the
+  `triggerconstantcontract` dry-run limit** — settling the open M3 risk that
+  bn254 Groth16 verification works on Tron (`04-deployment.md` Stage C).
 - B>1 batching is validated in **execute mode** for B=2 (`b2_guest.rs`), both
   per-anchor and **shared-anchor** (`build_b2_shared_anchor_fixture` +
   `multi_leaf_paths`), and as a published JSON conformance vector
@@ -384,10 +386,14 @@ anchor saves `(B-1)` quorum checks.
    (`TD14oa…`) on a mock-asset vault (`TW9JPc…`) because the user-provided Nile
    "USDT" (`TXYZ…`) is **non-standard** — its `transfer` moves funds but returns
    `false`, which the vault's safe-transfer correctly rejects (real Tether returns
-   void, which the vault handles). **Still open:** Stage C with the real
-   `SP1Verifier` + a real proof, and (for the real-USDT vault) a Tether-style
-   token or a loosened `_check`. The off-chain prover config sets
-   `BridgeConfig.vault` to the deployed vault (frozen in `nile-usdt.json`).
+   void, which the vault handles). **Stage C verifier DONE:** the real SP1 v6.1.0
+   Groth16 verifier is deployed to Nile (`TN4nQ…`) and verifies the published real
+   proof on-chain (~218k energy, within the dry-run limit). **Still open for a full
+   real-proof `fulfillBatch`:** a proof *tailored to the deployment* (config with
+   `vault=`deployed address, `spentRootOld=0`, real Tron recipient, lockRef
+   matching the seeded `lock()`), regenerated (~50 min `sp1-groth16`), settled
+   against a standard TRC20. The off-chain prover config sets `BridgeConfig.vault`
+   to the deployed vault (frozen in `nile-usdt.json`).
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
    certified-mode verification of a real live token** (`verify_certified_burn`,

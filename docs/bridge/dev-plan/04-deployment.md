@@ -197,30 +197,46 @@ Goal: exercise the vault's settlement logic on Nile without a real proof. Done:
 > freshly deployed contract must be polled until its code is queryable before it
 > can be called.
 
-## Stage C — real proof on Nile (M3) — needs blockers #1, #3, #4
+## Stage C — real proof on Nile (M3)
 
-> **Mode gap (blocker #4).** A live aggregator token is *certified* (each
-> transition carries its own `UnicityCertificate`); the S1 host path already
-> verifies these (`s1::verify_certified_burn`, validated on a real testnet2
-> sample). But the zk **guest** relation proves *anchored* mode (one shared
-> `UC*`). Producing a real **proof** therefore needs either (a) a guest certified
-> path, or (b) the aggregator serving historical inclusion proofs against one
-> anchor root (ZK_BACK3 §2.1) so S1 can assemble an anchored `WitnessPackage`.
-> The host-side verification + derivations are done; the zk side of a *live* token
-> is the remaining work before Stage C can run.
+> **Real verifier proven on Tron ✅ (2026-06-28).** The vendored SP1 v6.1.0
+> Groth16 verifier is deployed to Nile and **verifies the published real proof
+> on-chain**:
+>
+> | Contract | Nile address |
+> |---|---|
+> | `SP1Verifier` (v6.1.0 Groth16) | `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR` |
+>
+> Calling `verifyProof(vkey, publicValues, proofBytes)` with
+> `bridge-vectors/proof/b1-groth16.json` against the Nile verifier: the **valid
+> proof verifies** (`verifyProof` is void, reverts on failure — it returned with
+> no revert), at **~218,165 energy**, and the dry-run (`triggerconstantcontract`)
+> **succeeds within Tron's limit**. A tampered proof / tampered public values are
+> both rejected. This settles the open M3 risk (`01` §"Proof verification"):
+> **bn254 Groth16 verification works on Tron's precompiles, cheaply, within the
+> ~80 ms dry-run budget** — the Groth16 wrap's single public input keeps it small.
+> (Same verifier + same bundle also verify locally in Hardhat — `test/verifier.test.js`.)
 
+**Remaining for a full real-proof settlement (`fulfillBatch` with a real proof):**
+the published `b1-groth16.json` was generated from the *synthetic* B=1 fixture,
+so its `publicValues` (configHash with `vault=0x…a1`, spentRootOld, leaves,
+lockRefs, trustBaseHash) do **not** match a live Nile vault. To settle a real
+proof end-to-end you must generate a proof **tailored to the deployment**:
 
-1. Deploy the **real** verifier from Stage A → `TRON_VERIFIER`.
-2. Freeze the real `BridgeConfig` (shared with circuit + wallet) and regenerate a
-   **real** proof from live witness data (S1 fetch, blocker #4) so its
-   `configHash`/`trustBaseHash` match the deployed vault.
-3. Deploy the vault as in Stage B (real verifier, real `vkey`), allow the trust
-   base, perform a real bridge-in `lock()`, then `fulfillBatch` with the real
-   `b1-groth16.json` triple. Confirm settlement on Nile.
-4. **Measure energy** for `verifyProof` + `fulfillBatch` and check the
-   `triggerconstantcontract` ~80 ms dry-run limit (Tron #6288, `01` §"Proof
-   verification"). The Groth16 wrap exposes one public input, which keeps the
-   verifier small — confirm empirically.
+1. ✅ Deploy the real verifier → `TRON_VERIFIER_SP1`.
+2. Deploy a vault with the real verifier + the bundle's `vkey`
+   (`0x004d10…2133f`); note its address `A`.
+3. Build a fixture whose `BridgeConfig.vault = A` and whose other fields match the
+   vault's cfg, with `spentRootOld = 0` (the vault's `EMPTY_TREE_ROOT`), a leaf
+   `recipient` that is a real Tron address, and a `lockRef` whose digest equals
+   what the vault's `lock()` stores; regenerate the Groth16 proof (~50 min CPU,
+   `sp1-groth16`).
+4. `setTrustBaseAllowed(pv.trustBaseHash)`, seed the matching `lock()`, fund the
+   vault with a **standard** TRC20 (not the false-returning Nile USDT — see Stage
+   B), then `fulfillBatch(publicValues, proofBytes, leaves, lockRefs)`.
+
+The verifier (the genuinely Tron-risky piece) is proven; step 3's tailored proof
+is the remaining compute.
 
 ---
 
