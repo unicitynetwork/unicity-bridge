@@ -442,6 +442,20 @@ anchor saves `(B-1)` quorum checks.
   double-spend logs are rejected. CLI `bridge-return-host s2-rebuild <events.json>`
   (smoke-verified the B=2 vector's root). This is the load-bearing primitive for
   multi-batch operation (S4 relayer / a live multi-batch settle build on it).
+- **Bridge-in mint→receive e2e on Nile via the current vault (M1 exit met).**
+  The real bridge-in demo (`bridge-plugin-tron-usdt/demo/e2e.ts`) now routes
+  through **`UnicityBridgeVault`** instead of the superseded `UnicityLock`:
+  `tron.ts` gained a struct-safe vault deploy (`encodeVaultCtor` hand-encodes the
+  all-static `BridgeConfig` ctor, since TronWeb mis-encodes tuples — no `ethers`
+  dependency). Ran the full flow **live on Nile + testnet2**: deploy
+  (MockTRC20 `TR49RU…` + MockProofVerifier `TCV1xW…` + vault
+  `TSdh8Td8…`) → `vault.lock()` (nonce 0; `Lock` event decoded by the plugin;
+  **`lockDigest[0]` stored = bridge-back-ready**, which `UnicityLock` could not do)
+  → mint a real Unicity token verified against the live Nile lock → transfer to a
+  new owner → receiver re-verifies ownership/history **and re-checks the mint
+  reason vs Nile after 20 confirmations → VALID**. `lock()` + the `Lock` event are
+  byte-identical to `UnicityLock`, so the plugin's verifier was already
+  compatible; only the deploy differed. Closes the "bridge-in mocks the lock" gap.
 - **S4 relayer (permissionless self-settle, §13).** `contracts/tron/scripts/
   relayer.js` orchestrates the return path without re-implementing any crypto: it
   delegates accumulator math to the host (`s2-rebuild`) and proving to the host

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,56 @@ export function loadArtifact(rel: string): HardhatArtifact {
 
 export const MOCK_TRC20 = (): HardhatArtifact => loadArtifact('test/MockTRC20.sol/MockTRC20.json');
 export const UNICITY_LOCK = (): HardhatArtifact => loadArtifact('UnicityLock.sol/UnicityLock.json');
+export const UNICITY_BRIDGE_VAULT = (): HardhatArtifact =>
+  loadArtifact('UnicityBridgeVault.sol/UnicityBridgeVault.json');
+export const MOCK_PROOF_VERIFIER = (): HardhatArtifact =>
+  loadArtifact('test/MockProofVerifier.sol/MockProofVerifier.json');
+
+// Canonical frozen bridge config (matches scripts/deploy-nile.js and the prover).
+const LOCK_DOMAIN = '158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932';
+const NULLIFIER_DOMAIN = 'd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d';
+const REASON_TAG = 39050n;
+const sha256Hex = (s: string): string => createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
+const deriveTokenType = (chainId: number, assetEvm: string): string =>
+  sha256Hex(`unicity-bridge:tron:${chainId}:${assetEvm}`);
+const deriveCoinId = (chainId: number, assetEvm: string): string =>
+  sha256Hex(`unicity-bridge-coin:tron:${chainId}:${assetEvm}`);
+
+const word = (hexNoPrefix: string): string => hexNoPrefix.toLowerCase().padStart(64, '0');
+const uintWord = (n: bigint): string => word(n.toString(16));
+
+/**
+ * ABI-encode the `UnicityBridgeVault` constructor. TronWeb mis-encodes struct
+ * (tuple) ctor args, so we hand-encode — every field is a static type, so the
+ * `BridgeConfig` tuple is inlined and the whole thing is a flat 12-word
+ * concatenation (no offsets). Order matches
+ * `constructor(BridgeConfig cfg, IProofVerifier verifier_, bytes32 vkey, address admin_, bool pullPayments)`.
+ */
+export function encodeVaultCtor(args: {
+  chainId: number;
+  assetEvm: string; // 40-hex, no 0x / 41
+  verifierEvm: string; // 40-hex
+  adminEvm: string; // 40-hex (also the ignored, self-stamped cfg.vault)
+  pullPayments: boolean;
+}): string {
+  const { chainId, assetEvm, verifierEvm, adminEvm, pullPayments } = args;
+  return (
+    // BridgeConfig cfg (8 inlined static words)
+    uintWord(BigInt(chainId)) + // sourceChainId
+    word(adminEvm) + // vault (IGNORED — stamped to address(this))
+    word(assetEvm) + // asset
+    word(deriveTokenType(chainId, assetEvm)) + // tokenType
+    word(deriveCoinId(chainId, assetEvm)) + // coinId
+    uintWord(REASON_TAG) + // reasonTag
+    word(LOCK_DOMAIN) + // lockDomain
+    word(NULLIFIER_DOMAIN) + // nullifierDomain
+    // remaining ctor args
+    word(verifierEvm) + // verifier_
+    word('') + // vkey = 0x00..00 (mock verifier ignores it)
+    word(adminEvm) + // admin_
+    uintWord(pullPayments ? 1n : 0n) // pullPayments
+  );
+}
 
 const FEE_LIMIT = 1_500_000_000; // 1500 TRX cap; Nile deploys cost far less.
 
@@ -47,12 +98,15 @@ export interface Deployed {
   txid: string;
 }
 
-/** Deploy a Hardhat-compiled contract to Tron and wait for it to confirm. */
+/** Deploy a Hardhat-compiled contract to Tron and wait for it to confirm. Pass
+ *  `rawParameter` (hex-encoded ctor args, no 0x) for contracts with struct ctor
+ *  args that TronWeb's `parameters` path mis-encodes (e.g. the vault). */
 export async function deployContract(
   tronWeb: TronWeb,
   artifact: HardhatArtifact,
   name: string,
   parameters: unknown[],
+  rawParameter?: string,
 ): Promise<Deployed> {
   const issuer = tronWeb.defaultAddress.base58 as string;
   const unsigned = await tronWeb.transactionBuilder.createSmartContract(
@@ -63,7 +117,7 @@ export async function deployContract(
       callValue: 0,
       userFeePercentage: 100,
       originEnergyLimit: 10_000_000,
-      parameters,
+      ...(rawParameter !== undefined ? { rawParameter } : { parameters }),
       name,
     },
     issuer,

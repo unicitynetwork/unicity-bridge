@@ -2,8 +2,9 @@
 /**
  * Real end-to-end bridge demo: Tron Nile testnet  ->  Unicity testnet2.
  *
- *   1. deploy   — deploy MockTRC20 (USDT) + UnicityLock to Tron Nile
- *   2. lock     — approve + lock USDT, committing to a Unicity tokenId+recipient
+ *   1. deploy   — deploy MockTRC20 (USDT) + MockProofVerifier + UnicityBridgeVault
+ *   2. lock     — approve + vault.lock() USDT (stores lockDigest -> bridge-back-ready),
+ *                 committing to a Unicity tokenId+recipient
  *   3. wait     — wait for Tron source finality (K confirmations)
  *   4. mint     — mint the bridged Unicity token (verifies the lock vs. live Nile)
  *   5. transfer — transfer the token to a second Unicity owner
@@ -48,12 +49,14 @@ import { readEnv, requireTronKey } from './env.js';
 import { loadState, requireState, saveState, type DemoState } from './state.js';
 import {
   deployContract,
+  encodeVaultCtor,
   getNowBlock,
   makeTronWeb,
+  MOCK_PROOF_VERIFIER,
   MOCK_TRC20,
   sendMethod,
   toEvmHex,
-  UNICITY_LOCK,
+  UNICITY_BRIDGE_VAULT,
   waitForReceipt,
 } from './tron.js';
 
@@ -130,9 +133,24 @@ async function deploy(state: DemoState): Promise<void> {
   const asset = await deployContract(tronWeb, MOCK_TRC20(), 'MockTRC20', []);
   log(`  asset (USDT) = ${asset.base58}  ${nileTx(asset.txid)}`);
 
-  log('Deploying UnicityLock(asset, admin)...');
-  const lock = await deployContract(tronWeb, UNICITY_LOCK(), 'UnicityLock', [asset.base58, deployer]);
-  log(`  lock         = ${lock.base58}  ${nileTx(lock.txid)}`);
+  // Bridge-in routes through the current contract, UnicityBridgeVault, so the
+  // deposit also stores lockDigest (making it bridge-back-able). lock() and the
+  // Lock event are identical to the old UnicityLock. The mock verifier is unused
+  // by lock() (only fulfillBatch verifies proofs).
+  log('Deploying MockProofVerifier...');
+  const verifier = await deployContract(tronWeb, MOCK_PROOF_VERIFIER(), 'MockProofVerifier', []);
+  log(`  verifier     = ${verifier.base58}  ${nileTx(verifier.txid)}`);
+
+  log('Deploying UnicityBridgeVault(cfg, verifier, vkey, admin, pull=false)...');
+  const ctor = encodeVaultCtor({
+    chainId: env.tronChainId,
+    assetEvm: asset.evmHex,
+    verifierEvm: verifier.evmHex,
+    adminEvm: toEvmHex(tronWeb, deployer),
+    pullPayments: false,
+  });
+  const lock = await deployContract(tronWeb, UNICITY_BRIDGE_VAULT(), 'UnicityBridgeVault', [], ctor);
+  log(`  vault (lock) = ${lock.base58}  ${nileTx(lock.txid)}`);
 
   // Fund the deployer with USDT so it can lock.
   const fundAmount = env.amount * 10n;
@@ -194,7 +212,7 @@ async function lock(state: DemoState): Promise<void> {
   log(`  approve tx = ${nileTx(approveTxid)}`);
 
   log('Calling lock(amount, tokenId, recipientCommitment)...');
-  const lockTxid = await sendMethod(tronWeb, UNICITY_LOCK().abi, tron.lockBase58, 'lock', [
+  const lockTxid = await sendMethod(tronWeb, UNICITY_BRIDGE_VAULT().abi, tron.lockBase58, 'lock', [
     env.amount.toString(),
     '0x' + toHex(tokenId.bytes),
     '0x' + toHex(recipientCommitmentBytes),
