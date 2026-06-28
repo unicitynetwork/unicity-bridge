@@ -215,9 +215,13 @@ pub fn precheck_wire(wire_input: &[u8]) -> Result<PrecheckReport> {
 /// a witness needs. Enabled by the `http` feature (pulls a TLS stack).
 #[cfg(feature = "http")]
 pub mod aggregator {
+    use bridge_return_sdk_ext::verify::verify_token_anchored;
+    use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
     use unicity_token::api::{InclusionProof, StateId};
     use unicity_token::client::{AggregatorClient, HttpAggregatorClient};
-    use unicity_token::transaction::{Token, Transaction};
+    use unicity_token::transaction::{
+        CertifiedMintTransaction, CertifiedTransferTransaction, Token, Transaction,
+    };
 
     use crate::{HostError, Result};
 
@@ -259,5 +263,50 @@ pub mod aggregator {
             .transaction();
         let state_id = StateId::derive(terminal.lock_script(), terminal.source_state_hash());
         fetch_inclusion_proof(client, &state_id)
+    }
+
+    /// Re-fetch every transition's inclusion proof against the aggregator's
+    /// **current** root and rebuild the token so all transitions share that one
+    /// root, returning the rebuilt token + the shared anchor `UC*`. This is what
+    /// enables anchored mode (one BFT-quorum check per batch, §11): re-fetching a
+    /// historical transition yields a fresh inclusion path — with all sibling
+    /// hashes — to the latest root (ZK_BACK3 §2.1), instead of the per-transition
+    /// certificate the token was minted with. Verifies the rebuild in anchored
+    /// mode before returning. Retries if a round advances mid-fetch (the proofs
+    /// must all resolve to one root).
+    pub fn fetch_anchored_token(
+        client: &HttpAggregatorClient,
+        token: &Token,
+        trust_base: &RootTrustBase,
+    ) -> Result<(Token, UnicityCertificate)> {
+        for attempt in 0..6 {
+            let mint = token.genesis().transaction();
+            let mint_sid = StateId::derive(mint.lock_script(), mint.source_state_hash());
+            let mint_proof = fetch_inclusion_proof(client, &mint_sid)?;
+            let anchor = mint_proof.unicity_certificate.clone();
+            let genesis = CertifiedMintTransaction::new(mint.clone(), mint_proof);
+            let mut transfers = Vec::new();
+            for t in token.transactions() {
+                let tx = t.transaction();
+                let sid = StateId::derive(tx.lock_script(), tx.source_state_hash());
+                transfers.push(CertifiedTransferTransaction::new(
+                    tx.clone(),
+                    fetch_inclusion_proof(client, &sid)?,
+                ));
+            }
+            let rebuilt = Token::new(genesis, transfers);
+            match verify_token_anchored(&rebuilt, trust_base, &anchor) {
+                Ok(()) => return Ok((rebuilt, anchor)),
+                Err(err) => {
+                    if attempt == 5 {
+                        return Err(HostError::Check(format!(
+                            "anchored re-fetch failed after retries (root skew?): {err:?}"
+                        )));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                }
+            }
+        }
+        unreachable!()
     }
 }
