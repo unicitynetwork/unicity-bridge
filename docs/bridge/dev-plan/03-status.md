@@ -386,14 +386,15 @@ anchor saves `(B-1)` quorum checks.
    (`TD14oa…`) on a mock-asset vault (`TW9JPc…`) because the user-provided Nile
    "USDT" (`TXYZ…`) is **non-standard** — its `transfer` moves funds but returns
    `false`, which the vault's safe-transfer correctly rejects (real Tether returns
-   void, which the vault handles). **Stage C verifier DONE:** the real SP1 v6.1.0
-   Groth16 verifier is deployed to Nile (`TN4nQ…`) and verifies the published real
-   proof on-chain (~218k energy, within the dry-run limit). **Still open for a full
-   real-proof `fulfillBatch`:** a proof *tailored to the deployment* (config with
-   `vault=`deployed address, `spentRootOld=0`, real Tron recipient, lockRef
-   matching the seeded `lock()`), regenerated (~50 min `sp1-groth16`), settled
-   against a standard TRC20. The off-chain prover config sets `BridgeConfig.vault`
-   to the deployed vault (frozen in `nile-usdt.json`).
+   void, which the vault handles). **Stage C / M3 DONE — a real SP1 Groth16 proof
+   settled one burn on Nile end-to-end:** the real verifier (`TN4nQ…`) verifies
+   the proof inside the vault's `fulfillBatch`; a deployment-tailored proof
+   (config_hash = vault CONFIG_HASH, `spentRootOld=0`, real recipient, lockRef =
+   the seeded `lock()`) was generated with `sp1-groth16` and **settled on-chain**
+   (vault `TTFpnc8…`, fulfillBatch tx `09d56543…`, ~287k energy, 1e6 units
+   released). Tooling: `emit-settlement`, `deploy-nile.js real-vault`,
+   `stage-c-settle.js prepare|fulfill` (`04-deployment.md` Stage C). The exit
+   criterion "a real proof settles one burn on testnet" is met.
 3. **(done)** S1 host witness-package structs + precheck mirroring `GuestInput`
    (`crates/host/src/s1.rs`, `precheck-wire`, `s1_precheck.rs`), **plus
    certified-mode verification of a real live token** (`verify_certified_burn`,

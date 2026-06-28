@@ -219,24 +219,37 @@ Goal: exercise the vault's settlement logic on Nile without a real proof. Done:
 
 **Remaining for a full real-proof settlement (`fulfillBatch` with a real proof):**
 the published `b1-groth16.json` was generated from the *synthetic* B=1 fixture,
-so its `publicValues` (configHash with `vault=0x…a1`, spentRootOld, leaves,
-lockRefs, trustBaseHash) do **not** match a live Nile vault. To settle a real
-proof end-to-end you must generate a proof **tailored to the deployment**:
+so its `publicValues` did **not** match a live Nile vault. Settling a real proof
+end-to-end therefore used a proof **tailored to the deployment** — and this is
+now **DONE on Nile ✅ (M3 complete)**:
 
-1. ✅ Deploy the real verifier → `TRON_VERIFIER_SP1`.
-2. Deploy a vault with the real verifier + the bundle's `vkey`
-   (`0x004d10…2133f`); note its address `A`.
-3. Build a fixture whose `BridgeConfig.vault = A` and whose other fields match the
-   vault's cfg, with `spentRootOld = 0` (the vault's `EMPTY_TREE_ROOT`), a leaf
-   `recipient` that is a real Tron address, and a `lockRef` whose digest equals
-   what the vault's `lock()` stores; regenerate the Groth16 proof (~50 min CPU,
-   `sp1-groth16`).
-4. `setTrustBaseAllowed(pv.trustBaseHash)`, seed the matching `lock()`, fund the
-   vault with a **standard** TRC20 (not the false-returning Nile USDT — see Stage
-   B), then `fulfillBatch(publicValues, proofBytes, leaves, lockRefs)`.
+| Stage C settlement | Nile |
+|---|---|
+| Vault (real verifier + ELF vkey `0x00d57c92…`, asset `MockTRC20`) | `TTFpnc8WDddhDcQzgt45yqi8V5f6n2XZR9` |
+| `fulfillBatch` tx (real proof verified + released) | `09d565438aa70154708ee83f41c7b9c899322b6552748d7e9e0e633baf5555c8` |
 
-The verifier (the genuinely Tron-risky piece) is proven; step 3's tailored proof
-is the remaining compute.
+Energy ~287,126 (verify ~218k + settle/transfer). The procedure:
+
+1. ✅ Deploy the real verifier → `TRON_VERIFIER_SP1` (`TN4nQ…`).
+2. ✅ Deploy a vault with the real verifier + the **current guest ELF vkey**
+   (`sp1-vkey`; `deploy-nile.js real-vault <asset>`); note its address `A`.
+   *(The published `b1-groth16.json` vkey `0x004d10…` is from the pre-certified
+   ELF — the rebuilt ELF's vkey is `0x00d57c92…`; the vault VKEY must match the
+   ELF the proof is generated with.)*
+3. ✅ `emit-settlement <config{vault=A}> <recipient> <amount>` builds the fixture
+   (config_hash = vault CONFIG_HASH, `spentRootOld=0`, real Tron recipient,
+   lockRef digest = the vault's `lock()`); regenerate the Groth16 proof
+   (`sp1-groth16`, ~50 min CPU — needs single-worker; peaks ~85–89% of 16 GB, so
+   it can OOM and need a retry).
+4. ✅ `stage-c-settle.js prepare` (`setTrustBaseAllowed` + `lock`, verifies the
+   on-chain `lockDigest` matches), then `stage-c-settle.js fulfill <bundle>`:
+   `fulfillBatch(publicValues, proofBytes, leaves, lockRefs)` — the vault verified
+   the SP1 Groth16 proof and released the asset. Uses a **standard** `MockTRC20`
+   (not the false-returning Nile USDT — see Stage B).
+
+Pre-flight checks (`stage-c-settle.js prepare`, the abi.decode test) made the
+~50-min prove safe to run: config_hash / spentRoot / lockDigest / publicValues
+decode were all confirmed before proving.
 
 ---
 
