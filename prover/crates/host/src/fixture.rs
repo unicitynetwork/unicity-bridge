@@ -579,6 +579,123 @@ pub fn build_b2_shared_anchor_fixture() -> GuestInput {
     }
 }
 
+/// B=2 settlement fixture tailored to a live vault: two independent bridge-lock
+/// tokens under one shared anchor `UC*` (the §11 one-quorum-check shape), burned
+/// (no fee) to caller-supplied recipients/amounts at the given nonces (use 0,1 to
+/// match a fresh vault's first two `lock()`s). `config.vault` must be the deployed
+/// vault address so config_hash equals the vault CONFIG_HASH.
+pub fn build_settlement_fixture_b2(
+    config: BridgeConfig,
+    recipients: [[u8; 20]; 2],
+    amounts: [u64; 2],
+    nonces: [u64; 2],
+) -> GuestInput {
+    let node = signer(0x11);
+    let trust_base = trust_base(&node);
+    let owner0 = signer(0x22);
+    let owner1 = signer(0x23);
+    let reason = |recipient: [u8; 20], amount: u64| BridgeBackReason {
+        version: 1,
+        recipient,
+        amount: bridge_return_core::u256_from_u64(amount),
+        fee_recipient: [0u8; 20],
+        fee_amount: [0u8; 32],
+        deadline: 0,
+    };
+    let reason0 = reason(recipients[0], amounts[0]);
+    let reason1 = reason(recipients[1], amounts[1]);
+
+    let mint0 = bridge_mint_with_salt(&config, &owner0, amounts[0], nonces[0], [0x42; 32]);
+    let burn0 = bridge_burn(&mint0, reason_cbor(&config, &reason0));
+    let mint1 = bridge_mint_with_salt(&config, &owner1, amounts[1], nonces[1], [0x43; 32]);
+    let burn1 = bridge_burn(&mint1, reason_cbor(&config, &reason1));
+
+    let mint0_sid =
+        unicity_token::api::StateId::derive(mint0.lock_script(), mint0.source_state_hash());
+    let burn0_sid =
+        unicity_token::api::StateId::derive(burn0.lock_script(), burn0.source_state_hash());
+    let mint1_sid =
+        unicity_token::api::StateId::derive(mint1.lock_script(), mint1.source_state_hash());
+    let burn1_sid =
+        unicity_token::api::StateId::derive(burn1.lock_script(), burn1.source_state_hash());
+
+    let (root, paths) = multi_leaf_paths(&[
+        (*mint0_sid.bytes(), mint0.calculate_transaction_hash()),
+        (*burn0_sid.bytes(), burn0.calculate_transaction_hash()),
+        (*mint1_sid.bytes(), mint1.calculate_transaction_hash()),
+        (*burn1_sid.bytes(), burn1.calculate_transaction_hash()),
+    ]);
+    let anchor = signed_uc(&node, root);
+
+    let minter0 = Minter::signer(mint0.token_id()).unwrap();
+    let token0 = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint0.clone(),
+            proof(&mint0, &minter0, paths[0].clone(), anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn0.clone(),
+            proof(&burn0, &owner0, paths[1].clone(), anchor.clone()),
+        )],
+    );
+    let minter1 = Minter::signer(mint1.token_id()).unwrap();
+    let token1 = unicity_token::transaction::Token::new(
+        CertifiedMintTransaction::new(
+            mint1.clone(),
+            proof(&mint1, &minter1, paths[2].clone(), anchor.clone()),
+        ),
+        vec![CertifiedTransferTransaction::new(
+            burn1.clone(),
+            proof(&burn1, &owner1, paths[3].clone(), anchor.clone()),
+        )],
+    );
+
+    let (leaf0, ref0) = leaf_and_lock_ref(&config, &token0, burn0_sid.bytes(), &burn0, &reason0);
+    let (leaf1, ref1) = leaf_and_lock_ref(&config, &token1, burn1_sid.bytes(), &burn1, &reason1);
+
+    let leaves = vec![leaf0, leaf1];
+    let tree = NullifierTree::new();
+    let (accumulator_witnesses, spent_root_new) =
+        ordered_insert_witnesses(&tree, &[leaves[0].nullifier, leaves[1].nullifier]).unwrap();
+    let lock_refs = vec![ref0, ref1]; // nonces[0] < nonces[1]
+
+    let public_values = PublicValues {
+        domain_tag: domain_tag(),
+        config_hash: config_hash(&config),
+        trust_base_hash: canonical_hash(&trust_base),
+        spent_root_old: tree.root(),
+        spent_root_new,
+        return_root: return_root(&leaves),
+        lock_ref_root: lock_ref_root(&lock_refs).unwrap(),
+        batch_size: 2,
+        total_amount: sum_amounts(&leaves),
+    };
+
+    GuestInput {
+        config,
+        public_values,
+        return_leaves: leaves,
+        sorted_lock_refs: lock_refs,
+        witness: RelationWitness {
+            accumulator_witnesses,
+            bridge_burns: vec![
+                BridgeBurnWitness {
+                    token: token0,
+                    trust_base: trust_base.clone(),
+                    verification: BurnVerification::Anchored(anchor.clone()),
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+                BridgeBurnWitness {
+                    token: token1,
+                    trust_base,
+                    verification: BurnVerification::Anchored(anchor),
+                    lock_justification_tag: TRON_USDT_LOCK_JUSTIFICATION_TAG,
+                },
+            ],
+        },
+    }
+}
+
 /// Derive the settlement `ReturnLeaf` and source `SourceLockRef` for one burned
 /// token — anchor-independent, so per-anchor and shared-anchor batches agree.
 fn leaf_and_lock_ref(
