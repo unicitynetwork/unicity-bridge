@@ -71,6 +71,10 @@ async fn post_return_prechecks_enqueues_and_is_idempotent() {
         .unwrap();
     let created: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(created["duplicate"], false);
+    assert_eq!(created["terminal"], false);
+    assert_eq!(created["success"], Value::Null);
+    assert_eq!(created["progress"], 20);
+    assert_eq!(created["next_poll_ms"], 5000);
     let id = created["return_id"].as_str().unwrap();
 
     let response = app
@@ -108,6 +112,12 @@ async fn rejects_truncated_wire() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let error: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["error"]["code"], "precheck_rejected");
+    assert_eq!(error["error"]["recoverable"], true);
 }
 
 #[tokio::test]
@@ -158,6 +168,9 @@ async fn assert_status(app: &axum::Router, id: &str, status: &str) {
         .unwrap();
     let record: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(record["status"], status);
+    assert_eq!(record["terminal"], false);
+    assert_eq!(record["progress"], 70);
+    assert!(record["events"].as_array().unwrap().len() >= 3);
 }
 
 async fn wait_status(app: &axum::Router, id: &str, status: &str) {

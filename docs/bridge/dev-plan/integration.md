@@ -207,9 +207,10 @@ through the browser provider factory** the app calls (`createBrowserProviders` /
 - Post the witness-request envelope from `buildWitnessRequest`
   (`{tokenCbor, configHash, reasonBytes}`) to `/returns`; store `returnId` +
   `nullifier` (idempotency).
-- Track state by polling `/returns/:id` **and** independently watching the vault's
-  `Released{nullifier}` over Tron RPC — never depend solely on the service to know a
-  return settled (trustless display).
+- Track state by polling `/returns/:id` using the progress contract in §B4
+  (`status`, `progress`, `message`, `events`, terminal `success`/`failure`) **and**
+  independently watching the vault's `Released{nullifier}` over Tron RPC — never
+  depend solely on the service to know a return settled (trustless display).
 - `BridgeBackReason` fields the UI collects: `recipient` (Tron dest), `amount`,
   `feeRecipient`+`feeAmount` (service's Tron address + fee; **0 while subsidized**),
   `deadline` ("claim guaranteed by"). The service applies **best-effort inclusion
@@ -321,12 +322,60 @@ one-time SP1 circuit bucket), a funded/staked Tron account for gas.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/returns` | submit `{tokenCbor, configHash, reasonBytes}`; returns `{returnId, nullifier, status}`; idempotent on `nullifier`; S1 precheck synchronously rejects bad burns |
-| `GET` | `/returns/:id` | status `queued→proving→submitted→settled` (+`failed`/`stale` reason); on settle, the `fulfillBatch` txid + `Released` |
+| `POST` | `/returns` | submit `{tokenCbor, configHash, reasonBytes}`; returns `{return_id, nullifier, status, progress, message, next_poll_ms}`; idempotent on `nullifier`; S1 precheck synchronously rejects bad burns |
+| `GET` | `/returns/:id` | wallet polling contract: current status/progress/message, terminal success/failure, ordered stage events, batch id, public values, and eventually `fulfillBatch` txid + `Released` |
 | `GET` | `/returns?nullifier=` | lookup by nullifier (wallet idempotency) |
 | `GET` | `/batches/:id` | the published on-chain bundle (`vkey`, `publicValues`, `proofBytes`) — anyone can submit it |
 | `GET` | `/accumulator` | rebuilt `spentRoot` + on-chain `spentRoot` + SYNCED flag |
 | `GET` | `/health` | prover busy/idle, queue depth, last batch, gas balance |
+
+`GET /returns/:id` is the wallet-facing source of truth for service progress. It
+is intentionally polling-first: proving and Tron finality can take minutes to more
+than an hour, and mobile/browser wallets need a resumable protocol that survives
+tab sleeps and service restarts. The response is stable and append-only where it
+matters:
+
+```json
+{
+  "return_id": "0x...",
+  "nullifier": "0x...",
+  "status": "queued",
+  "terminal": false,
+  "success": null,
+  "progress": 20,
+  "message": "Return is waiting for batch formation",
+  "next_poll_ms": 5000,
+  "batch_id": null,
+  "failure": null,
+  "events": [
+    {"at_ms": 1760000000000, "status": "queued", "code": "prechecked", "message": "Burn passed S1 precheck"},
+    {"at_ms": 1760000000000, "status": "queued", "code": "queued", "message": "Return is waiting for batch formation"}
+  ],
+  "public_values_digest": "0x...",
+  "public_values": {"config_hash": "0x...", "spent_root_old": "0x...", "spent_root_new": "0x...", "...": "..."}
+}
+```
+
+Status progression is monotonic except for rebase/retry events, which append a new
+event and move the record back to the earliest still-valid stage:
+
+| Status | Progress | Meaning | Wallet action |
+|---|---:|---|---|
+| `queued` | 20 | S1 precheck passed; waiting for `batch_target` or `max_wait` | show pending, poll `next_poll_ms` |
+| `proving` | 45 | single-flight batch is in SP1/native proving | show long-running proof; poll slowly |
+| `proven` | 70 | proof bundle exists; waiting for submitter/dry-run | show "proof ready" |
+| `submitted` | 85 | `fulfillBatch` broadcast; waiting for receipt/finality | show txid when present; also watch Tron `Released` |
+| `settled` | 100 | terminal success; vault emitted `Released{nullifier}` | mark bridge-out complete |
+| `failed` | 100 | terminal failure for this service attempt | show `failure.message`; let user resubmit burned blob if `recoverable` |
+
+Synchronous `POST /returns` errors are returned as soon as possible with
+`{"error": {"code", "message", "recoverable"}}`. Important codes:
+`invalid_hex`, `invalid_wire_input`, `precheck_rejected`,
+`config_hash_mismatch`, `unsupported_batch_shape`. Async failures are stored in
+`GET /returns/:id.failure` with a `kind` such as `proving_failed`,
+`submission_failed`, `chain_rejected`, or `service_unavailable`. A failed service
+attempt does **not** imply funds are lost; the burned blob remains the recovery
+material unless the burn itself was malformed and rejected by S1.
 
 Unauthenticated is fine (nothing can move funds): enqueue only after a passing S1
 precheck, dedupe by nullifier, rate-limit.

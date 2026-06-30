@@ -47,6 +47,12 @@ host/     (extend)             # multi-burn certified GuestInput; best-effort an
   in-memory `store` (status by `returnId`/`nullifier`).
 - `GET /health`, `GET /accumulator` (calls the scan+rebuild path), `POST /returns`
   (precheck-stub → enqueue), `GET /returns/:id`.
+- Wallet progress contract: `POST /returns` returns the polling identity and first
+  progress fields; `GET /returns/:id` returns `status`, `terminal`, `success`,
+  `progress`, `message`, `next_poll_ms`, `failure`, and an ordered `events[]` log.
+  Synchronous intake failures return machine-readable `error.code` values, so the
+  wallet can surface malformed/unbacked/stale burns immediately instead of waiting
+  for the queue.
 
 **Exit:** the binary boots, serves `/health`, accepts a `/returns` POST whose burned
 blob passes `s1::precheck`, and reports `queued`.
@@ -56,6 +62,11 @@ blob passes `s1::precheck`, and reports `queued`.
 - `POST /returns`: decode the burned blob, run `s1::WitnessPackage::precheck` /
   `precheck_wire`, **reject** malformed/unbacked/stale-predicate burns
   synchronously; idempotent on `nullifier`; persist status.
+- Progress semantics are stable for wallet integration:
+  `queued(20) → proving(45) → proven(70) → submitted(85) → settled(100)`, or
+  `failed(100)` with `{kind,message,recoverable}`. Rebase/retry appends an event
+  and moves the record back to the earliest still-valid stage; the wallet should
+  follow `nextPollMs` and independently watch `Released{nullifier}`.
 - **S1 extension (host):** generalize `build_certified_guest_input` from **B=1 to
   multi-burn** (assemble several certified burns into one `GuestInput`) — the
   load-bearing gap for live batching.

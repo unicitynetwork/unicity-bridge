@@ -4,7 +4,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::{
     prover::Prover,
-    store::{ReturnStatus, ReturnStore},
+    store::{ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
 };
 
 #[derive(Clone)]
@@ -150,7 +150,10 @@ async fn prove_single_flight(
                     &id,
                     ReturnStatus::Failed,
                     Some(batch_id.clone()),
-                    Some(err.to_string()),
+                    Some(ReturnFailure::recoverable(
+                        ErrorKind::ProvingFailed,
+                        err.to_string(),
+                    )),
                 );
             }
         }

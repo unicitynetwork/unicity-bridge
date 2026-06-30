@@ -77,6 +77,11 @@ pub struct CreateReturnResponse {
     pub return_id: String,
     pub nullifier: String,
     pub status: ReturnStatus,
+    pub terminal: bool,
+    pub success: Option<bool>,
+    pub progress: u8,
+    pub message: String,
+    pub next_poll_ms: u64,
     pub duplicate: bool,
 }
 
@@ -85,21 +90,27 @@ async fn create_return(
     Json(req): Json<CreateReturnRequest>,
 ) -> Result<Json<CreateReturnResponse>, ApiError> {
     let wire_input = decode_hex(&req.wire_input)?;
-    let report = s1::precheck_wire(&wire_input)?;
-    let input = wire::decode_guest_input(&wire_input)
-        .map_err(|err| ApiError::BadRequest(format!("wire decode failed: {err:?}")))?;
+    let report = s1::precheck_wire(&wire_input)
+        .map_err(|err| ApiError::PrecheckRejected(err.to_string()))?;
+    let input = wire::decode_guest_input(&wire_input).map_err(|err| {
+        ApiError::BadRequest("invalid_wire_input", format!("wire decode failed: {err:?}"))
+    })?;
     if input.return_leaves.len() != 1 {
         return Err(ApiError::BadRequest(
+            "unsupported_batch_shape",
             "service intake currently expects one return leaf per submitted wire input".to_string(),
         ));
     }
     if let Some(expected) = state.config.config_hash {
         if report.public_values.config_hash != expected {
-            return Err(ApiError::BadRequest(format!(
-                "configHash mismatch: got 0x{}, expected 0x{}",
-                hex::encode(report.public_values.config_hash),
-                hex::encode(expected),
-            )));
+            return Err(ApiError::BadRequest(
+                "config_hash_mismatch",
+                format!(
+                    "configHash mismatch: got 0x{}, expected 0x{}",
+                    hex::encode(report.public_values.config_hash),
+                    hex::encode(expected),
+                ),
+            ));
         }
     }
     let nullifier = input.return_leaves[0].nullifier;
@@ -119,6 +130,11 @@ async fn create_return(
         return_id: record.return_id,
         nullifier: record.nullifier,
         status: record.status,
+        terminal: record.terminal,
+        success: record.success,
+        progress: record.progress,
+        message: record.message,
+        next_poll_ms: record.next_poll_ms,
         duplicate: !inserted,
     }))
 }
@@ -132,8 +148,10 @@ async fn get_return(
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error("{1}")]
+    BadRequest(&'static str, String),
     #[error("{0}")]
-    BadRequest(String),
+    PrecheckRejected(String),
     #[error("{0}")]
     Host(#[from] bridge_return_host::HostError),
     #[error("{0}")]
@@ -145,19 +163,37 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self {
-            ApiError::BadRequest(_) | ApiError::Host(_) | ApiError::Queue(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            ApiError::BadRequest(_, _)
+            | ApiError::PrecheckRejected(_)
+            | ApiError::Host(_)
+            | ApiError::Queue(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
         };
-        let body = Json(serde_json::json!({ "error": self.to_string() }));
+        let code = match &self {
+            ApiError::BadRequest(code, _) => *code,
+            ApiError::PrecheckRejected(_) => "precheck_rejected",
+            ApiError::Host(_) => "host_error",
+            ApiError::Queue(_) => "queue_closed",
+            ApiError::NotFound(_) => "not_found",
+        };
+        let recoverable = matches!(
+            &self,
+            ApiError::PrecheckRejected(_) | ApiError::Queue(_) | ApiError::Host(_)
+        );
+        let body = Json(serde_json::json!({
+            "error": {
+                "code": code,
+                "message": self.to_string(),
+                "recoverable": recoverable
+            }
+        }));
         (status, body).into_response()
     }
 }
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, ApiError> {
     hex::decode(input.strip_prefix("0x").unwrap_or(input))
-        .map_err(|err| ApiError::BadRequest(format!("invalid wireInput hex: {err}")))
+        .map_err(|err| ApiError::BadRequest("invalid_hex", format!("invalid wireInput hex: {err}")))
 }
 
 fn return_id(public_values_digest: &[u8; 32], nullifier: &[u8; 32]) -> String {
