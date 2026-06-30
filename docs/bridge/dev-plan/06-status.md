@@ -48,12 +48,14 @@ Tracks the implementation of [`06-wallet-bridge-integration.md`](./06-wallet-bri
    Bridge in: approve + lock (TronLink prompts) → mint → spendable "USDT (bridged ·
    Tron)" with the badge.
 
-## ⚠ reason_tag (39048 vs 39050)
-The live Nile vault `TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a` is **reason_tag 39050**
-(its on-chain `config_hash e06d52d9…`). Commit `3dcd2a7` moved the canonical tag to
-**39048** in the generic `bridge-vectors`/Rust/deploy-script but never redeployed.
-The wallet manifest + `nile-usdt.json` therefore track the live vault (**39050**) so
-the demo works now. To move to 39048: run `contracts/tron/scripts/deploy-nile.js`
-(already 39048) and update `NILE_USDT_BRIDGE` (vault + configHash) from the new
-deployment. (config_hash binds the self-stamped vault address, so it's only known
-after deploy.)
+## reason_tag 39048 (live)
+39050 collides with `SpherePaymentData.CBOR_TAG`, so the canonical tag is **39048**.
+The Nile vault was redeployed at 39048 (2026-06-30):
+- vault **`TD89z57Xksziu3uk24qfjT27bJmeWLgjtk`** (real SP1 verifier
+  `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR`, R6 false-tolerant safe-transfer, push-payment)
+- on-chain `CONFIG_HASH 0x594546ae7e114b8c5674b793234a45f72eca7727aa25b0f605200ebf3cae4b93`
+  == TS == Rust (cross-stack freeze verified; prover `nile_config` test green).
+
+`NILE_USDT_BRIDGE`, `bridges.nile.json`, `nile-usdt.json` and the prover guard all
+point at this vault. The old 39050 vault `TNXx9Pv6…` is retired. A heavy vault deploy
+needs ~1.42M energy (≈600+ TRX or staked energy) — fund the `TRON_SK` deployer first.
