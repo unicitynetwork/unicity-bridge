@@ -32,6 +32,14 @@ use unicity_token::transaction::Token;
 
 use crate::{HostError, Result};
 
+#[derive(Clone)]
+pub struct CertifiedBurnInput {
+    pub token: Token,
+    pub trust_base: RootTrustBase,
+    pub lock_justification_tag: u64,
+    pub leaf: ReturnLeaf,
+}
+
 /// Full cryptographic verification of a live, aggregator-**certified** burned
 /// token — each transition carries its own `UnicityCertificate`, as served by a
 /// real aggregator — returning the source bridge-lock obligations as
@@ -163,28 +171,80 @@ pub fn build_certified_guest_input(
     lock_justification_tag: u64,
     leaf: ReturnLeaf,
 ) -> Result<GuestInput> {
-    let mut sorted_lock_refs =
-        verify_certified_burn(&token, &trust_base, &config, lock_justification_tag)?;
+    build_certified_guest_input_batch(
+        config,
+        vec![CertifiedBurnInput {
+            token,
+            trust_base,
+            lock_justification_tag,
+            leaf,
+        }],
+    )
+}
+
+/// Assemble a multi-burn [`GuestInput`] for **certified** live tokens (each
+/// transition carries its own `UnicityCertificate`). This is the batching
+/// counterpart to [`build_certified_guest_input`]: it verifies each token, builds
+/// one ordered nullifier-accumulator transition over the submitted leaves, sorts
+/// source lock refs by nonce, and derives the batch public values.
+///
+/// The current guest public values commit to one `trust_base_hash`, so all burns
+/// in a certified batch must verify against the same trust base.
+pub fn build_certified_guest_input_batch(
+    config: BridgeConfig,
+    burns: Vec<CertifiedBurnInput>,
+) -> Result<GuestInput> {
+    if burns.is_empty() {
+        return Err(HostError::Check(
+            "certified guest input batch is empty".to_string(),
+        ));
+    }
+
+    let mut sorted_lock_refs = Vec::with_capacity(burns.len());
+    let trust_base_hash = canonical_hash(&burns[0].trust_base);
+    for burn in &burns {
+        let burn_trust_base_hash = canonical_hash(&burn.trust_base);
+        if burn_trust_base_hash != trust_base_hash {
+            return Err(HostError::Check(
+                "certified guest input batch mixes trust bases".to_string(),
+            ));
+        }
+        sorted_lock_refs.extend(verify_certified_burn(
+            &burn.token,
+            &burn.trust_base,
+            &config,
+            burn.lock_justification_tag,
+        )?);
+    }
     sorted_lock_refs.sort_by_key(|r| r.nonce);
 
     let tree = NullifierTree::new();
-    let (accumulator_witnesses, spent_root_new) =
-        ordered_insert_witnesses(&tree, &[leaf.nullifier]).map_err(|err| {
-            HostError::Check(format!("accumulator witness build failed: {err:?}"))
-        })?;
-    let leaves = vec![leaf];
+    let leaves = burns.iter().map(|burn| burn.leaf).collect::<Vec<_>>();
+    let nullifiers = leaves.iter().map(|leaf| leaf.nullifier).collect::<Vec<_>>();
+    let (accumulator_witnesses, spent_root_new) = ordered_insert_witnesses(&tree, &nullifiers)
+        .map_err(|err| HostError::Check(format!("accumulator witness build failed: {err:?}")))?;
     let public_values = PublicValues {
         domain_tag: domain_tag(),
         config_hash: config_hash(&config),
-        trust_base_hash: canonical_hash(&trust_base),
+        trust_base_hash,
         spent_root_old: tree.root(),
         spent_root_new,
         return_root: return_root(&leaves),
         lock_ref_root: lock_ref_root(&sorted_lock_refs)
             .map_err(|err| HostError::Check(format!("lock ref root: {err:?}")))?,
-        batch_size: 1,
+        batch_size: u32::try_from(leaves.len())
+            .map_err(|_| HostError::Check("certified batch too large".to_string()))?,
         total_amount: sum_amounts(&leaves),
     };
+    let bridge_burns = burns
+        .into_iter()
+        .map(|burn| BridgeBurnWitness {
+            token: burn.token,
+            trust_base: burn.trust_base,
+            verification: BurnVerification::Certified,
+            lock_justification_tag: burn.lock_justification_tag,
+        })
+        .collect();
     Ok(GuestInput {
         config,
         public_values,
@@ -192,12 +252,7 @@ pub fn build_certified_guest_input(
         sorted_lock_refs,
         witness: RelationWitness {
             accumulator_witnesses,
-            bridge_burns: vec![BridgeBurnWitness {
-                token,
-                trust_base,
-                verification: BurnVerification::Certified,
-                lock_justification_tag,
-            }],
+            bridge_burns,
         },
     })
 }

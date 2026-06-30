@@ -6,7 +6,9 @@ use bridge_return_guest::wire;
 use bridge_return_host::fixture::{
     build_b1_direct_bridge_fixture, build_b2_direct_bridge_fixture, build_split_bridge_fixture,
 };
-use bridge_return_host::s1::{precheck_wire, WitnessPackage};
+use bridge_return_host::s1::{
+    build_certified_guest_input_batch, precheck_wire, CertifiedBurnInput, WitnessPackage,
+};
 
 #[test]
 fn precheck_accepts_b1() {
@@ -66,4 +68,36 @@ fn precheck_rejects_truncated_wire() {
     let mut wire_input = wire::encode_guest_input(&input);
     wire_input.truncate(wire_input.len() - 1);
     assert!(precheck_wire(&wire_input).is_err());
+}
+
+#[test]
+fn certified_batch_builder_accepts_b2() {
+    let anchored = build_b2_direct_bridge_fixture();
+    let burns = anchored
+        .witness
+        .bridge_burns
+        .iter()
+        .zip(anchored.return_leaves.iter())
+        .map(|(burn, leaf)| CertifiedBurnInput {
+            token: burn.token.clone(),
+            trust_base: burn.trust_base.clone(),
+            lock_justification_tag: burn.lock_justification_tag,
+            leaf: *leaf,
+        })
+        .collect();
+
+    let certified = build_certified_guest_input_batch(anchored.config, burns)
+        .expect("certified B=2 guest input");
+    let report = WitnessPackage::new(certified)
+        .precheck()
+        .expect("certified B=2 precheck");
+    assert_eq!(report.batch_size, 2);
+    assert_eq!(
+        report.public_values.return_root,
+        anchored.public_values.return_root
+    );
+    assert_eq!(
+        report.public_values.total_amount,
+        anchored.public_values.total_amount
+    );
 }
