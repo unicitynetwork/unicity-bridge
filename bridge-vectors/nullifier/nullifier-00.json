@@ -1,5 +1,5 @@
 {
   "description": "(stateId, txHash, configHash) -> burnTransitionId, nullifier (00 §5); H = SHA-256 over CBOR array",
-  "in": { "state_id": "0xa7774a17e73d13a95f2bb51000db100dafb964cab3f82292531e23d76bfe6274", "tx_hash": "0xe7f9e3cd8a655396943da9122db3a0244a70e6d9c8c630447065ca4796e5d547", "config_hash": "0xa8ac3a99580f13ce51dfd59e8aa319feb6e2a960ea743479b740ec21de017a95" },
-  "out": { "burn_transition_id": "0x8db705269771b14978cacc961e27a5f48083568fdb55345fb3dcae35e4b07b7e", "nullifier": "0xc1c131718a3839273d1bc3795e7210c080f2bb792c245e5019282e3166e2ed1a" }
+  "in": { "state_id": "0xa7774a17e73d13a95f2bb51000db100dafb964cab3f82292531e23d76bfe6274", "tx_hash": "0xe7f9e3cd8a655396943da9122db3a0244a70e6d9c8c630447065ca4796e5d547", "config_hash": "0x37a65e2528318456d13bf35858e22270e1b9128151702a4556469e4f2ac183ce" },
+  "out": { "burn_transition_id": "0x8db705269771b14978cacc961e27a5f48083568fdb55345fb3dcae35e4b07b7e", "nullifier": "0xcdc7e9203933223346f2f693fa7d2b9a10c9cd35fa82e6b41ada0dd4b7133909" }
 }

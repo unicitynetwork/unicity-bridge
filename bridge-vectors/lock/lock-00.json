@@ -1,5 +1,5 @@
 {
   "description": "LockRecord -> recipientCommitment + lockDigest (00 §3); lockDigest = keccak256(abi.encode(...))",
-  "in": { "nonce": 7, "amount": "0x00000000000000000000000000000000000000000000000000000000000f4240", "unicity_token_id": "0x730cc92ee0fa6ec313f59967f58e87d47fcbdbe7d081c1d42133f3d07c863a75", "recipient_cbor": "0xa201582103", "config_hash": "0xa8ac3a99580f13ce51dfd59e8aa319feb6e2a960ea743479b740ec21de017a95" },
+  "in": { "nonce": 7, "amount": "0x00000000000000000000000000000000000000000000000000000000000f4240", "unicity_token_id": "0x730cc92ee0fa6ec313f59967f58e87d47fcbdbe7d081c1d42133f3d07c863a75", "recipient_cbor": "0xa201582103", "config_hash": "0x37a65e2528318456d13bf35858e22270e1b9128151702a4556469e4f2ac183ce" },
   "out": { "recipient_commitment": "0x50e90a6193b9b714d2f1dd879da6793506b63e9ec356ac077fccaf650b799b19", "lock_digest": "0x386777841a2fec83c19627a4171aeed7059b5b181f436ae0a63424691a9c336f" }
 }

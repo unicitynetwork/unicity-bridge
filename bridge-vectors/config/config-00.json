@@ -1,5 +1,5 @@
 {
   "description": "config -> tokenType/coinId + configHash (00 §2); configHash = keccak256(abi.encode(...))",
   "in": { "source_chain_id": 728126428, "chain_id_str": "728126428", "asset_evm_hex": "a614f803b6fd780986a42c78ec9c7f77e6ded13c", "vault": "0x00000000000000000000000000000000000000a1", "asset": "0xa614f803b6fd780986a42c78ec9c7f77e6ded13c", "reason_tag": 39048, "lock_domain": "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932", "nullifier_domain": "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d" },
-  "out": { "token_type": "0xfd58cc8c3a8f61465cc6cef34bac939a8df0a2126884f017f0a1054c72a9161e", "coin_id": "0x16fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b", "config_hash": "0xa8ac3a99580f13ce51dfd59e8aa319feb6e2a960ea743479b740ec21de017a95" }
+  "out": { "token_type": "0xfd58cc8c3a8f61465cc6cef34bac939a8df0a2126884f017f0a1054c72a9161e", "coin_id": "0x16fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b", "config_hash": "0x37a65e2528318456d13bf35858e22270e1b9128151702a4556469e4f2ac183ce" }
 }
