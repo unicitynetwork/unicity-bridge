@@ -39,8 +39,7 @@ test('loadBridges resolves the Nile manifest (internal consistency + stable ids)
   assert.equal('0x' + loaded.plugin.resolvedConfig.assetContractHex, c.asset, 'asset');
 
   // The integrity pin: the derived configHash equals the manifest's declared one
-  // (loadBridges throws otherwise). The vault address is the current 39048 deploy,
-  // not the frozen 39050 reference, so configHash is the manifest's own value.
+  // (loadBridges throws otherwise) — the live 39048 vault TD89z57….
   assert.equal(toHex(loaded.configHash), NILE_USDT_BRIDGE.configHash, 'configHash internal-consistent');
   assert.equal(loaded.bridgeConfig.reasonTag, 39048n, 'reason_tag 39048');
 });

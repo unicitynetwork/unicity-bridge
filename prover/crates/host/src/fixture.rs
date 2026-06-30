@@ -1129,7 +1129,7 @@ fn core_config() -> BridgeConfig {
         asset: h20("a614f803b6fd780986a42c78ec9c7f77e6ded13c"),
         token_type: h32("fd58cc8c3a8f61465cc6cef34bac939a8df0a2126884f017f0a1054c72a9161e"),
         coin_id: h32("16fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b"),
-        reason_tag: 39_050,
+        reason_tag: 39_048,
         lock_domain: h32("158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932"),
         nullifier_domain: h32("d4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d"),
     }
