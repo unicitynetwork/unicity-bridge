@@ -19,6 +19,9 @@ This README is the map. The detail lives in four sibling documents:
 | [`03-prover-service.md`](./03-prover-service.md) | The zk relation (guest circuit) and the off-chain prover pipeline | Rust + SP1 (zkVM) |
 | [`04-deployment.md`](./04-deployment.md) | Nile testnet deployment runbook (verifier + vault) and the on-chain proof smoke | TronWeb / Hardhat |
 | [`05-cost-analysis.md`](./05-cost-analysis.md) | Tron mainnet tx-fee + proving-fee cost model (grounded in measured energy) | analysis |
+| [`integration.md`](./integration.md) | Design: wallet bridge UX (Sphere) + the return sequencing/proving service; the resolved cross-cutting decisions | design |
+| [`06-wallet-bridge-integration.md`](./06-wallet-bridge-integration.md) | Dev plan: surface bridge in/out in the real Sphere UI (TronLink-first, plugin-owned logic) | TypeScript / React |
+| [`07-return-service.md`](./07-return-service.md) | Dev plan: the off-chain S1–S4 pipeline as one all-Rust, self-hosted, disposable service | Rust + SP1 |
 
 ## What the bridge does
 
