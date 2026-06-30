@@ -16,6 +16,21 @@ pub struct ReturnStore {
 struct StoreInner {
     by_id: HashMap<String, ReturnRecord>,
     by_nullifier: HashMap<String, String>,
+    batches: HashMap<String, BatchBundle>,
+}
+
+/// A proven batch's published on-chain bundle (§B4 `/batches/:id`) — anyone can
+/// submit `publicValues`+`proofBytes` to the vault's `fulfillBatch`. `settle_txid`
+/// fills once S4 lands it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchBundle {
+    pub batch_id: String,
+    pub mode: String,
+    pub vkey: Option<String>,
+    pub public_values: String,
+    pub proof_bytes: String,
+    pub settle_txid: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -47,6 +62,7 @@ pub struct ReturnFailure {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReturnEvent {
     pub at_ms: u128,
     pub status: ReturnStatus,
@@ -55,6 +71,7 @@ pub struct ReturnEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReturnRecord {
     pub return_id: String,
     pub nullifier: String,
@@ -65,6 +82,8 @@ pub struct ReturnRecord {
     pub message: String,
     pub next_poll_ms: u64,
     pub batch_id: Option<String>,
+    /// `fulfillBatch` txid once S4 settles (denormalized from the batch for the wallet).
+    pub settle_txid: Option<String>,
     pub failure: Option<ReturnFailure>,
     pub events: Vec<ReturnEvent>,
     pub batch_size: u32,
@@ -78,6 +97,7 @@ pub struct ReturnRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicValuesHex {
     pub domain_tag: String,
     pub config_hash: String,
@@ -118,6 +138,60 @@ impl ReturnStore {
             .by_id
             .get(id)
             .cloned()
+    }
+
+    /// Lookup by nullifier (`0x…` hex, case-insensitive) — wallet idempotency.
+    pub fn get_by_nullifier(&self, nullifier: &str) -> Option<ReturnRecord> {
+        let key = nullifier.to_lowercase();
+        let guard = self.inner.read().expect("store poisoned");
+        guard
+            .by_nullifier
+            .get(&key)
+            .and_then(|id| guard.by_id.get(id).cloned())
+    }
+
+    /// Persist a proven batch's published bundle (idempotent on batch id).
+    pub fn put_batch(&self, bundle: BatchBundle) {
+        self.inner
+            .write()
+            .expect("store poisoned")
+            .batches
+            .insert(bundle.batch_id.clone(), bundle);
+    }
+
+    pub fn get_batch(&self, batch_id: &str) -> Option<BatchBundle> {
+        self.inner
+            .read()
+            .expect("store poisoned")
+            .batches
+            .get(batch_id)
+            .cloned()
+    }
+
+    /// Record the settle txid on a batch (S4) — surfaced on `/batches/:id`.
+    pub fn set_batch_settle_txid(&self, batch_id: &str, txid: String) {
+        if let Some(b) = self
+            .inner
+            .write()
+            .expect("store poisoned")
+            .batches
+            .get_mut(batch_id)
+        {
+            b.settle_txid = Some(txid);
+        }
+    }
+
+    /// Record the settle txid on a return record (denormalized for the wallet).
+    pub fn set_return_settle_txid(&self, id: &str, txid: String) {
+        if let Some(r) = self
+            .inner
+            .write()
+            .expect("store poisoned")
+            .by_id
+            .get_mut(id)
+        {
+            r.settle_txid = Some(txid);
+        }
     }
 
     pub fn queued(&self) -> Vec<ReturnRecord> {
@@ -179,6 +253,7 @@ impl ReturnRecord {
             message: "Burn prechecked and queued for the next proving batch".to_string(),
             next_poll_ms: 5_000,
             batch_id: None,
+            settle_txid: None,
             failure: None,
             events: vec![
                 ReturnEvent {

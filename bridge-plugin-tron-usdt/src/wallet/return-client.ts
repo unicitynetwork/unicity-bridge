@@ -8,39 +8,67 @@
 import { toHex } from '../hex.js';
 import type { WitnessRequest } from '../bridge-back/burn.js';
 
-/** Lifecycle of a submitted return (07 §B4). */
-export type ReturnStatus = 'queued' | 'proving' | 'submitted' | 'settled' | 'failed' | 'stale';
+/** Lifecycle of a submitted return (07 §B4 — matches the service's status enum). */
+export type ReturnStatus =
+  | 'queued'
+  | 'proving'
+  | 'proven'
+  | 'submitted'
+  | 'settled'
+  | 'failed';
 
-/** A return record as the service reports it. */
+/** Typed failure detail (service `failure` object). */
+export interface ReturnFailure {
+  readonly kind: string;
+  readonly message: string;
+  readonly recoverable: boolean;
+}
+
+/** A return record as the service reports it (camelCase, `/returns/:id`). */
 export interface ReturnRecord {
   readonly returnId: string;
   /** 32-byte nullifier (hex) — the wallet's idempotency key. */
   readonly nullifier: string;
   readonly status: ReturnStatus;
+  /** Terminal (`settled`/`failed`) — stop polling. */
+  readonly terminal?: boolean;
+  readonly success?: boolean | null;
+  /** 0–100 coarse progress for the UI. */
+  readonly progress?: number;
+  /** Human status message. */
+  readonly message?: string;
+  /** Suggested next poll delay (ms); 0 when terminal. */
+  readonly nextPollMs?: number;
   /** Batch the return landed in, once sequenced. */
   readonly batchId?: string;
-  /** `fulfillBatch` txid, on settle. */
+  /** `fulfillBatch` txid, on settle (denormalized from the batch). */
   readonly settleTxid?: string;
-  /** Free-text reason for `failed`/`stale`. */
-  readonly reason?: string;
+  /** Typed failure detail for `failed`. */
+  readonly failure?: ReturnFailure;
+  /** True only on the `POST /returns` response when the nullifier was already known. */
+  readonly duplicate?: boolean;
 }
 
 /** `/health` snapshot (07 §B4) — used for batch-ETA + ops display. */
 export interface ReturnServiceHealth {
-  readonly proverBusy: boolean;
+  readonly status: string;
   readonly queueDepth: number;
-  readonly lastBatchId?: string;
-  readonly lastProofSeconds?: number;
-  readonly gasBalanceSun?: string;
+  /** The batch currently proving, if any. */
+  readonly activeBatch?: string | null;
+  readonly batchTarget: number;
+  readonly maxWaitMs: number;
+  /** `PrecheckOnly` | `Sp1Groth16`. */
+  readonly proveMode: string;
 }
 
 /** The published on-chain bundle (07 §B4) — anyone can self-submit it. */
 export interface BatchBundle {
   readonly batchId: string;
-  readonly vkey: string;
+  readonly mode: string;
+  readonly vkey?: string | null;
   readonly publicValues: string;
   readonly proofBytes: string;
-  readonly settleTxid?: string;
+  readonly settleTxid?: string | null;
 }
 
 export interface ReturnServiceClientOptions {

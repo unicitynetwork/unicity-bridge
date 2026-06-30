@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, Mutex};
 use crate::{
     prover::Prover,
     store::{ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
+    submitter::Submitter,
 };
 
 #[derive(Clone)]
@@ -51,6 +52,7 @@ impl QueueHandle {
 pub fn spawn(
     store: ReturnStore,
     prover: Prover,
+    submitter: Submitter,
     batch_target: usize,
     max_wait: Duration,
 ) -> QueueHandle {
@@ -62,6 +64,7 @@ pub fn spawn(
         worker_state,
         store,
         prover,
+        submitter,
         batch_target.max(1),
         max_wait,
     ));
@@ -73,6 +76,7 @@ async fn worker_loop(
     state: Arc<Mutex<QueueState>>,
     store: ReturnStore,
     prover: Prover,
+    submitter: Submitter,
     batch_target: usize,
     max_wait: Duration,
 ) {
@@ -114,7 +118,7 @@ async fn worker_loop(
             continue;
         }
 
-        prove_single_flight(ids, &state, &store, &prover).await;
+        prove_single_flight(ids, &state, &store, &prover, &submitter).await;
     }
 }
 
@@ -123,6 +127,7 @@ async fn prove_single_flight(
     state: &Arc<Mutex<QueueState>>,
     store: &ReturnStore,
     prover: &Prover,
+    submitter: &Submitter,
 ) {
     let batch_id = batch_id(&ids);
     state.lock().await.active_batch = Some(batch_id.clone());
@@ -141,9 +146,21 @@ async fn prove_single_flight(
             .prove(batch_id.clone(), record.wire_input.clone())
             .await
         {
-            Ok(_) => {
+            Ok(bundle) => {
+                // Publish the bundle (self-settle source, §B4) before advancing.
+                store.put_batch(crate::store::BatchBundle {
+                    batch_id: batch_id.clone(),
+                    mode: bundle.mode.clone(),
+                    vkey: bundle.vkey_hash.clone(),
+                    public_values: format!("0x{}", hex::encode(&bundle.public_values)),
+                    proof_bytes: format!("0x{}", hex::encode(&bundle.proof_bytes)),
+                    settle_txid: None,
+                });
                 let _ =
                     store.update_status(&id, ReturnStatus::Proven, Some(batch_id.clone()), None);
+                // S4: submit fulfillBatch → submitted → settled (or stop at proven
+                // when no submitter is configured — the bundle is self-settleable).
+                submit_batch(&submitter, store, &batch_id, &id, &bundle).await;
             }
             Err(err) => {
                 let _ = store.update_status(
@@ -159,6 +176,36 @@ async fn prove_single_flight(
         }
     }
     state.lock().await.active_batch = None;
+}
+
+/// Drive proven → submitted → settled via the configured {Submitter} (S4). With
+/// no submitter the return stays `proven` — the published bundle is self-settleable
+/// by anyone (the principal is never stuck; 06 §A1.2).
+async fn submit_batch(
+    submitter: &crate::submitter::Submitter,
+    store: &ReturnStore,
+    batch_id: &str,
+    id: &str,
+    bundle: &crate::prover::ProofBundle,
+) {
+    use crate::submitter::SubmitOutcome;
+    match submitter.submit(batch_id, bundle).await {
+        SubmitOutcome::Skipped => {}
+        SubmitOutcome::Submitted { txid } => {
+            store.set_batch_settle_txid(batch_id, txid.clone());
+            store.set_return_settle_txid(id, txid);
+            let _ = store.update_status(id, ReturnStatus::Submitted, Some(batch_id.to_string()), None);
+            let _ = store.update_status(id, ReturnStatus::Settled, Some(batch_id.to_string()), None);
+        }
+        SubmitOutcome::Failed { message } => {
+            let _ = store.update_status(
+                id,
+                ReturnStatus::Failed,
+                Some(batch_id.to_string()),
+                Some(ReturnFailure::recoverable(ErrorKind::SubmissionFailed, message)),
+            );
+        }
+    }
 }
 
 fn batch_id(ids: &[String]) -> String {

@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
 use bridge_return_service::{
-    config::ServiceConfig, prover::Prover, queue, router, store::ReturnStore, AppState,
+    config::ServiceConfig, load_intake, prover::Prover, queue, router, store::ReturnStore,
+    submitter::Submitter, AppState,
 };
 use tower_http::trace::TraceLayer;
 
@@ -16,10 +17,22 @@ async fn main() {
         std::process::exit(2);
     });
     let bind: SocketAddr = config.bind;
+    let intake = load_intake(&config).unwrap_or_else(|err| {
+        eprintln!("envelope intake disabled: {err}");
+        None
+    });
+    if intake.is_some() {
+        tracing::info!("envelope intake enabled (deployment config + trust base loaded)");
+    } else {
+        tracing::warn!("envelope intake disabled — only wireInput submissions accepted");
+    }
     let store = ReturnStore::default();
+    let submitter = Submitter::from_env();
+    tracing::info!("S4 submitter: {}", submitter.label());
     let queue = queue::spawn(
         store.clone(),
         Prover::new(config.clone()),
+        submitter,
         config.batch_target,
         config.max_wait,
     );
@@ -27,6 +40,7 @@ async fn main() {
         config,
         store,
         queue,
+        intake,
     })
     .layer(TraceLayer::new_for_http());
 

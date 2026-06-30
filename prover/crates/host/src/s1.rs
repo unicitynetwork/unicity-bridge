@@ -14,13 +14,14 @@
 //! precheck gate those services feed into.
 
 use bridge_return_core::{
-    config_hash, domain_tag, lock_ref_root, return_root, sum_amounts, BridgeConfig, PublicValues,
-    ReturnLeaf, SourceLockRef, U256,
+    burn_transition_id, config_hash, domain_tag, lock_ref_root, nullifier, return_root,
+    sum_amounts, BridgeConfig, PublicValues, ReturnLeaf, SourceLockRef, U256,
 };
 use bridge_return_guest::{
-    execute_public_output, execute_wire, wire, BridgeBurnWitness, BurnVerification, GuestInput,
-    RelationWitness,
+    decode_bridge_back_reason, execute_public_output, execute_wire, wire, BridgeBurnWitness,
+    BurnVerification, GuestInput, RelationWitness,
 };
+use unicity_token::api::StateId;
 use bridge_return_sdk_ext::accumulator::{ordered_insert_witnesses, NullifierTree};
 use bridge_return_sdk_ext::bridge::{
     bridge_lock_obligations_for_token_certified, BridgeConfig as SdkBridgeConfig,
@@ -28,7 +29,7 @@ use bridge_return_sdk_ext::bridge::{
 use bridge_return_sdk_ext::trust::canonical_hash;
 use unicity_token::api::bft::RootTrustBase;
 use unicity_token::payment::PaymentAssetCollection;
-use unicity_token::transaction::Token;
+use unicity_token::transaction::{Token, Transaction};
 
 use crate::{HostError, Result};
 
@@ -255,6 +256,141 @@ pub fn build_certified_guest_input_batch(
             bridge_burns,
         },
     })
+}
+
+/// Build a B=1 certified [`GuestInput`] from the wallet's witness **envelope**
+/// (`{tokenCbor, configHash, reasonBytes}` — 02 §2c). This is the service intake
+/// path: derive the settlement leaf entirely from the burned token + its
+/// `reasonBytes` (no leaf is sent over the wire), then hand off to
+/// [`build_certified_guest_input`]. The nullifier is recomputed from the token's
+/// terminal burn under `config` (00 §5); the recipient/amount/fee/deadline come
+/// from decoding `reasonBytes` (00 §4). The relation re-checks both, so a forged
+/// leaf cannot pass.
+pub fn build_certified_guest_input_from_envelope(
+    config: BridgeConfig,
+    trust_base: RootTrustBase,
+    lock_justification_tag: u64,
+    token: Token,
+    reason_bytes: &[u8],
+) -> Result<GuestInput> {
+    let burn = token
+        .transactions()
+        .last()
+        .ok_or_else(|| HostError::Check("token has no terminal burn".to_string()))?
+        .transaction();
+    let state_id = StateId::derive(burn.lock_script(), burn.source_state_hash());
+    let tx_hash: [u8; 32] = burn
+        .calculate_transaction_hash()
+        .data()
+        .try_into()
+        .map_err(|_| HostError::Check("terminal burn tx hash is not 32 bytes".to_string()))?;
+    let cfg_hash = config_hash(&config);
+    let burn_id = burn_transition_id(state_id.bytes(), &tx_hash);
+    let null = nullifier(&cfg_hash, &burn_id);
+
+    let reason = decode_bridge_back_reason(config.reason_tag, reason_bytes)
+        .map_err(|err| HostError::Check(format!("reasonBytes decode failed: {err:?}")))?;
+    let leaf = ReturnLeaf {
+        nullifier: null,
+        recipient: reason.recipient,
+        amount: reason.amount,
+        fee_recipient: reason.fee_recipient,
+        fee_amount: reason.fee_amount,
+        deadline: reason.deadline,
+    };
+    build_certified_guest_input(config, token, trust_base, lock_justification_tag, leaf)
+}
+
+/// A configured intake context: the deployment [`BridgeConfig`] + the trust base
+/// the burned token must verify against + the source lock-justification tag. Built
+/// once at service startup; turns a wallet witness envelope into the wire input a
+/// prover consumes. Keeps `unicity_token` types off the service's surface.
+pub struct EnvelopeIntake {
+    config: BridgeConfig,
+    trust_base: RootTrustBase,
+    lock_justification_tag: u64,
+}
+
+impl EnvelopeIntake {
+    /// Load from a frozen deployment-config JSON (the `config` block of
+    /// `bridge-vectors/deployment/<net>.json`, or a bare config object) + a trust
+    /// base JSON. `lock_justification_tag` is the source chain's lock tag (Tron
+    /// USDT = `1330002`).
+    pub fn from_json(
+        deployment_json: &str,
+        trust_base_json: &str,
+        lock_justification_tag: u64,
+    ) -> Result<Self> {
+        let doc: serde_json::Value = serde_json::from_str(deployment_json)
+            .map_err(|e| HostError::Check(format!("deployment config json: {e}")))?;
+        let c = doc.get("config").unwrap_or(&doc);
+        let config = bridge_config_from_json(c)?;
+        let trust_base = RootTrustBase::from_json(trust_base_json)
+            .map_err(|e| HostError::Check(format!("trust base json: {e}")))?;
+        Ok(Self {
+            config,
+            trust_base,
+            lock_justification_tag,
+        })
+    }
+
+    /// The deployment `config_hash` this intake binds (cross-check vs the envelope).
+    pub fn config_hash(&self) -> [u8; 32] {
+        config_hash(&self.config)
+    }
+
+    /// Build the certified guest **wire input** from the wallet envelope
+    /// (`tokenCbor` + `reasonBytes`). Fully verifies the burned token against the
+    /// trust base and derives the settlement leaf (00 §4/§5).
+    pub fn build_wire_input(&self, token_cbor: &[u8], reason_bytes: &[u8]) -> Result<Vec<u8>> {
+        let token = Token::from_cbor(token_cbor)
+            .map_err(|e| HostError::Check(format!("token decode: {e}")))?;
+        let input = build_certified_guest_input_from_envelope(
+            self.config,
+            self.trust_base.clone(),
+            self.lock_justification_tag,
+            token,
+            reason_bytes,
+        )?;
+        Ok(wire::encode_guest_input(&input))
+    }
+}
+
+fn bridge_config_from_json(c: &serde_json::Value) -> Result<BridgeConfig> {
+    Ok(BridgeConfig {
+        source_chain_id: json_u64(c, "source_chain_id")?,
+        vault: json_addr(c, "vault")?,
+        asset: json_addr(c, "asset")?,
+        token_type: json_b32(c, "token_type")?,
+        coin_id: json_b32(c, "coin_id")?,
+        reason_tag: json_u64(c, "reason_tag")?,
+        lock_domain: json_b32(c, "lock_domain")?,
+        nullifier_domain: json_b32(c, "nullifier_domain")?,
+    })
+}
+
+fn json_u64(c: &serde_json::Value, key: &str) -> Result<u64> {
+    c[key]
+        .as_u64()
+        .ok_or_else(|| HostError::Check(format!("deployment config: missing/invalid u64 `{key}`")))
+}
+
+fn json_hex<const N: usize>(c: &serde_json::Value, key: &str) -> Result<[u8; N]> {
+    let s = c[key]
+        .as_str()
+        .ok_or_else(|| HostError::Check(format!("deployment config: missing string `{key}`")))?;
+    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s))
+        .map_err(|e| HostError::Check(format!("deployment config `{key}` hex: {e}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| HostError::Check(format!("deployment config `{key}` wrong length")))
+}
+
+fn json_addr(c: &serde_json::Value, key: &str) -> Result<[u8; 20]> {
+    json_hex::<20>(c, key)
+}
+fn json_b32(c: &serde_json::Value, key: &str) -> Result<[u8; 32]> {
+    json_hex::<32>(c, key)
 }
 
 /// Decode a wire payload into a [`WitnessPackage`] and precheck it. Useful as a

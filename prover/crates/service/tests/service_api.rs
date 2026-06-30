@@ -6,7 +6,8 @@ use axum::{
 };
 use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
 use bridge_return_service::{
-    config::ServiceConfig, prover::Prover, queue, router, store::ReturnStore, AppState,
+    config::ServiceConfig, prover::Prover, queue, router, store::ReturnStore, submitter::Submitter,
+    AppState,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -21,6 +22,7 @@ fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
     let queue = queue::spawn(
         store.clone(),
         Prover::new(config.clone()),
+        Submitter::none(),
         config.batch_target,
         config.max_wait,
     );
@@ -28,6 +30,7 @@ fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
         config,
         store,
         queue,
+        intake: None,
     })
 }
 
@@ -74,8 +77,8 @@ async fn post_return_prechecks_enqueues_and_is_idempotent() {
     assert_eq!(created["terminal"], false);
     assert_eq!(created["success"], Value::Null);
     assert_eq!(created["progress"], 20);
-    assert_eq!(created["next_poll_ms"], 5000);
-    let id = created["return_id"].as_str().unwrap();
+    assert_eq!(created["nextPollMs"], 5000);
+    let id = created["returnId"].as_str().unwrap();
 
     let response = app
         .clone()
@@ -93,7 +96,7 @@ async fn post_return_prechecks_enqueues_and_is_idempotent() {
         .unwrap();
     let duplicate: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(duplicate["duplicate"], true);
-    assert_eq!(duplicate["return_id"].as_str().unwrap(), id);
+    assert_eq!(duplicate["returnId"].as_str().unwrap(), id);
 
     tokio::time::sleep(Duration::from_millis(60)).await;
     wait_status(&app, id, "proven").await;
@@ -131,6 +134,58 @@ async fn queue_closes_when_batch_target_is_reached() {
     wait_status(&app, second.as_str(), "proven").await;
 }
 
+#[tokio::test]
+async fn nullifier_lookup_and_unknown_batch_404() {
+    let app = app(Duration::from_secs(60), 1);
+    let wire =
+        bridge_return_guest::wire::encode_guest_input(&build_b1_direct_bridge_fixture().input);
+    let body = serde_json::json!({ "wireInput": format!("0x{}", hex::encode(wire)) }).to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/returns")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["returnId"].as_str().unwrap().to_string();
+    let nullifier = created["nullifier"].as_str().unwrap().to_string();
+
+    // GET /returns?nullifier= resolves to the same record (wallet idempotency).
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/returns?nullifier={nullifier}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let found: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(found["returnId"].as_str().unwrap(), id);
+
+    // An unknown batch is a clean 404.
+    let response = app
+        .oneshot(
+            Request::get("/batches/0xdeadbeef")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -> String {
     let wire = bridge_return_guest::wire::encode_guest_input(&input);
     let body = serde_json::json!({ "wireInput": format!("0x{}", hex::encode(wire)) }).to_string();
@@ -149,7 +204,7 @@ async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -
         .await
         .unwrap();
     let created: Value = serde_json::from_slice(&bytes).unwrap();
-    created["return_id"].as_str().unwrap().to_string()
+    created["returnId"].as_str().unwrap().to_string()
 }
 
 async fn assert_status(app: &axum::Router, id: &str, status: &str) {

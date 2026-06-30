@@ -264,22 +264,28 @@ fn validate_terminal_burn(
     Ok(())
 }
 
+/// The 11-field `BridgeBackReason` decoded from a burn's auxiliary data (00 §4).
+/// Exposed so the host/service can derive a `ReturnLeaf` from a burned token's
+/// `reasonBytes` (the wallet's witness envelope carries only the bytes).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DecodedBridgeBackReason {
-    version: u64,
-    source_chain_id: u64,
-    vault: [u8; 20],
-    asset: [u8; 20],
-    token_type: [u8; 32],
-    coin_id: [u8; 32],
-    recipient: [u8; 20],
-    amount: U256,
-    fee_recipient: [u8; 20],
-    fee_amount: U256,
-    deadline: u64,
+pub struct DecodedBridgeBackReason {
+    pub version: u64,
+    pub source_chain_id: u64,
+    pub vault: [u8; 20],
+    pub asset: [u8; 20],
+    pub token_type: [u8; 32],
+    pub coin_id: [u8; 32],
+    pub recipient: [u8; 20],
+    pub amount: U256,
+    pub fee_recipient: [u8; 20],
+    pub fee_amount: U256,
+    pub deadline: u64,
 }
 
-fn decode_bridge_back_reason(expected_tag: u64, bytes: &[u8]) -> Result<DecodedBridgeBackReason> {
+/// Decode canonical `reasonBytes` (tag `expected_tag`, 11-field array) — the
+/// inverse of [`bridge_return_core::reason_cbor`]. Strict: rejects a wrong tag,
+/// wrong arity, or trailing bytes.
+pub fn decode_bridge_back_reason(expected_tag: u64, bytes: &[u8]) -> Result<DecodedBridgeBackReason> {
     let decoder = Decoder::new(bytes);
     decoder
         .finish()

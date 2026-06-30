@@ -22,12 +22,14 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/accumulator", get(accumulator))
-        .route("/returns", post(create_return))
+        .route("/returns", post(create_return).get(get_return_by_nullifier))
         .route("/returns/:id", get(get_return))
+        .route("/batches/:id", get(get_batch))
         .with_state(state)
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: &'static str,
     pub queue_depth: usize,
@@ -49,6 +51,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccumulatorResponse {
     pub synced: bool,
     pub spent_root: String,
@@ -69,10 +72,23 @@ async fn accumulator() -> Result<Json<AccumulatorResponse>, ApiError> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateReturnRequest {
-    pub wire_input: String,
+    /// The wallet witness envelope (02 §2c) — preferred. Built into the guest wire
+    /// input in-service (requires the deployment config + trust base, §intake).
+    #[serde(default)]
+    pub token_cbor: Option<String>,
+    #[serde(default)]
+    pub reason_bytes: Option<String>,
+    #[serde(default)]
+    pub config_hash: Option<String>,
+    #[serde(default)]
+    pub anchor_hint: Option<String>,
+    /// Alternative: a pre-assembled guest wire input (fixtures / relayers).
+    #[serde(default)]
+    pub wire_input: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateReturnResponse {
     pub return_id: String,
     pub nullifier: String,
@@ -89,7 +105,7 @@ async fn create_return(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateReturnRequest>,
 ) -> Result<Json<CreateReturnResponse>, ApiError> {
-    let wire_input = decode_hex(&req.wire_input)?;
+    let wire_input = build_wire_input(&state, &req)?;
     let report = s1::precheck_wire(&wire_input)
         .map_err(|err| ApiError::PrecheckRejected(err.to_string()))?;
     let input = wire::decode_guest_input(&wire_input).map_err(|err| {
@@ -146,6 +162,19 @@ async fn get_return(
     state.store.get(&id).map(Json).ok_or(ApiError::NotFound(id))
 }
 
+/// `GET /batches/:id` — the published bundle (vkey, publicValues, proofBytes) for
+/// a proven batch; anyone can submit it to the vault (self-settle, §B4).
+async fn get_batch(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::store::BatchBundle>, ApiError> {
+    state
+        .store
+        .get_batch(&id)
+        .map(Json)
+        .ok_or(ApiError::NotFound(id))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     #[error("{1}")]
@@ -191,9 +220,67 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// Resolve the request into the guest wire input: prefer the wallet envelope
+/// (`tokenCbor` + `reasonBytes`, built in-service), else a pre-assembled `wireInput`.
+fn build_wire_input(state: &AppState, req: &CreateReturnRequest) -> Result<Vec<u8>, ApiError> {
+    match (&req.token_cbor, &req.reason_bytes) {
+        (Some(token_cbor), Some(reason_bytes)) => {
+            let intake = state.intake.as_ref().ok_or_else(|| {
+                ApiError::BadRequest(
+                    "intake_unconfigured",
+                    "envelope intake is not configured (set BRIDGE_DEPLOYMENT_CONFIG + TRUST_BASE_PATH)"
+                        .to_string(),
+                )
+            })?;
+            if let Some(declared) = &req.config_hash {
+                let declared = decode_hex(declared)?;
+                if declared != intake.config_hash() {
+                    return Err(ApiError::BadRequest(
+                        "config_hash_mismatch",
+                        format!(
+                            "configHash mismatch: got 0x{}, service uses 0x{}",
+                            hex::encode(&declared),
+                            hex::encode(intake.config_hash()),
+                        ),
+                    ));
+                }
+            }
+            intake
+                .build_wire_input(&decode_hex(token_cbor)?, &decode_hex(reason_bytes)?)
+                .map_err(|err| ApiError::PrecheckRejected(err.to_string()))
+        }
+        (None, None) => {
+            let wire = req.wire_input.as_ref().ok_or_else(|| {
+                ApiError::BadRequest(
+                    "missing_payload",
+                    "provide {tokenCbor, reasonBytes} (wallet envelope) or wireInput".to_string(),
+                )
+            })?;
+            decode_hex(wire)
+        }
+        _ => Err(ApiError::BadRequest(
+            "incomplete_envelope",
+            "tokenCbor and reasonBytes must be provided together".to_string(),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NullifierQuery {
+    pub nullifier: String,
+}
+
+/// `GET /returns?nullifier=` — wallet idempotency / recovery lookup (§B4).
+async fn get_return_by_nullifier(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<NullifierQuery>,
+) -> Json<Option<ReturnRecord>> {
+    Json(state.store.get_by_nullifier(&q.nullifier))
+}
+
 fn decode_hex(input: &str) -> Result<Vec<u8>, ApiError> {
     hex::decode(input.strip_prefix("0x").unwrap_or(input))
-        .map_err(|err| ApiError::BadRequest("invalid_hex", format!("invalid wireInput hex: {err}")))
+        .map_err(|err| ApiError::BadRequest("invalid_hex", format!("invalid hex: {err}")))
 }
 
 fn return_id(public_values_digest: &[u8; 32], nullifier: &[u8; 32]) -> String {
