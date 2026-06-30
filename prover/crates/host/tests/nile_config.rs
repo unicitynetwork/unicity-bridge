@@ -9,9 +9,9 @@ use bridge_return_core::{coin_id, config_hash, token_type, BridgeConfig};
 use serde_json::Value;
 
 // The deployed vault's CONFIG_HASH (UnicityBridgeVault on Nile,
-// TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a), verified on-chain.
+// TD89z57Xksziu3uk24qfjT27bJmeWLgjtk, reason_tag 39048), verified on-chain.
 const ONCHAIN_CONFIG_HASH: &str =
-    "0xe06d52d9006479a11680bdc350f0e37c745a2fe752ce9e5dcb23000e06204203";
+    "0x594546ae7e114b8c5674b793234a45f72eca7727aa25b0f605200ebf3cae4b93";
 
 fn unhex(s: &str) -> Vec<u8> {
     hex::decode(s.strip_prefix("0x").unwrap_or(s)).expect("hex")

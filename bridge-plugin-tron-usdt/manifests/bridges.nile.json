@@ -4,17 +4,17 @@
     {
       "label": "USDT (bridged · Tron)",
       "chainId": 3448148188,
-      "vault": "TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a",
+      "vault": "TD89z57Xksziu3uk24qfjT27bJmeWLgjtk",
       "asset": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
       "confirmations": 20,
       "decimals": 6,
       "rpcUrl": "https://nile.trongrid.io",
       "returnServiceUrl": "http://localhost:8787",
-      "reasonTag": 39050,
+      "reasonTag": 39048,
       "lockDomain": "158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
       "nullifierDomain": "d4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
       "vkey": "0x002b42fa331ad29852eca758fb92cc64c41b349c2d982242a6b60f94a0ff0fb3",
-      "configHash": "e06d52d9006479a11680bdc350f0e37c745a2fe752ce9e5dcb23000e06204203",
+      "configHash": "594546ae7e114b8c5674b793234a45f72eca7727aa25b0f605200ebf3cae4b93",
       "tokenTypeHex": "6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74",
       "coinIdHex": "f1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb"
     }

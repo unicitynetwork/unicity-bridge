@@ -1,5 +1,5 @@
 {
-  "description": "Frozen Nile-USDT bridge deployment config. config_hash equals the LIVE deployed vault CONFIG_HASH (TNXx9Pv6…, reason_tag 39050); all three stacks (vault, prover, wallet) must use these values. NOTE: the canonical going-forward reason_tag is 39048 (the generic bridge-vectors use it); redeploy the vault with contracts/tron/scripts/deploy-nile.js to mint a fresh 39048 vault — it emits an updated manifest + this frozen config.",
+  "description": "Frozen canonical Nile-USDT bridge deployment config. config_hash equals the LIVE deployed vault CONFIG_HASH (TD89z57…, reason_tag 39048, real SP1 verifier, R6 false-tolerant safe-transfer); all three stacks (vault, prover, wallet) must use these values. reason_tag is 39048 (39050 collides with SpherePaymentData's CBOR tag). Redeploy with contracts/tron/scripts/deploy-nile.js real-vault <asset>.",
   "proto": 1,
   "network": "tron-nile",
   "chain_id_str": "3448148188",
@@ -7,20 +7,20 @@
   "config": {
     "asset": "0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f",
     "coin_id": "0xf1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb",
-    "config_hash": "0xe06d52d9006479a11680bdc350f0e37c745a2fe752ce9e5dcb23000e06204203",
+    "config_hash": "0x594546ae7e114b8c5674b793234a45f72eca7727aa25b0f605200ebf3cae4b93",
     "domain_tag": "0x6a6b3d1a43cfa710342bd7b7aee2a83362f60d065500fb8b7ec1ef2e04822b0f",
     "lock_domain": "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
     "nullifier_domain": "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
-    "reason_tag": 39050,
+    "reason_tag": 39048,
     "source_chain_id": 3448148188,
     "token_type": "0x6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74",
-    "vault": "0x89d2d5b305dec709acdb77e95a5eb3ea8a2d8def"
+    "vault": "0x22999a3f085671d3e44deddfc817f3fc64aa8fac"
   },
   "deployment": {
-    "vault": "TNXx9Pv6T8L983y3FM66xBYRip5G4MQH2a",
-    "verifier_mock": "TBwGYUY9BimAjnaPyFd6YwTit2o2zSRjn9",
+    "vault": "TD89z57Xksziu3uk24qfjT27bJmeWLgjtk",
+    "verifier_sp1": "TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR",
     "asset_usdt": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
-    "deployed_at": "2026-06-28"
+    "deployed_at": "2026-06-30"
   },
   "trust_base": {
     "file": "bft-trustbase.testnet2.json",
