@@ -79,7 +79,7 @@ async function deployVault({
     asset: await asset.getAddress(),
     tokenType: TOKEN_TYPE,
     coinId: COIN_ID,
-    reasonTag: 39050n,
+    reasonTag: 39048n,
     lockDomain: "0x" + "cc".repeat(32),
     nullifierDomain: "0x" + "dd".repeat(32),
   };
@@ -156,7 +156,7 @@ describe("UnicityBridgeVault — constructor & lock (bridge-in)", () => {
       asset: await asset.getAddress(),
       tokenType: TOKEN_TYPE,
       coinId: COIN_ID,
-      reasonTag: 39050n,
+      reasonTag: 39048n,
       lockDomain: "0x" + "cc".repeat(32),
       nullifierDomain: "0x" + "dd".repeat(32),
     };

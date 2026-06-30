@@ -43,7 +43,7 @@ fn main() {
         asset: h20(asset_evm_hex),
         token_type: derive::token_type(chain_id_str, asset_evm_hex),
         coin_id: derive::coin_id(chain_id_str, asset_evm_hex),
-        reason_tag: 39050,
+        reason_tag: 39048,
         lock_domain: hash::sha256(b"UNICITY_BR_LOCK"),
         nullifier_domain: hash::sha256(b"UNICITY_BR_NUL"),
     };

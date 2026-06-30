@@ -391,7 +391,7 @@ mod tests {
             asset: [0x22; 20],
             token_type: [0x33; 32],
             coin_id: [0x44; 32],
-            reason_tag: 39050,
+            reason_tag: 39048,
             lock_domain: [0x55; 32],
             nullifier_domain: [0x66; 32],
         }

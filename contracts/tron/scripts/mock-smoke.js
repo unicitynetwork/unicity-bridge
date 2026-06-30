@@ -17,7 +17,7 @@ const TronWeb = TronWebLib.TronWeb || TronWebLib.default || TronWebLib;
 const TRUST_BASE_HASH = "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0";
 const LOCK_DOMAIN = "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932";
 const NULLIFIER_DOMAIN = "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d";
-const REASON_TAG = 39050;
+const REASON_TAG = 39048;
 const AMOUNT = 1_000_000n;
 
 function loadEnv() {

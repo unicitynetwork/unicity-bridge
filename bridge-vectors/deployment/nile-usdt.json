@@ -11,7 +11,7 @@
     "domain_tag": "0x6a6b3d1a43cfa710342bd7b7aee2a83362f60d065500fb8b7ec1ef2e04822b0f",
     "lock_domain": "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
     "nullifier_domain": "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
-    "reason_tag": 39050,
+    "reason_tag": 39048,
     "source_chain_id": 3448148188,
     "token_type": "0x6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74",
     "vault": "0x89d2d5b305dec709acdb77e95a5eb3ea8a2d8def"

@@ -29,7 +29,7 @@ export const MOCK_PROOF_VERIFIER = (): HardhatArtifact =>
 // Canonical frozen bridge config (matches scripts/deploy-nile.js and the prover).
 const LOCK_DOMAIN = '158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932';
 const NULLIFIER_DOMAIN = 'd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d';
-const REASON_TAG = 39050n;
+const REASON_TAG = 39048n;
 const sha256Hex = (s: string): string => createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
 const deriveTokenType = (chainId: number, assetEvm: string): string =>
   sha256Hex(`unicity-bridge:tron:${chainId}:${assetEvm}`);

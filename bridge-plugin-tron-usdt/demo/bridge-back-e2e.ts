@@ -189,7 +189,7 @@ async function main(): Promise<void> {
     asset: fromHex(plugin.resolvedConfig.assetContractHex),
     tokenType: plugin.resolvedConfig.tokenType,
     coinId: plugin.resolvedConfig.coinId,
-    reasonTag: 39050n,
+    reasonTag: 39048n,
     lockDomain: sha256(new TextEncoder().encode('UNICITY_BR_LOCK')),
     nullifierDomain: sha256(new TextEncoder().encode('UNICITY_BR_NUL')),
   };

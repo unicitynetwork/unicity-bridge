@@ -41,7 +41,7 @@ function deriveCoinId(chainIdStr, assetEvmHex) {
 // Canonical domain separators (00 §1; same values as bridge-vectors/config-00).
 const LOCK_DOMAIN = "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932";
 const NULLIFIER_DOMAIN = "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d";
-const REASON_TAG = 39050;
+const REASON_TAG = 39048;
 const VKEY_PLACEHOLDER = "0x" + "00".repeat(32); // M2 mock: vkey unused by the mock verifier
 
 function loadEnv() {
