@@ -4,9 +4,9 @@ pragma solidity ^0.8.24;
 import {BridgeConfig, ReturnLeaf, SourceLockRef, PublicValues, BridgeEncoding} from "./BridgeEncoding.sol";
 import {IProofVerifier} from "./IProofVerifier.sol";
 
-/// @dev Minimal TRC20/ERC20 surface. USDT on Tron returns a bool from
-///      transfer/transferFrom, but we tolerate no-return tokens via
-///      {_safeTransfer}/{_safeTransferFrom} low-level calls.
+/// @dev Minimal TRC20/ERC20 surface. Tether USDT on Tron (mainnet and Nile
+///      testnet) returns false even on success. We require only that the call
+///      does not revert; see {_safeTransfer}/{_safeTransferFrom}.
 interface ITRC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function transfer(address to, uint256 value) external returns (bool);
@@ -292,22 +292,20 @@ contract UnicityBridgeVault {
     }
 
     // ---------------------------------------------------------------------
-    // Token transfer helpers (tolerate no-return TRC20s)
+    // Token transfer helpers (tolerate no-return + false-returning TRC20s)
     // ---------------------------------------------------------------------
 
     function _safeTransferFrom(address from, address to, uint256 value) private {
-        (bool ok, bytes memory data) =
+        (bool ok,) =
             address(ASSET).call(abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value));
-        _check(ok, data, "vault: transferFrom failed");
+        require(ok, "vault: transferFrom failed");
     }
 
     function _safeTransfer(address to, uint256 value) private {
-        (bool ok, bytes memory data) =
+        (bool ok,) =
             address(ASSET).call(abi.encodeWithSelector(ITRC20.transfer.selector, to, value));
-        _check(ok, data, "vault: transfer failed");
-    }
-
-    function _check(bool ok, bytes memory data, string memory err) private pure {
-        require(ok && (data.length == 0 || abi.decode(data, (bool))), err);
+        // Tether USDT on Tron (mainnet + Nile faucet TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf)
+        // returns false even on success; real failures revert. Require only no-revert.
+        require(ok, "vault: transfer failed");
     }
 }

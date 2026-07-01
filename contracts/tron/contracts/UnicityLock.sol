@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @dev Minimal TRC20/ERC20 surface used by the bridge. USDT on Tron returns a
-///      bool from transfer/transferFrom, but we tolerate non-standard tokens
-///      that return nothing via low-level calls in {_safeTransferFrom}.
+/// @dev Minimal TRC20/ERC20 surface used by the bridge. Tether USDT on Tron
+///      returns false even on success; we require only no-revert in {_safeTransferFrom}.
 interface ITRC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function transfer(address to, uint256 value) external returns (bool);
@@ -156,22 +155,19 @@ contract UnicityLock {
     }
 
     // ---------------------------------------------------------------------
-    // Token transfer helpers (tolerate no-return TRC20s)
+    // Token transfer helpers (tolerate no-return and false-returning TRC20s)
     // ---------------------------------------------------------------------
 
     function _safeTransferFrom(address from, address to, uint256 value) private {
-        (bool ok, bytes memory data) =
+        (bool ok,) =
             address(asset).call(abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value));
-        _check(ok, data, "UnicityLock: transferFrom failed");
+        require(ok, "UnicityLock: transferFrom failed");
     }
 
     function _safeTransfer(address to, uint256 value) private {
-        (bool ok, bytes memory data) =
+        (bool ok,) =
             address(asset).call(abi.encodeWithSelector(ITRC20.transfer.selector, to, value));
-        _check(ok, data, "UnicityLock: transfer failed");
-    }
-
-    function _check(bool ok, bytes memory data, string memory err) private pure {
-        require(ok && (data.length == 0 || abi.decode(data, (bool))), err);
+        // Tether USDT on Tron returns false even on success; failures revert.
+        require(ok, "UnicityLock: transfer failed");
     }
 }

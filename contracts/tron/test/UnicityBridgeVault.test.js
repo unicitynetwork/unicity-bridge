@@ -290,8 +290,20 @@ describe("UnicityBridgeVault — fulfillBatch (bridge-back, mock proof)", () => 
     );
   });
 
-  it("works with a no-return TRC20 (USDT-style)", async () => {
+  it("works with a no-return TRC20 (void transfer)", async () => {
     const { vault, asset, alice, bob } = await deployVault({ assetName: "MockNoReturnTRC20" });
+    const nonce = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
+    const digest = await vault.lockDigest(nonce);
+    const leaf = [ethers.id("nul-1"), bob.address, 400_000n, ethers.ZeroAddress, 0n, 0n];
+    const { encoded } = await buildBatch(vault, { leaves: [leaf], lockRefs: [[nonce, digest]] });
+    await vault.fulfillBatch(encoded, "0x", [leaf], [[nonce, digest]]);
+    expect(await asset.balanceOf(bob.address)).to.equal(400_000n);
+  });
+
+  it("works with a false-returning TRC20 (Tether USDT bug on Tron)", async () => {
+    // Real Nile faucet USDT (TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf) returns false
+    // from transfer even on success. Vault must not revert on false return.
+    const { vault, asset, alice, bob } = await deployVault({ assetName: "MockFalseReturnTRC20" });
     const nonce = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
     const digest = await vault.lockDigest(nonce);
     const leaf = [ethers.id("nul-1"), bob.address, 400_000n, ethers.ZeroAddress, 0n, 0n];

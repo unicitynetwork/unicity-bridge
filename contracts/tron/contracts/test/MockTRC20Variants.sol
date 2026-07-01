@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @dev A TRC20 that returns NOTHING from transfer/transferFrom (like real USDT
-///      on Tron). Exercises the vault's no-return safe-transfer path.
+/// @dev A TRC20 that returns NOTHING from transfer/transferFrom.
+///      Exercises the vault's void-return safe-transfer path.
+///      (Real USDT on Tron returns false, not void — see MockFalseReturnTRC20.)
 contract MockNoReturnTRC20 {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -137,6 +138,43 @@ contract MockBlocklistTRC20 {
     function _transfer(address from, address to, uint256 value) private {
         require(!blocked[to], "blocklist: recipient blocked");
         require(balanceOf[from] >= value, "blocklist: balance");
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
+    }
+}
+
+/// @dev A TRC20 that ALWAYS returns false from transfer/transferFrom (the Tether
+///      USDT bug on Tron — confirmed on Nile faucet TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf).
+///      The transfer executes successfully but the ABI return value is 0x00...00.
+///      Exercises the vault's false-return tolerance (require(ok) — no bool decode).
+contract MockFalseReturnTRC20 {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 value) external {
+        balanceOf[to] += value;
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        return true;
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        _transfer(msg.sender, to, value);
+        return false; // the Tether bug: success but returns false
+    }
+
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= value, "false-return: allowance");
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - value;
+        _transfer(from, to, value);
+        return false; // the Tether bug
+    }
+
+    function _transfer(address from, address to, uint256 value) private {
+        require(balanceOf[from] >= value, "false-return: balance");
         balanceOf[from] -= value;
         balanceOf[to] += value;
     }
