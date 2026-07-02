@@ -12,6 +12,7 @@
     "hardhat": "^2.22.0"
   },
   "dependencies": {
+    "ethers": "^6.16.0",
     "tronweb": "^6.3.0"
   }
 }
