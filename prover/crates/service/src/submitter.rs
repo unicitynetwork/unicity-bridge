@@ -82,6 +82,8 @@ async fn run_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
     // `GET /batches/:id`, so a self-settler and this command share one format.
     let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
 
+    tracing::debug!(batch_id = %bundle.batch_id, cmd, "spawning S4 submit command");
+
     let mut child = match tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)

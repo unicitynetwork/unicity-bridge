@@ -132,6 +132,8 @@ async fn prove_single_flight(
 ) {
     let batch_id = batch_id(&ids);
     state.lock().await.active_batch = Some(batch_id.clone());
+    tracing::info!(batch_id = %batch_id, count = ids.len(), "batch proving started");
+    let batch_started = std::time::Instant::now();
 
     for id in &ids {
         let _ = store.update_status(id, ReturnStatus::Proving, Some(batch_id.clone()), None);
@@ -170,11 +172,26 @@ async fn prove_single_flight(
                 store.put_batch(batch_bundle.clone());
                 let _ =
                     store.update_status(&id, ReturnStatus::Proven, Some(batch_id.clone()), None);
+                tracing::info!(
+                    return_id = %id,
+                    batch_id = %batch_id,
+                    mode = %bundle.mode,
+                    vkey = bundle.vkey_hash.as_deref().unwrap_or("(none)"),
+                    elapsed_secs = batch_started.elapsed().as_secs(),
+                    "batch proven",
+                );
                 // S4: submit fulfillBatch → submitted → settled (or stop at proven
                 // when no submitter is configured — the bundle is self-settleable).
                 submit_batch(&submitter, store, &batch_id, &id, &batch_bundle).await;
             }
             Err(err) => {
+                tracing::error!(
+                    return_id = %id,
+                    batch_id = %batch_id,
+                    elapsed_secs = batch_started.elapsed().as_secs(),
+                    error = %err,
+                    "batch proving failed",
+                );
                 let _ = store.update_status(
                     &id,
                     ReturnStatus::Failed,
@@ -202,14 +219,27 @@ async fn submit_batch(
 ) {
     use crate::submitter::SubmitOutcome;
     match submitter.submit(bundle).await {
-        SubmitOutcome::Skipped => {}
+        SubmitOutcome::Skipped => {
+            tracing::info!(
+                return_id = %id,
+                batch_id = %batch_id,
+                "no S4 submitter configured — left proven (self-settleable)",
+            );
+        }
         SubmitOutcome::Submitted { txid } => {
+            tracing::info!(return_id = %id, batch_id = %batch_id, txid = %txid, "batch settled on-chain");
             store.set_batch_settle_txid(batch_id, txid.clone());
             store.set_return_settle_txid(id, txid);
             let _ = store.update_status(id, ReturnStatus::Submitted, Some(batch_id.to_string()), None);
             let _ = store.update_status(id, ReturnStatus::Settled, Some(batch_id.to_string()), None);
         }
         SubmitOutcome::Failed { message } => {
+            tracing::error!(
+                return_id = %id,
+                batch_id = %batch_id,
+                error = %message,
+                "S4 submit failed — bundle stays self-settleable at GET /batches/:id",
+            );
             let _ = store.update_status(
                 id,
                 ReturnStatus::Failed,

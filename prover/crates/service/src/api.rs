@@ -141,6 +141,17 @@ async fn create_return(
     let (record, inserted) = state.store.insert_or_get(record);
     if inserted {
         state.queue.enqueue(record.return_id.clone()).await?;
+        tracing::info!(
+            return_id = %record.return_id,
+            nullifier = %record.nullifier,
+            "return accepted and queued",
+        );
+    } else {
+        tracing::info!(
+            return_id = %record.return_id,
+            nullifier = %record.nullifier,
+            "return already known (idempotent re-submit)",
+        );
     }
     Ok(Json(CreateReturnResponse {
         return_id: record.return_id,
@@ -209,6 +220,14 @@ impl IntoResponse for ApiError {
             &self,
             ApiError::PrecheckRejected(_) | ApiError::Queue(_) | ApiError::Host(_)
         );
+        // Centralized so every rejection path (current and future) is audit-able
+        // from the log alone — this is what "why did that submit fail" resolves
+        // to when the caller only reports a code, not the full message.
+        if status == StatusCode::NOT_FOUND {
+            tracing::debug!(code, message = %self, "not found");
+        } else {
+            tracing::warn!(code, recoverable, message = %self, "request rejected");
+        }
         let body = Json(serde_json::json!({
             "error": {
                 "code": code,

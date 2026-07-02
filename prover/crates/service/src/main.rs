@@ -4,7 +4,8 @@ use bridge_return_service::{
     config::ServiceConfig, load_intake, prover::Prover, queue, router, store::ReturnStore,
     submitter::Submitter, AppState,
 };
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 #[tokio::main]
 async fn main() {
@@ -29,6 +30,13 @@ async fn main() {
     let store = ReturnStore::default();
     let submitter = Submitter::from_env();
     tracing::info!("S4 submitter: {}", submitter.label());
+    tracing::info!(
+        prove_mode = ?config.prove_mode,
+        batch_target = config.batch_target,
+        max_wait_secs = config.max_wait.as_secs(),
+        vault = config.vault.as_deref().unwrap_or("(none)"),
+        "service configuration",
+    );
     let queue = queue::spawn(
         store.clone(),
         Prover::new(config.clone()),
@@ -42,7 +50,16 @@ async fn main() {
         queue,
         intake,
     })
-    .layer(TraceLayer::new_for_http());
+    .layer(
+        TraceLayer::new_for_http()
+            // Default TraceLayer spans/logs at DEBUG, which RUST_LOG=info silently
+            // drops — every request went completely unlogged. Bump to INFO so
+            // `method path status latency` is visible without knowing to also set
+            // tower_http=debug.
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO))
+            .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
+    );
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
