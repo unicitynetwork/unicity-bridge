@@ -29,4 +29,4 @@ sp1-sdk = { version = "6.3.1", optional = true, default-features = false, featur
 thiserror = "1"
 # `std` adds host-only JSON trust-base parsing (RootTrustBase::from_json) for S1.
 # The zkVM guest is built by a separate `cargo prove` invocation and stays no_std.
-unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["std", "alloc", "client"] }
+unicity-token = { git = "https://github.com/unicitynetwork/state-transition-sdk-rust.git", branch = "token-split-2", default-features = false, features = ["std", "alloc", "client"] }

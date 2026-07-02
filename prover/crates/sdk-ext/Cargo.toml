@@ -12,4 +12,4 @@ default = []
 [dependencies]
 num-bigint = { version = "0.4", default-features = false }
 tiny-keccak = { version = "2", default-features = false, features = ["keccak"] }
-unicity-token = { path = "../../../state-transition-sdk-rust", default-features = false, features = ["alloc"] }
+unicity-token = { git = "https://github.com/unicitynetwork/state-transition-sdk-rust.git", branch = "token-split-2", default-features = false, features = ["alloc"] }

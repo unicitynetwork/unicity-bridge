@@ -5270,6 +5270,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "unicity-token"
 version = "0.1.0"
+source = "git+https://github.com/unicitynetwork/state-transition-sdk-rust.git?branch=token-split-2#0302d10399dc7a6332182e187a27b7db091b3258"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
