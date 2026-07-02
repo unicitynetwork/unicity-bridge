@@ -211,7 +211,7 @@ async function main() {
     const asset = process.argv[3];
     // Default = current guest ELF vkey (sp1-vkey target/sp1/bridge-return-sp1-guest);
     // pass argv[4] to override. MUST match the ELF the proof is generated with.
-    const vkey = process.argv[4] || "0x00d75299dfc01ff06af28435bb830f6b477eb8d4eb88b760e4daee04b496b000";
+    const vkey = process.argv[4] || "0x00c34ae0ebb63e86218a754892813f4744b2f6c9ed613c085ea40999b16ce3ad";
     if (!env.TRON_VERIFIER_SP1 || !asset)
       throw new Error("usage: real-vault <asset base58>  (needs TRON_VERIFIER_SP1 in .env)");
     await deployVault(tronWeb, env, addr, env.TRON_VERIFIER_SP1, { assetBase58: asset, vkey });
