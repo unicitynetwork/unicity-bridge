@@ -47,7 +47,7 @@ impl Prover {
         batch_id: String,
         wire_input: Vec<u8>,
     ) -> Result<ProofBundle, ProverError> {
-        use std::{fs, path::PathBuf};
+        use std::fs;
 
         let elf = self
             .config

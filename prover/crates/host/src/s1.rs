@@ -24,7 +24,7 @@ use bridge_return_guest::{
 use unicity_token::api::StateId;
 use bridge_return_sdk_ext::accumulator::{ordered_insert_witnesses, NullifierTree};
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligations_for_token_certified, decode_sphere_payment_data,
+    bridge_lock_obligations_for_token_certified, decode_bridged_payment_data,
     BridgeConfig as SdkBridgeConfig,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
@@ -69,7 +69,7 @@ pub fn verify_certified_burn(
         trust_base,
         lock_justification_tag,
         &sdk_config,
-        decode_sphere_payment_data,
+        decode_bridged_payment_data,
     )
     .map_err(|err| HostError::Check(format!("certified burn verification failed: {err:?}")))?;
     Ok(obligations

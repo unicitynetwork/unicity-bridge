@@ -20,7 +20,7 @@ use bridge_return_core::{
 use bridge_return_sdk_ext::accumulator::{insert as accumulator_insert, NonMembershipWitness};
 use bridge_return_sdk_ext::bridge::{
     bridge_lock_obligations_for_token_against_root, bridge_lock_obligations_for_token_certified,
-    decode_sphere_payment_data, BridgeConfig as SdkBridgeConfig,
+    decode_bridged_payment_data, BridgeConfig as SdkBridgeConfig,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
 use bridge_return_sdk_ext::verify::verify_anchor_certificate;
@@ -157,7 +157,7 @@ fn validate_bridge_burns(
                     &anchor_root,
                     burn.lock_justification_tag,
                     &sdk_config,
-                    decode_sphere_payment_data,
+                    decode_bridged_payment_data,
                 )
             }
             BurnVerification::Certified => bridge_lock_obligations_for_token_certified(
@@ -165,7 +165,7 @@ fn validate_bridge_burns(
                 &burn.trust_base,
                 burn.lock_justification_tag,
                 &sdk_config,
-                decode_sphere_payment_data,
+                decode_bridged_payment_data,
             ),
         }
         .map_err(|_| BridgeCoreError::TokenVerificationFailed)?;
@@ -192,7 +192,7 @@ fn validate_current_value(
     leaf: &ReturnLeaf,
     token: &Token,
 ) -> Result<()> {
-    let payment = decode_sphere_payment_data(
+    let payment = decode_bridged_payment_data(
         token
             .genesis()
             .transaction()
