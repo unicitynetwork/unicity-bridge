@@ -178,15 +178,90 @@ async function settle(bundlePath, settlePath) {
   console.log(`  🎉 settled. https://nile.tronscan.org/#/transaction/${id}`);
 }
 
+// bridge-return-service S4 submit seam (07 §B7): the service pipes its
+// published bundle JSON — `{batchId, mode, vkey, publicValues, proofBytes,
+// leaves, lockRefs}`, camelCase, hex-string fields, same shape as
+// `GET /batches/:id` — on stdin and reads the settle txid back on stdout.
+// Progress/errors go to stderr; stdout carries ONLY the bare txid (the
+// service treats trimmed stdout as the whole txid).
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => (data += chunk));
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
+async function settleFromStdin() {
+  const payload = JSON.parse(await readStdin());
+  const env = loadEnv();
+  const base = (env.TRON_RPC_URL || "https://nile.trongrid.io").replace(/\/$/, "");
+  const tw = new TronWeb({ fullHost: base, privateKey: env.TRON_SK });
+  const meHex = tw.address.toHex(tw.defaultAddress.base58);
+  const vaultHex = tw.address.toHex(env.TRON_VAULT);
+
+  const leaves = (payload.leaves || []).map((l) => [
+    l.nullifier,
+    l.recipient,
+    BigInt(l.amount),
+    l.feeRecipient,
+    BigInt(l.feeAmount),
+    BigInt(l.deadline),
+  ]);
+  const lockRefs = (payload.lockRefs || []).map((r) => [BigInt(r.nonce), r.digest]);
+  console.error(
+    `relayer settle --stdin: batch ${payload.batchId}, ${leaves.length} leaf(ves) on vault ${env.TRON_VAULT}`
+  );
+
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const funcSig =
+    "fulfillBatch(bytes,bytes,(bytes32,address,uint256,address,uint256,uint64)[],(uint256,bytes32)[])";
+  const rawParameter = coder
+    .encode(
+      [
+        "bytes",
+        "bytes",
+        "tuple(bytes32,address,uint256,address,uint256,uint64)[]",
+        "tuple(uint256,bytes32)[]",
+      ],
+      [payload.publicValues, payload.proofBytes, leaves, lockRefs]
+    )
+    .slice(2);
+  const built = await tw.transactionBuilder.triggerSmartContract(
+    vaultHex,
+    funcSig,
+    { feeLimit: 1_000_000_000, rawParameter },
+    [],
+    meHex
+  );
+  const id = (await tw.trx.sendRawTransaction(await tw.trx.sign(built.transaction))).txid || built.transaction.txID;
+  let info;
+  for (let i = 0; i < 20 && !(info && info.receipt); i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    info = await tw.trx.getTransactionInfo(id);
+  }
+  const ok = info && info.receipt && info.receipt.result === "SUCCESS";
+  if (!ok) {
+    console.error(`fulfillBatch tx ${id} -> ${info?.receipt?.result || "unknown"}`);
+    if (info?.resMessage) console.error(Buffer.from(info.resMessage, "hex").toString());
+    process.exit(1);
+  }
+  console.error(`settled: https://nile.tronscan.org/#/transaction/${id}`);
+  process.stdout.write(id);
+}
+
 async function main() {
   const cmd = process.argv[2];
   if (cmd === "scan") return scan();
   if (cmd === "settle") {
+    if (process.argv[3] === "--stdin") return settleFromStdin();
     const [, , , bundle, settlePath] = process.argv;
     if (!bundle || !settlePath) throw new Error("usage: relayer.js settle <bundle.json> <settle.json>");
     return settle(bundle, settlePath);
   }
-  console.log("usage: relayer.js scan | settle <bundle.json> <settle.json>");
+  console.log("usage: relayer.js scan | settle <bundle.json> <settle.json> | settle --stdin");
 }
 
 main().catch((e) => {

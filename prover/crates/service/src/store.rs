@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use bridge_return_core::PublicValues;
+use bridge_return_core::{PublicValues, ReturnLeaf, SourceLockRef};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default)]
@@ -20,8 +20,8 @@ struct StoreInner {
 }
 
 /// A proven batch's published on-chain bundle (§B4 `/batches/:id`) — anyone can
-/// submit `publicValues`+`proofBytes` to the vault's `fulfillBatch`. `settle_txid`
-/// fills once S4 lands it.
+/// submit `publicValues`+`proofBytes`+`leaves`+`lockRefs` to the vault's
+/// `fulfillBatch`. `settle_txid` fills once S4 lands it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchBundle {
@@ -31,6 +31,55 @@ pub struct BatchBundle {
     pub public_values: String,
     pub proof_bytes: String,
     pub settle_txid: Option<String>,
+    /// The `fulfillBatch` leaf calldata (nullifier/recipient/amount/fee/deadline) —
+    /// plaintext witnesses for the amounts the proof's `return_root` commits to.
+    #[serde(default)]
+    pub leaves: Vec<LeafHex>,
+    /// The `fulfillBatch` lock-ref calldata — plaintext witnesses for `lock_ref_root`.
+    #[serde(default)]
+    pub lock_refs: Vec<LockRefHex>,
+}
+
+/// Hex-encoded `ReturnLeaf` (07 §B4 self-settle calldata / S4 submit payload).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeafHex {
+    pub nullifier: String,
+    pub recipient: String,
+    pub amount: String,
+    pub fee_recipient: String,
+    pub fee_amount: String,
+    pub deadline: String,
+}
+
+/// Hex-encoded `SourceLockRef`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockRefHex {
+    pub nonce: String,
+    pub digest: String,
+}
+
+impl From<ReturnLeaf> for LeafHex {
+    fn from(l: ReturnLeaf) -> Self {
+        Self {
+            nullifier: hex32(&l.nullifier),
+            recipient: format!("0x{}", hex::encode(l.recipient)),
+            amount: hex32(&l.amount),
+            fee_recipient: format!("0x{}", hex::encode(l.fee_recipient)),
+            fee_amount: hex32(&l.fee_amount),
+            deadline: format!("0x{:x}", l.deadline),
+        }
+    }
+}
+
+impl From<SourceLockRef> for LockRefHex {
+    fn from(r: SourceLockRef) -> Self {
+        Self {
+            nonce: format!("0x{:x}", r.nonce),
+            digest: hex32(&r.digest),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

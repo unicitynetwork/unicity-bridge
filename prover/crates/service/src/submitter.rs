@@ -10,7 +10,7 @@
 //!   **txid** on stdout (exit 0). This is the integration seam for the existing
 //!   `relayer.js settle` and for the future in-process Tron submitter.
 
-use crate::prover::ProofBundle;
+use crate::store::BatchBundle;
 
 #[derive(Clone)]
 pub struct Submitter {
@@ -57,34 +57,30 @@ impl Submitter {
         }
     }
 
-    pub async fn submit(&self, batch_id: &str, bundle: &ProofBundle) -> SubmitOutcome {
+    pub async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
         match &self.backend {
             Backend::None => SubmitOutcome::Skipped,
-            Backend::Command(cmd) => run_command(cmd, batch_id, bundle).await,
+            Backend::Command(cmd) => run_command(cmd, bundle).await,
         }
     }
 }
 
-async fn run_command(cmd: &str, batch_id: &str, bundle: &ProofBundle) -> SubmitOutcome {
+async fn run_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
 
     // A no-proof bundle (precheck-only mode) can't settle on-chain.
-    if bundle.proof_bytes.is_empty() {
+    if bundle.proof_bytes == "0x" {
         return SubmitOutcome::Failed {
             message: "submit requested but the batch has no proof (prove_mode != sp1_groth16)"
                 .to_string(),
         };
     }
 
-    let payload = serde_json::json!({
-        "batchId": batch_id,
-        "mode": bundle.mode,
-        "vkey": bundle.vkey_hash,
-        "publicValues": format!("0x{}", hex::encode(&bundle.public_values)),
-        "proofBytes": format!("0x{}", hex::encode(&bundle.proof_bytes)),
-    })
-    .to_string();
+    // The whole published bundle — batchId, mode, vkey, publicValues, proofBytes,
+    // plus the leaves/lockRefs fulfillBatch calldata (§B4) — same shape as
+    // `GET /batches/:id`, so a self-settler and this command share one format.
+    let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
 
     let mut child = match tokio::process::Command::new("sh")
         .arg("-c")

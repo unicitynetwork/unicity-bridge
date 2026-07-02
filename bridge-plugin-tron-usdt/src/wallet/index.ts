@@ -8,3 +8,4 @@ export * from './facade.js';
 export * from './manifests.js';
 export * from './tron-signer.js';
 export * from './return-client.js';
+export * from './self-mint-verifier.js';

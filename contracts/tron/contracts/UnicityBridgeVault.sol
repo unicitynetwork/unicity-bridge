@@ -295,15 +295,25 @@ contract UnicityBridgeVault {
     // Token transfer helpers (tolerate no-return + false-returning TRC20s)
     // ---------------------------------------------------------------------
 
+    // TVM (unlike EVM) does not reliably forward "all remaining energy" to a
+    // bare `.call(...)` with no explicit gas — nested contract-to-contract
+    // calls made this way can starve even when the outer transaction has
+    // plenty of energy headroom (observed: fulfillBatch's transfer to USDT
+    // failed with ~268k energy free, while the identical transfer succeeds
+    // standalone on 14.6k). Pin an explicit, generous stipend.
+    uint256 private constant TRANSFER_GAS_STIPEND = 200_000;
+
     function _safeTransferFrom(address from, address to, uint256 value) private {
-        (bool ok,) =
-            address(ASSET).call(abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value));
+        (bool ok,) = address(ASSET).call{gas: TRANSFER_GAS_STIPEND}(
+            abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value)
+        );
         require(ok, "vault: transferFrom failed");
     }
 
     function _safeTransfer(address to, uint256 value) private {
-        (bool ok,) =
-            address(ASSET).call(abi.encodeWithSelector(ITRC20.transfer.selector, to, value));
+        (bool ok,) = address(ASSET).call{gas: TRANSFER_GAS_STIPEND}(
+            abi.encodeWithSelector(ITRC20.transfer.selector, to, value)
+        );
         // Tether USDT on Tron (mainnet + Nile faucet TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf)
         // returns false even on success; real failures revert. Require only no-revert.
         require(ok, "vault: transfer failed");

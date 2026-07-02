@@ -30,6 +30,10 @@ import {
 export interface BridgeManifest {
   /** Human label for the bridged asset, e.g. "USDT (bridged · Tron)". */
   readonly label: string;
+  /** Short ticker for the primary balance display, e.g. "USDT" — the bridged
+   * asset's coinId is bridge-derived and never in the token registry, so the
+   * wallet UI has no other source for this. */
+  readonly symbol: string;
   /** Tron network id (e.g. Nile = 3448148188). */
   readonly chainId: number;
   /** Deployed `UnicityBridgeVault` (lock) address (base58 `T…`, `41…`, or 20-byte hex). */

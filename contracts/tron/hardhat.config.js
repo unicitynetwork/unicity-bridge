@@ -9,6 +9,11 @@ require("@nomicfoundation/hardhat-toolbox");
  * @type import('hardhat/config').HardhatUserConfig
  */
 const optimizer = { optimizer: { enabled: true, runs: 200 } };
+// viaIR resolves "stack too deep" in UnicityBridgeVault (the explicit-gas
+// transfer stipend pushed it over Solidity's stack-slot limit) without
+// changing contract semantics. Scoped to 0.8.24 (the vault); the 0.8.20
+// verifier subtree is unaffected and not being redeployed.
+const optimizerViaIR = { optimizer: { enabled: true, runs: 200 }, viaIR: true };
 
 module.exports = {
   solidity: {
@@ -17,7 +22,7 @@ module.exports = {
     // The verifier subtree is self-contained (the vault depends only on
     // IProofVerifier), so the two compilers never link together.
     compilers: [
-      { version: "0.8.24", settings: optimizer },
+      { version: "0.8.24", settings: optimizerViaIR },
       { version: "0.8.20", settings: optimizer },
     ],
     overrides: {

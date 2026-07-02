@@ -3,6 +3,8 @@ export declare const TRON_MAINNET_CHAIN_ID = 728126428;
 export declare const TRON_NILE_CHAIN_ID = 3448148188;
 /** Canonical USDT (TRC20) contract on Tron mainnet. */
 export declare const TRON_MAINNET_USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+/** Canonical USDT (TRC20) contract on the Tron Nile testnet. */
+export declare const TRON_NILE_USDT = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf";
 /**
  * Configuration for one Tron-bridged asset. The contract/asset/chain fields are
  * trust anchors: the verifier rejects any lock proof that does not match them.
@@ -30,3 +32,8 @@ export declare const DEFAULT_DECIMALS = 6;
  * UnicityLock address before use.
  */
 export declare function tronMainnetUsdtConfig(lockContract: string, rpcUrl?: string): TronUsdtBridgeConfig;
+/**
+ * Nile testnet config skeleton. `lockContract` must be filled with the deployed
+ * vault address before use (see docs/bridge/dev-plan/04-deployment.md).
+ */
+export declare function tronNileUsdtConfig(lockContract: string, rpcUrl?: string): TronUsdtBridgeConfig;

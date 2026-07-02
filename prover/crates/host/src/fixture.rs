@@ -8,7 +8,8 @@ use bridge_return_sdk_ext::accumulator::{
     ordered_insert_witnesses, NonMembershipTerminal, NonMembershipWitness, NullifierTree,
 };
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligation, BridgeConfig as SdkBridgeConfig, TRON_USDT_LOCK_JUSTIFICATION_TAG,
+    bridge_lock_obligation, decode_sphere_payment_data, BridgeConfig as SdkBridgeConfig,
+    TRON_USDT_LOCK_JUSTIFICATION_TAG,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
 use num_bigint::BigUint;
@@ -18,7 +19,7 @@ use unicity_token::api::bft::{
     UnicityCertificate, UnicitySeal, UnicityTreeCertificate,
 };
 use unicity_token::api::{CertificationData, InclusionCertificate, InclusionProof, NetworkId};
-use unicity_token::cbor::{encode_array, encode_byte_string, encode_tag, encode_uint};
+use unicity_token::cbor::{encode_array, encode_byte_string, encode_null, encode_tag, encode_uint};
 use unicity_token::crypto::hash::{sha256, DataHash};
 use unicity_token::crypto::signer::{Secp256k1Signer, Signer};
 use unicity_token::payment::{
@@ -114,7 +115,7 @@ pub fn build_b1_direct_bridge_fixture() -> B1Fixture {
         token.genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
         &sdk_config(&config),
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .unwrap();
     let lock_refs = vec![SourceLockRef {
@@ -255,7 +256,7 @@ pub fn build_settlement_fixture_continued(
         token.genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
         &sdk_config(&config),
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .unwrap();
     let lock_refs = vec![SourceLockRef {
@@ -374,7 +375,7 @@ fn build_direct_burn(
         token.genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
         &sdk_config(config),
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .unwrap();
     let lock_ref = SourceLockRef {
@@ -743,7 +744,7 @@ fn leaf_and_lock_ref(
         token.genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
         &sdk_config(config),
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .unwrap();
     let lock_ref = SourceLockRef {
@@ -851,7 +852,7 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
     .unwrap();
     let split = TokenSplit::split_unchecked(
         &source_token_for_split,
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
         vec![
             SplitTokenRequest::create(
                 signature_lock(&output_owner),
@@ -1010,7 +1011,7 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
             .genesis(),
         TRON_USDT_LOCK_JUSTIFICATION_TAG,
         &sdk_config(&config),
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .unwrap();
     let lock_refs = vec![SourceLockRef {
@@ -1201,6 +1202,18 @@ fn bridge_mint(
     bridge_mint_with_salt(config, owner, amount, nonce, [0x42; 32])
 }
 
+/// Wrap a `PaymentAssetCollection` in the `SpherePaymentData` envelope (CBOR
+/// tag 39048, `[version=1, assets, memo=null]` — sphere-sdk/token-engine/
+/// SpherePaymentData.ts). Every real Sphere-minted token's `data` field is
+/// this envelope, never the bare `PaymentAssetCollection`; fixtures need to
+/// match so they exercise the guest relation's real (envelope-aware) decode.
+fn sphere_payment_data_cbor(assets: &PaymentAssetCollection) -> Vec<u8> {
+    let version = encode_uint(1);
+    let assets_cbor = assets.to_cbor();
+    let memo = encode_null();
+    encode_tag(39_048, &encode_array(&[&version, &assets_cbor, &memo]))
+}
+
 fn bridge_mint_with_salt(
     config: &BridgeConfig,
     owner: &Secp256k1Signer,
@@ -1218,7 +1231,7 @@ fn bridge_mint_with_salt(
         signature_lock(owner),
         TokenType::new(config.token_type.to_vec()),
         TokenSalt::from_bytes(salt),
-        Some(assets.to_cbor()),
+        Some(sphere_payment_data_cbor(&assets)),
         Some(lock_justification(config, amount, nonce)),
     )
     .unwrap()

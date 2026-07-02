@@ -92,8 +92,11 @@ pub fn real_groth16(
 ) -> Result<Sp1ProofInfo> {
     ensure_release_circuit_mode()?;
     // Install SP1's tracing subscriber so RUST_LOG stage logs (and any OOM/abort
-    // reason) are visible — the host otherwise initializes no subscriber.
-    sp1_sdk::utils::setup_logger();
+    // reason) are visible — the standalone host CLI otherwise initializes no
+    // subscriber. `setup_logger()` panics if a global default is already set
+    // (e.g. bridge-return-service installs its own at startup) — catch that
+    // specific case; logging already works there, nothing to do.
+    let _ = std::panic::catch_unwind(sp1_sdk::utils::setup_logger);
     let elf = load_elf(elf_path)?;
     let expected = expected_output(&wire_input)?;
     let client = ProverClient::builder().cpu().build();

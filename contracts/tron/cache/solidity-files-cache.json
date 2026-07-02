@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "/Users/risto/uni/br/contracts/tron/contracts/UnicityLock.sol": {
-      "lastModificationDate": 1781649558618,
-      "contentHash": "abde79faaa821eb93228186fe23c4345",
+      "lastModificationDate": 1782819014690,
+      "contentHash": "331f41fc4325158c180cd8dc1b02950d",
       "sourceName": "contracts/UnicityLock.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -12,6 +12,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -49,6 +50,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -85,6 +87,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -121,6 +124,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -149,8 +153,8 @@
       ]
     },
     "/Users/risto/uni/br/contracts/tron/contracts/UnicityBridgeVault.sol": {
-      "lastModificationDate": 1782679850741,
-      "contentHash": "bf47dcd87633887b7a7d3e2bca84ec08",
+      "lastModificationDate": 1782991537704,
+      "contentHash": "560c3978c5d180a8f451b9eab4a65d50",
       "sourceName": "contracts/UnicityBridgeVault.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -159,6 +163,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -199,6 +204,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -235,6 +241,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -264,8 +271,8 @@
       ]
     },
     "/Users/risto/uni/br/contracts/tron/contracts/test/MockTRC20Variants.sol": {
-      "lastModificationDate": 1782679981061,
-      "contentHash": "ca29d1d5d373aa89a4270f65c563972e",
+      "lastModificationDate": 1782819156107,
+      "contentHash": "38442447ab04c405b536c5b69adfef9d",
       "sourceName": "contracts/test/MockTRC20Variants.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -274,6 +281,7 @@
             "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
           "evmVersion": "paris",
           "outputSelection": {
             "*": {
@@ -298,6 +306,7 @@
       "artifacts": [
         "ILock",
         "MockBlocklistTRC20",
+        "MockFalseReturnTRC20",
         "MockNoReturnTRC20",
         "MockReentrantTRC20"
       ]

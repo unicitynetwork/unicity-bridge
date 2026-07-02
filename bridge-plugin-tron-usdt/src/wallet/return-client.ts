@@ -83,7 +83,10 @@ export class ReturnServiceClient {
 
   public constructor(baseUrl: string, opts: ReturnServiceClientOptions = {}) {
     this.base = baseUrl.replace(/\/+$/, '');
-    this.doFetch = opts.fetch ?? fetch;
+    // Bind to globalThis: native `fetch` requires `this` to be the real global;
+    // calling it later as `this.doFetch(...)` would rebind `this` to the client
+    // instance and throw "Illegal invocation".
+    this.doFetch = opts.fetch ?? fetch.bind(globalThis);
   }
 
   /** Submit a witness request; idempotent on `nullifier`. S1 precheck rejects bad burns synchronously. */
@@ -131,9 +134,41 @@ export class ReturnServiceClient {
     }
     if (!res.ok) {
       const text = await safeText(res);
+      const typed = parseTypedError(text);
+      if (typed) {
+        throw new ReturnServiceError(typed.message, typed.code, typed.recoverable);
+      }
       throw new Error(`Return service ${method} ${path} failed: HTTP ${res.status} ${text}`);
     }
     return (await res.json()) as T;
+  }
+}
+
+/** `{error:{code,message,recoverable}}` (07 §B4 typed error shape). */
+function parseTypedError(text: string): { code: string; message: string; recoverable: boolean } | null {
+  try {
+    const parsed = JSON.parse(text) as { error?: { code?: unknown; message?: unknown; recoverable?: unknown } };
+    const e = parsed.error;
+    if (e && typeof e.code === 'string' && typeof e.message === 'string' && typeof e.recoverable === 'boolean') {
+      return { code: e.code, message: e.message, recoverable: e.recoverable };
+    }
+  } catch {
+    /* not JSON — fall through to the generic error */
+  }
+  return null;
+}
+
+/** A typed return-service rejection (07 §B4). `recoverable: false` means retrying the
+ * exact same request will never succeed (e.g. a stale configHash after a vault
+ * redeploy) — callers should stop retrying and surface it as terminal. */
+export class ReturnServiceError extends Error {
+  public constructor(
+    message: string,
+    public readonly code: string,
+    public readonly recoverable: boolean,
+  ) {
+    super(message);
+    this.name = 'ReturnServiceError';
   }
 }
 

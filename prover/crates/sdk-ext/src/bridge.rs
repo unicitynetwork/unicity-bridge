@@ -5,6 +5,7 @@ use tiny_keccak::{Hasher, Keccak};
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
 use unicity_token::cbor::DecodeLimits;
 use unicity_token::cbor::Decoder;
+use unicity_token::error::CborError;
 use unicity_token::crypto::hash::sha256;
 use unicity_token::payment::{
     split_output_commitment, AssetId, PaymentAssetCollection, SplitManifest, SplitMintJustification,
@@ -22,6 +23,35 @@ const DOMAIN_LOCK: &str = "unicity-bridge-lock:v1";
 const BRIDGE_LOCK_JUSTIFICATION_VERSION: u64 = 1;
 
 pub const TRON_USDT_LOCK_JUSTIFICATION_TAG: u64 = 1_330_002;
+
+/// `SpherePaymentData`'s envelope tag/version (sphere-sdk/token-engine/
+/// SpherePaymentData.ts) — `[version, assets, memo]`, `assets` being the raw
+/// `PaymentAssetCollection` CBOR embedded directly (not further byte-string
+/// wrapped). Every real Sphere-minted token's `data` field is this envelope,
+/// never a bare `PaymentAssetCollection` — a decoder that doesn't unwrap it
+/// rejects every real (non-fixture) bridged token.
+const SPHERE_PAYMENT_DATA_TAG: u64 = 39_048;
+const SPHERE_PAYMENT_DATA_VERSION: u64 = 1;
+
+/// [`PaymentDataDecoder`] for Sphere-minted tokens: unwraps `SpherePaymentData`
+/// before decoding the inner `PaymentAssetCollection`.
+pub fn decode_sphere_payment_data(
+    bytes: &[u8],
+) -> core::result::Result<PaymentAssetCollection, unicity_token::Error> {
+    let decoder = Decoder::new(bytes);
+    decoder.finish()?;
+    let inner = decoder.expect_tag(SPHERE_PAYMENT_DATA_TAG)?;
+    let items = inner.array(Some(3))?;
+    let version = items[0].uint()?;
+    if version != SPHERE_PAYMENT_DATA_VERSION {
+        return Err(CborError::UnexpectedTag {
+            expected: SPHERE_PAYMENT_DATA_VERSION,
+            found: version,
+        }
+        .into());
+    }
+    PaymentAssetCollection::from_cbor_bytes(items[1].bytes())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
@@ -192,20 +222,28 @@ fn bridge_lock_obligations_for_verified_token(
     config: &BridgeConfig,
     decode_payment_data: PaymentDataDecoder,
 ) -> Result<Vec<BridgeLockObligation>> {
-    if let Ok(obligation) = bridge_lock_obligation(
+    // A genesis that isn't a direct bridge-lock mint is *assumed* to be a split
+    // output and re-tried against SplitMintJustification. But that assumption
+    // can be wrong (e.g. a real config/tag/amount mismatch on a genuinely
+    // direct mint) — surface the direct-path error in that case instead of the
+    // split path's unrelated (and misleading) decode failure.
+    let direct_err = match bridge_lock_obligation(
         token.genesis(),
         bridge_justification_tag,
         config,
         decode_payment_data,
     ) {
-        return Ok(alloc::vec![obligation]);
-    }
+        Ok(obligation) => return Ok(alloc::vec![obligation]),
+        Err(err) => err,
+    };
 
     let mint = token.genesis().transaction();
-    let justification = SplitMintJustification::from_cbor(
-        mint.justification().ok_or(BridgeExtError::SplitMalformed)?,
-    )
-    .map_err(|_| BridgeExtError::SplitMalformed)?;
+    let Some(justification_bytes) = mint.justification() else {
+        return Err(direct_err);
+    };
+    let Ok(justification) = SplitMintJustification::from_cbor(justification_bytes) else {
+        return Err(direct_err);
+    };
     verify_split_mint(
         token,
         &justification,

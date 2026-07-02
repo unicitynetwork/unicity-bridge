@@ -1,10 +1,11 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
+use bridge_return_guest::wire;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::{
     prover::Prover,
-    store::{ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
+    store::{BatchBundle, ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
     submitter::Submitter,
 };
 
@@ -147,20 +148,31 @@ async fn prove_single_flight(
             .await
         {
             Ok(bundle) => {
+                // The wire input already carries this return's settlement leaf +
+                // lock refs (decoded once at intake, api.rs); re-decode here so the
+                // published bundle carries the plaintext fulfillBatch calldata too —
+                // otherwise neither a self-settler nor the S4 submit command could
+                // ever actually call fulfillBatch (only the proof would be public).
+                let (leaves, lock_refs) = wire::decode_guest_input(&record.wire_input)
+                    .map(|input| (input.return_leaves, input.sorted_lock_refs))
+                    .unwrap_or_default();
                 // Publish the bundle (self-settle source, §B4) before advancing.
-                store.put_batch(crate::store::BatchBundle {
+                let batch_bundle = BatchBundle {
                     batch_id: batch_id.clone(),
                     mode: bundle.mode.clone(),
                     vkey: bundle.vkey_hash.clone(),
                     public_values: format!("0x{}", hex::encode(&bundle.public_values)),
                     proof_bytes: format!("0x{}", hex::encode(&bundle.proof_bytes)),
                     settle_txid: None,
-                });
+                    leaves: leaves.into_iter().map(Into::into).collect(),
+                    lock_refs: lock_refs.into_iter().map(Into::into).collect(),
+                };
+                store.put_batch(batch_bundle.clone());
                 let _ =
                     store.update_status(&id, ReturnStatus::Proven, Some(batch_id.clone()), None);
                 // S4: submit fulfillBatch → submitted → settled (or stop at proven
                 // when no submitter is configured — the bundle is self-settleable).
-                submit_batch(&submitter, store, &batch_id, &id, &bundle).await;
+                submit_batch(&submitter, store, &batch_id, &id, &batch_bundle).await;
             }
             Err(err) => {
                 let _ = store.update_status(
@@ -186,10 +198,10 @@ async fn submit_batch(
     store: &ReturnStore,
     batch_id: &str,
     id: &str,
-    bundle: &crate::prover::ProofBundle,
+    bundle: &BatchBundle,
 ) {
     use crate::submitter::SubmitOutcome;
-    match submitter.submit(batch_id, bundle).await {
+    match submitter.submit(bundle).await {
         SubmitOutcome::Skipped => {}
         SubmitOutcome::Submitted { txid } => {
             store.set_batch_settle_txid(batch_id, txid.clone());

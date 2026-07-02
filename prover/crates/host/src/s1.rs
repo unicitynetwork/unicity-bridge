@@ -24,11 +24,11 @@ use bridge_return_guest::{
 use unicity_token::api::StateId;
 use bridge_return_sdk_ext::accumulator::{ordered_insert_witnesses, NullifierTree};
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligations_for_token_certified, BridgeConfig as SdkBridgeConfig,
+    bridge_lock_obligations_for_token_certified, decode_sphere_payment_data,
+    BridgeConfig as SdkBridgeConfig,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
 use unicity_token::api::bft::RootTrustBase;
-use unicity_token::payment::PaymentAssetCollection;
 use unicity_token::transaction::{Token, Transaction};
 
 use crate::{HostError, Result};
@@ -69,7 +69,7 @@ pub fn verify_certified_burn(
         trust_base,
         lock_justification_tag,
         &sdk_config,
-        PaymentAssetCollection::from_cbor_bytes,
+        decode_sphere_payment_data,
     )
     .map_err(|err| HostError::Check(format!("certified burn verification failed: {err:?}")))?;
     Ok(obligations
