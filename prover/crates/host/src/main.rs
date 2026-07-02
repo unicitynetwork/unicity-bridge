@@ -733,6 +733,11 @@ fn sp1_real_groth16(
     let elf = require_arg(elf, "guest.elf")?;
     let wire = decode_hex_arg(require_arg(wire, "wire_hex")?, "wire_hex")?;
     let proof = require_arg(proof, "proof.bin")?;
+    // This executable owns its global tracing subscriber. Library callers such
+    // as bridge-return-service install their own subscriber before invoking the
+    // proving API, so the library must not call SP1's panicking global logger
+    // initializer.
+    sp1_sdk::utils::setup_logger();
     let info = bridge_return_host::sp1::real_groth16(&elf, wire, &proof)?;
     print_proof_info(&info);
     Ok(())
