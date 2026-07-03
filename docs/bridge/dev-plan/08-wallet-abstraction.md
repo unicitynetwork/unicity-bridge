@@ -175,20 +175,31 @@ advertises it. Wallet picker replaces the hardcoded "Bridge in with TronLink"
 button. **Do not** advertise Trust-on-Tron via WalletConnect (Trust's WC list is
 EVM+Solana, not Tron) — gate behind an acceptance test.
 
-**Seam landed (2026-07-03).** `bridge-plugin/src/wallet/providers.ts` defines a
+**Landed (2026-07-03).** `bridge-plugin/src/wallet/providers.ts` defines a
 `TronWalletProvider` registry (`{ id, name, isAvailable(), create(chainId) →
-TronSigner }`) with `tronLinkProvider()` (works now, no new dep) and
-`availableTronWallets(config)`. The modal renders a **data-driven wallet picker**
-(a button per provider) instead of the hardcoded TronLink button; the picked
-provider `create`s the signer, threaded through `useBridgeIn`
-(`BridgeInRequest.signer`) into the unchanged `runBridgeIn`. WalletConnect is wired
-by **injecting a signer factory** from the app (`sphere/src/bridge/walletconnect.ts`,
-gated on `VITE_WALLETCONNECT_PROJECT_ID`) — so the plugin and orchestrator carry
-**no** WalletConnect dependency. **Remaining to finish Phase 3:** `npm i
-@tronweb3/tronwallet-adapters @tronweb3/walletconnect-tron`, set the `projectId`,
-and implement `createWalletConnectSigner()` (the one documented TODO in
-`walletconnect.ts`); then the Trust-on-Tron acceptance-test gate. Until the
-`projectId` is set, only TronLink is offered (no behaviour change).
+TronSigner }`) with `tronLinkProvider()` and `availableTronWallets(config)`. The
+modal renders a **data-driven wallet picker** (a button per provider) instead of the
+hardcoded TronLink button; the picked provider `create`s the signer, threaded
+through `useBridgeIn` (`BridgeInRequest.signer`) into the unchanged `runBridgeIn`.
+
+**WalletConnect is fully wired.** `@tronweb3/walletconnect-tron` v4 +
+`@tronweb3/tronwallet-adapters` + `tronweb` are installed; the adapter only *signs*,
+so a new plugin `AdapterTronSigner` pairs an injected `AdapterWallet` (connect +
+`signTransaction` + events) with a **node-only TronWeb** for build/broadcast (via the
+new `sendCallSigned`) — the tx is bound to the bridge's chain by construction, so
+`getNetwork()` returns the configured chainId. `sphere/src/bridge/walletconnect.ts`
+is the **single** place the WC dependency lives: `appTronWalletConfig()` injects the
+signer factory; the WC/AppKit + tronweb packages are **dynamically imported** inside
+`connect()`/build so they land in a lazy chunk (`w3m-modal-*.js`), never the main
+bundle. The CAIP chain ref maps straight from the manifest (`tron:0x<hex>`; Nile =
+`tron:0xcd8690dc`). `projectId` is a public, env-overridable
+(`VITE_WALLETCONNECT_PROJECT_ID`) default. **Trust-on-Tron gate:** `allWallets:
+'HIDE'`, Trust never featured, and a unit test asserts the WC entry stays generic —
+advertising Trust would require an acceptance test proving Trust-on-Tron round-trips.
+Verified: `tsc -b` clean, 77 tests, full `vite build` succeeds (WC lazy-chunked).
+
+Optional follow-up (not required): swap the injected TronLink path for the official
+`TronLinkAdapter` too — kept the working injected path to minimise churn.
 
 ## Phase 4 — De-Tron-ify (#8) — with exit criteria
 

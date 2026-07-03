@@ -185,14 +185,20 @@ export class TronLinkSigner implements TronSigner {
   }
 }
 
+/** Sign an unsigned Tron transaction, resolving to the signed form. */
+export type TronTxSign = (unsignedTx: unknown) => Promise<unknown>;
+
 /**
- * Shared build → sign → broadcast over any {InjectedTronWeb} (the dApp-broadcast
- * model). TronLink prompts on `trx.sign`; a key-bearing TronWeb signs silently.
+ * Build → **sign (via `sign`)** → broadcast a call over any {InjectedTronWeb} (the
+ * dApp-broadcast model). The build + broadcast use `tw`; only the signature is the
+ * wallet's concern — so this serves both the injected path (`tw.trx.sign`) and
+ * adapter/WalletConnect (the adapter's `signTransaction`).
  */
-export async function sendCallVia(
+export async function sendCallSigned(
   tw: InjectedTronWeb,
   issuerBase58: string,
   call: TronCall,
+  sign: TronTxSign,
   opts: TronSendOptions = {},
 ): Promise<string> {
   const built = await tw.transactionBuilder.triggerSmartContract(
@@ -205,7 +211,7 @@ export async function sendCallVia(
   if (built.result && built.result.result === false) {
     throw new Error(`Tron call ${call.functionSignature} could not be built (constant-call reverted).`);
   }
-  const signed = await tw.trx.sign(built.transaction);
+  const signed = await sign(built.transaction);
   const receipt = await tw.trx.sendRawTransaction(signed);
   // Reject an explicit broadcast failure (SIGERROR, DUP_TRANSACTION, …) instead
   // of returning a phantom txid the caller would then wait on forever (08 §1.4).
@@ -217,6 +223,78 @@ export async function sendCallVia(
     throw new Error(`Tron broadcast of ${call.functionSignature} returned no txid: ${JSON.stringify(receipt)}`);
   }
   return txid;
+}
+
+/**
+ * Shared build → sign → broadcast over any {InjectedTronWeb} (the dApp-broadcast
+ * model). TronLink prompts on `trx.sign`; a key-bearing TronWeb signs silently.
+ */
+export function sendCallVia(
+  tw: InjectedTronWeb,
+  issuerBase58: string,
+  call: TronCall,
+  opts: TronSendOptions = {},
+): Promise<string> {
+  return sendCallSigned(tw, issuerBase58, call, (t) => tw.trx.sign(t), opts);
+}
+
+/**
+ * A wallet that connects + signs but does **not** build/broadcast (WalletConnect,
+ * or any `@tronweb3/tronwallet-adapters` adapter). The app adapts the concrete
+ * adapter to this shape; {AdapterTronSigner} pairs it with a node TronWeb for the
+ * build/broadcast, so the plugin needs no WalletConnect/tronweb dependency.
+ */
+export interface AdapterWallet {
+  /** Connect (e.g. open the WalletConnect modal); resolve to the base58 address. */
+  connect(): Promise<string>;
+  /** Sign a built Tron transaction; resolve to the signed transaction. */
+  signTransaction(unsignedTx: unknown): Promise<unknown>;
+  /** Optional: subscribe to account/disconnect changes. */
+  onChange?(cb: (e: WalletChange) => void): () => void;
+  /** Optional: tear down the session. */
+  disconnect?(): Promise<void>;
+}
+
+/**
+ * A {TronSigner} backed by an {AdapterWallet} (WalletConnect / adapter) for signing,
+ * plus a lazily-provided node TronWeb for build + broadcast. The node builds the tx
+ * against the bridge's chain, so the tx is bound to that chain regardless of what the
+ * remote wallet reports — hence `getNetwork()` returns the configured chainId (as
+ * {ManagedTronSigner} does), and the wrong-network guard is satisfied by construction.
+ */
+export class AdapterTronSigner implements TronSigner {
+  private address: string | null = null;
+  private tw: InjectedTronWeb | null = null;
+
+  public constructor(
+    private readonly wallet: AdapterWallet,
+    /** Lazily builds the node TronWeb (keeps the heavy `tronweb` import off the hot path). */
+    private readonly tronWebProvider: () => Promise<InjectedTronWeb>,
+    private readonly chainId: number,
+  ) {}
+
+  public async connect(): Promise<string> {
+    this.address = await this.wallet.connect();
+    return this.address;
+  }
+
+  public async getAddress(): Promise<string> {
+    return this.address ?? this.connect();
+  }
+
+  public async getNetwork(): Promise<number> {
+    return this.chainId;
+  }
+
+  public async sendCall(call: TronCall, opts?: TronSendOptions): Promise<string> {
+    const tw = (this.tw ??= await this.tronWebProvider());
+    const issuer = await this.getAddress();
+    return sendCallSigned(tw, issuer, call, (t) => this.wallet.signTransaction(t), opts);
+  }
+
+  public onChange(cb: (e: WalletChange) => void): () => void {
+    return this.wallet.onChange?.(cb) ?? (() => {});
+  }
 }
 
 /**
