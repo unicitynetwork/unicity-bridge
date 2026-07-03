@@ -182,15 +182,26 @@ A single Tron implementation cannot prove the abstraction, so Phase 4 is
 
 - **Sphere bridge orchestration contains no Tron** RPC, address, explorer,
   allowance, or event-decoding logic — only `Step[]` execution + previews.
+  *(landed — `bridgeIn.ts` imports only the neutral `ChainWallet` /
+  `ReceiptReader` / `BridgeSourceAdapter` interfaces; the concrete Tron wiring
+  (TronLink signer, HTTP node client, source adapter) is assembled in the
+  composition root `loadBridges.createBridgeInDeps` and injected. `grep -i tron
+  bridgeIn.ts` matches only comments + the type-only interface import.)*
 - A **fake second-chain adapter** passes the **same** orchestration contract
-  tests as Tron.
+  tests as Tron. *(landed — `bridgeIn.test.ts` "runs a single-signature deposit
+  strategy through the same orchestration".)*
 - The suite exercises **at least two deposit strategies** through that seam:
-  1. allowance → approval → lock (ERC-20 style);
-  2. single-step / signature-based deposit (EIP-3009 style, one signature).
+  1. allowance → approval → lock (ERC-20 style); *(landed)*
+  2. single-step / signature-based deposit (EIP-3009 style, one signature). *(landed)*
 - Adding EIP-2612/EIP-3009 later requires **no change to Sphere's state
   machine** — only a new adapter `prepareDeposit`.
 
-Concrete changes: discriminated-union manifest with string/hex chain refs;
+Concrete changes still open: the neutral interfaces are imported *from the Tron
+plugin package* (type-only, no runtime coupling) — a later move to a
+chain-neutral package would fully sever the import; explorer/address validation
+is keyed by numeric `chainId` rather than living behind the adapter; and the
+manifest is still Tron-flat. Remaining concrete changes:
+discriminated-union manifest with string/hex chain refs;
 Tron-only fields inside the Tron variant; drop hardcoded `"tron"` in
 `deriveTokenType`/`deriveCoinId` (see legacy-identifier note below); explorer +
 address validation move into the adapter; derive Unicity `networkId` from the
