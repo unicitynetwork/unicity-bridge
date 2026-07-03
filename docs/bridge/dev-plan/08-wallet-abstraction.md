@@ -220,12 +220,22 @@ diagram lumps them, but presentation needs no wallet/rpc, so binding it to the
 wallet-bound adapter would force every flow to construct a signer just to render a
 link.)
 
+Also landed: the neutral contracts now live in a **chain-neutral package
+`@unicitylabs/bridge-core`** — `BridgeSourceAdapter` (+ its DTOs), the
+`ChainWallet`/`ReceiptReader`/`TxReceipt` boundaries, `BridgePresentation`, and
+`BridgeManifestBase`. The Tron plugin *implements* them (and re-exports for
+back-compat); the EVM plugin will be a peer. Sphere's orchestrator (`bridgeIn.ts`)
+now imports **only** `@unicitylabs/sphere-sdk` + `@unicitylabs/bridge-core` — zero
+chain packages. Only the composition root (`loadBridges.ts`) imports the Tron
+plugin, which is correct: that is where chain-specific wiring belongs.
+
 Concrete changes still open:
-- the neutral interfaces (`ChainWallet`/`ReceiptReader`/`BridgeSourceAdapter`)
-  are imported *from the Tron plugin package* (type-only, no runtime coupling) —
-  a later move to a chain-neutral package would fully sever the import;
 - drop hardcoded `"tron"` in `deriveTokenType`/`deriveCoinId` (rides the
   coordinated cut — see legacy-identifier note below).
+
+> **Build note:** `@unicitylabs/bridge-core` is a `file:` workspace package like
+> the plugin (its `lib/` is git-ignored) — it must be built (`npm run build` in
+> `bridge-core/`) before the plugin/Sphere typecheck against it.
 
 ## Phase 5 — EVM enablement (future, unblocked by Phase 4)
 

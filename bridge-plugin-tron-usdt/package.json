@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@noble/hashes": "2.2.0",
+    "@unicitylabs/bridge-core": "file:../bridge-core",
     "@unicitylabs/state-transition-sdk": "file:../state-transition-sdk-js"
   },
   "devDependencies": {

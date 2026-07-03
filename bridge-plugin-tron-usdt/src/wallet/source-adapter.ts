@@ -12,8 +12,6 @@
  * unchanged Sphere orchestration — that is the exit criterion the interface
  * exists to satisfy.
  */
-import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
-
 import type { CreateTronUsdtBridgePluginDeps } from '../index.js';
 import { fromHex } from '../hex.js';
 import { decodeLockEvent } from '../lock-event.js';
@@ -24,74 +22,25 @@ import { buildBridgeInPlan, type TronCall } from './facade.js';
 import type { LoadedBridge } from './manifest.js';
 import { buildSelfMintVerifierService } from './self-mint-verifier.js';
 
-/** One opaque step the orchestrator runs blindly (sign+broadcast → txid). */
-export interface DepositStep {
-  /** Progress label shown while the step runs. */
-  readonly label: string;
-  /** Whether the orchestrator must wait for this tx to succeed before the next step. */
-  readonly awaitReceipt: boolean;
-  /** Sign + broadcast; resolves to the txid. The wallet + call are the adapter's concern. */
-  send(): Promise<string>;
-}
-
-/** Recovery material the orchestrator persists before the committing step. */
-export interface DepositRecovery {
-  readonly tokenIdHex: string;
-  readonly saltHex: string;
-  readonly recipientCommitmentHex: string;
-  readonly coinIdHex: string;
-  readonly tokenTypeHex: string;
-  readonly chainId: number;
-}
-
-export interface PreparedDeposit {
-  readonly recovery: DepositRecovery;
-  /** Ordered steps; the one at {commitIndex} carries the commit (lock) event. */
-  readonly steps: readonly DepositStep[];
-  readonly commitIndex: number;
-}
-
-/** Decoded commit (lock) facts the mint justification binds to. */
-export interface CommitInfo {
-  readonly nonce: bigint;
-  readonly blockNumber: bigint;
-  readonly logIndex: number;
-}
-
-/** A chain-neutral Unicity mint request (the orchestrator hands this to the SDK). */
-export interface MintRequest {
-  readonly coinIdHex: string;
-  readonly amount: bigint;
-  readonly tokenType: Uint8Array;
-  readonly salt: Uint8Array;
-  readonly genesisReason: Uint8Array;
-  readonly mintJustificationVerifierOverride: MintJustificationVerifierService;
-}
-
-export interface DepositParams {
-  readonly amount: bigint;
-  readonly networkId: number;
-  readonly recipientPubkey?: Uint8Array;
-  readonly ownerPredicateCbor?: Uint8Array;
-  readonly approveAmount?: bigint;
-}
-
-export interface MintRequestArgs {
-  readonly saltHex: string;
-  readonly amount: bigint;
-  readonly commit: CommitInfo;
-  readonly commitTxid: string;
-}
-
-/** The chain-neutral bridge-in source the orchestrator drives. */
-export interface BridgeSourceAdapter {
-  /** Derive the recovery material + the ordered opaque deposit steps. */
-  prepareDeposit(params: DepositParams): Promise<PreparedDeposit>;
-  /** Decode a committing tx's raw receipt into {CommitInfo}; null if the event isn't present yet. */
-  decodeCommit(rawReceipt: unknown): CommitInfo | null;
-  /** Build the Unicity mint request for a (recovered) committed deposit. */
-  buildMintRequest(args: MintRequestArgs): MintRequest;
-}
+// The chain-neutral adapter contract + its DTOs now live in @unicitylabs/bridge-core
+// (08 Phase 4 item 1). Re-exported here so importers of the wallet surface keep
+// resolving them; `createTronSourceAdapter` implements the core `BridgeSourceAdapter`.
+import type {
+  BridgeSourceAdapter,
+  CommitInfo,
+  DepositRecovery,
+  DepositStep,
+} from '@unicitylabs/bridge-core';
+export type {
+  BridgeSourceAdapter,
+  CommitInfo,
+  DepositParams,
+  DepositRecovery,
+  DepositStep,
+  MintRequest,
+  MintRequestArgs,
+  PreparedDeposit,
+} from '@unicitylabs/bridge-core';
 
 /** The wallet capability a Tron deposit step needs. */
 export interface DepositWallet {

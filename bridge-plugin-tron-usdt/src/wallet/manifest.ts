@@ -14,6 +14,8 @@ import {
   type BridgeConfig,
   configHash as deriveConfigHash,
 } from '../bridge-back/derivations.js';
+import type { BridgeManifestBase } from '@unicitylabs/bridge-core';
+
 import { fromHex, toHex } from '../hex.js';
 import { toEvmAddressHex } from '../tron-address.js';
 import { TronUsdtLockJustification } from '../TronUsdtLockJustification.js';
@@ -25,49 +27,12 @@ import {
 } from '../index.js';
 
 /**
- * Chain-neutral fields every bridged-asset manifest carries, whatever the source
- * chain family. Integrity-pinned; keyed by `tokenTypeHex` (derived from the source
- * chain + `asset`). All byte fields are lowercase hex, no `0x`. The chain is
- * identified by {chainRef} — a CAIP-2-style string/hex reference (`tron:0x…`,
- * `eip155:1`) — *not* a JavaScript number; a family's numeric id (if it has one)
- * lives inside that family's variant (08 Phase 4: string/hex chain refs).
+ * The chain-neutral manifest fields ({BridgeManifestBase}) now live in
+ * `@unicitylabs/bridge-core`; re-exported so importers of the wallet surface keep
+ * resolving them. The chain is identified by the base's `chainRef` (CAIP-2 string);
+ * Tron's native numeric `chainId` is a Tron-variant field below.
  */
-export interface BridgeManifestBase {
-  /** Human label for the bridged asset, e.g. "USDT (bridged · Tron)". */
-  readonly label: string;
-  /** Short ticker for the primary balance display, e.g. "USDT" — the bridged
-   * asset's coinId is bridge-derived and never in the token registry, so the
-   * wallet UI has no other source for this. */
-  readonly symbol: string;
-  /** CAIP-2-style chain reference (e.g. `tron:0xcd8690dc`, `eip155:1`) — the
-   * generic, family-agnostic chain identity. Cross-checked against the variant's
-   * native id at load. */
-  readonly chainRef: string;
-  /** Deployed `UnicityBridgeVault` (lock) address (base58 `T…`, `41…`, or 20-byte hex). */
-  readonly vault: string;
-  /** TRC20 asset (USDT) address (any of the same forms). */
-  readonly asset: string;
-  /** Source-finality threshold an independent receiver enforces (K). */
-  readonly confirmations: number;
-  /** Token decimals (USDT = 6). */
-  readonly decimals: number;
-  /** Part-B return-service base URL (bridge-back handoff). */
-  readonly returnServiceUrl: string;
-  /** `BridgeBackReason` CBOR tag the vault/prover bind (frozen config). */
-  readonly reasonTag: number;
-  /** 32-byte lock domain separator the deployed vault was constructed with (hex). */
-  readonly lockDomain: string;
-  /** 32-byte nullifier domain separator (hex). */
-  readonly nullifierDomain: string;
-  /** Groth16 verification key fingerprint the vault enforces (`0x…`); display/ops. */
-  readonly vkey: string;
-  /** 32-byte `configHash` the deployed vault self-derives (hex). Cross-checked at load. */
-  readonly configHash: string;
-  /** Optional explicit `tokenTypeHex`; derived + cross-checked when present. */
-  readonly tokenTypeHex?: string;
-  /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
-  readonly coinIdHex?: string;
-}
+export type { BridgeManifestBase } from '@unicitylabs/bridge-core';
 
 /** A Tron-family bridged-asset manifest — the Tron-only fields live here. */
 export interface TronBridgeManifest extends BridgeManifestBase {
