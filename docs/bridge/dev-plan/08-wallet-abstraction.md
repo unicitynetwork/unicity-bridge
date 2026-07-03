@@ -210,14 +210,20 @@ registry keyed by family+chain+asset** (`buildBridgeRegistry`/`bridgeAssetKey`) 
 the key is `chainRef:assetHex`, **stable across vault redeploys**, and duplicate
 family+chain+asset registration throws; `AppBridges` now exposes `registry`
 (`byKey`/`byCoinId`/`byTokenType`) and the in/out/resume flows resolve through it
-instead of an ad-hoc `loaded.find`.
+instead of an ad-hoc `loaded.find`. **Explorer + address validation now live
+behind the bridge**: a wallet-free `BridgePresentation` (`explorerTxUrl` /
+`validateAddress`), dispatched on `manifest.family` (`bridgePresentation(bridge)`)
+and resolved through the registry (`bridgePresentationFor(coinId)`); the modal no
+longer keys on a numeric `chainId` or hardcodes a chain's URL / address shape.
+(Presentation is a sibling of `BridgeSourceAdapter`, not a method on it — the
+diagram lumps them, but presentation needs no wallet/rpc, so binding it to the
+wallet-bound adapter would force every flow to construct a signer just to render a
+link.)
 
 Concrete changes still open:
 - the neutral interfaces (`ChainWallet`/`ReceiptReader`/`BridgeSourceAdapter`)
   are imported *from the Tron plugin package* (type-only, no runtime coupling) —
   a later move to a chain-neutral package would fully sever the import;
-- explorer + address validation are keyed by numeric `chainId` rather than living
-  behind the adapter;
 - drop hardcoded `"tron"` in `deriveTokenType`/`deriveCoinId` (rides the
   coordinated cut — see legacy-identifier note below).
 

@@ -17,6 +17,7 @@ import {
 import { fromHex, toHex } from '../hex.js';
 import { toEvmAddressHex } from '../tron-address.js';
 import { TronUsdtLockJustification } from '../TronUsdtLockJustification.js';
+import { tronPresentation, type BridgePresentation } from './explorer.js';
 import {
   createTronUsdtBridgePlugin,
   type CreateTronUsdtBridgePluginDeps,
@@ -179,6 +180,22 @@ function loadOne(m: BridgeManifest, deps: CreateTronUsdtBridgePluginDeps): Loade
   }
 
   return { manifest: m, plugin, bridgeConfig, configHash };
+}
+
+/**
+ * The {BridgePresentation} for a resolved bridge — dispatched on the manifest
+ * family so the wallet UI asks the bridge for its explorer link / address
+ * validation instead of keying on a numeric chainId (08 §8). A second family adds
+ * a case here; the UI is untouched.
+ */
+export function bridgePresentation(bridge: LoadedBridge): BridgePresentation {
+  const m = bridge.manifest;
+  switch (m.family) {
+    case 'tron':
+      return tronPresentation(m.chainId);
+    default:
+      throw new Error(`No bridge presentation for chain family ${(m as { family: string }).family}`);
+  }
 }
 
 /** The justification CBOR tag every bridged USDT mint reason carries (dispatch key). */
