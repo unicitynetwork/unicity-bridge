@@ -15,6 +15,8 @@ import { SigningService } from '@unicitylabs/state-transition-sdk/lib/crypto/sec
 import { fromHex, recipientCommitment, toHex } from '../src/index.js';
 import {
   buildBridgeInPlan,
+  buildBridgeRegistry,
+  bridgeAssetKey,
   loadBridges,
   NILE_USDT_BRIDGE,
   MAX_UINT256,
@@ -57,6 +59,23 @@ test('loadBridges rejects a tokenTypeHex that does not match (integrity pin)', (
 test('loadBridges rejects a chainRef that disagrees with the Tron chainId (integrity pin)', () => {
   const bad = { ...NILE_USDT_BRIDGE, chainRef: 'tron:0xdeadbeef' };
   assert.throws(() => loadBridges(bad, deps()), /chainRef mismatch/);
+});
+
+test('registry indexes a bridge by family+chain+asset key / coinId / tokenType', () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  const registry = buildBridgeRegistry([loaded]);
+  const key = bridgeAssetKey(loaded);
+
+  assert.ok(key.startsWith('tron:0xcd8690dc:'), 'key carries family+chain (chainRef)');
+  assert.equal(registry.byKey(key), loaded, 'byKey resolves');
+  assert.equal(registry.byCoinId(loaded.plugin.coinIdHex.toUpperCase()), loaded, 'byCoinId is case-insensitive');
+  assert.equal(registry.byTokenType(loaded.plugin.tokenTypeHex), loaded, 'byTokenType resolves');
+  assert.equal(registry.byCoinId('ab'.repeat(32)), undefined, 'unknown coin -> undefined');
+});
+
+test('registry rejects two manifests describing the same family+chain+asset', () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  assert.throws(() => buildBridgeRegistry([loaded, loaded]), /Duplicate bridge/);
 });
 
 test('buildBridgeInPlan derives tokenId + recipientCommitment + Tron calls', async () => {
