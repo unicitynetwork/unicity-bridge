@@ -175,6 +175,21 @@ advertises it. Wallet picker replaces the hardcoded "Bridge in with TronLink"
 button. **Do not** advertise Trust-on-Tron via WalletConnect (Trust's WC list is
 EVM+Solana, not Tron) — gate behind an acceptance test.
 
+**Seam landed (2026-07-03).** `bridge-plugin/src/wallet/providers.ts` defines a
+`TronWalletProvider` registry (`{ id, name, isAvailable(), create(chainId) →
+TronSigner }`) with `tronLinkProvider()` (works now, no new dep) and
+`availableTronWallets(config)`. The modal renders a **data-driven wallet picker**
+(a button per provider) instead of the hardcoded TronLink button; the picked
+provider `create`s the signer, threaded through `useBridgeIn`
+(`BridgeInRequest.signer`) into the unchanged `runBridgeIn`. WalletConnect is wired
+by **injecting a signer factory** from the app (`sphere/src/bridge/walletconnect.ts`,
+gated on `VITE_WALLETCONNECT_PROJECT_ID`) — so the plugin and orchestrator carry
+**no** WalletConnect dependency. **Remaining to finish Phase 3:** `npm i
+@tronweb3/tronwallet-adapters @tronweb3/walletconnect-tron`, set the `projectId`,
+and implement `createWalletConnectSigner()` (the one documented TODO in
+`walletconnect.ts`); then the Trust-on-Tron acceptance-test gate. Until the
+`projectId` is set, only TronLink is offered (no behaviour change).
+
 ## Phase 4 — De-Tron-ify (#8) — with exit criteria
 
 A single Tron implementation cannot prove the abstraction, so Phase 4 is

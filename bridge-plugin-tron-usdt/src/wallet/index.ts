@@ -8,6 +8,7 @@ export * from './facade.js';
 export * from './manifests.js';
 export * from './registry.js';
 export * from './tron-signer.js';
+export * from './providers.js';
 export * from './allowance.js';
 export * from './source-adapter.js';
 export * from './explorer.js';
