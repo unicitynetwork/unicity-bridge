@@ -196,16 +196,26 @@ A single Tron implementation cannot prove the abstraction, so Phase 4 is
 - Adding EIP-2612/EIP-3009 later requires **no change to Sphere's state
   machine** — only a new adapter `prepareDeposit`.
 
-Concrete changes still open: the neutral interfaces are imported *from the Tron
-plugin package* (type-only, no runtime coupling) — a later move to a
-chain-neutral package would fully sever the import; explorer/address validation
-is keyed by numeric `chainId` rather than living behind the adapter; and the
-manifest is still Tron-flat. Remaining concrete changes:
-discriminated-union manifest with string/hex chain refs;
-Tron-only fields inside the Tron variant; drop hardcoded `"tron"` in
-`deriveTokenType`/`deriveCoinId` (see legacy-identifier note below); explorer +
-address validation move into the adapter; derive Unicity `networkId` from the
-trust base (not hardcoded `4`); manifest registry keyed by family+chain+asset.
+Concrete changes landed: **discriminated-union manifest with string/hex chain
+refs** — `BridgeManifest` is now `BridgeManifestBase` (chain-neutral, carries a
+CAIP-2 `chainRef` like `tron:0xcd8690dc`) `&` a `family: 'tron'` variant holding
+the Tron-only `chainId`/`rpcUrl`/`apiKey`; `loadOne` narrows on `family` and
+cross-checks `chainRef` against the native `chainId` as an integrity pin (a new
+mismatch test guards it). A second family adds a variant + loader branch; the
+union stays additive.
+
+Also landed earlier: Tron-only fields now live inside the Tron variant; Unicity
+`networkId` is derived from the trust base (not hardcoded `4`).
+
+Concrete changes still open:
+- the neutral interfaces (`ChainWallet`/`ReceiptReader`/`BridgeSourceAdapter`)
+  are imported *from the Tron plugin package* (type-only, no runtime coupling) —
+  a later move to a chain-neutral package would fully sever the import;
+- explorer + address validation are keyed by numeric `chainId` rather than living
+  behind the adapter;
+- a manifest **registry** keyed by family+chain+asset;
+- drop hardcoded `"tron"` in `deriveTokenType`/`deriveCoinId` (rides the
+  coordinated cut — see legacy-identifier note below).
 
 ## Phase 5 — EVM enablement (future, unblocked by Phase 4)
 

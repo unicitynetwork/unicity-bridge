@@ -22,8 +22,10 @@ import type { BridgeManifest } from './manifest.js';
  * `returnServiceUrl` defaults to a local Part-B service; override per environment.
  */
 export const NILE_USDT_BRIDGE: BridgeManifest = {
+  family: 'tron',
   label: 'USDT (bridged · Tron)',
   symbol: 'USDT',
+  chainRef: 'tron:0xcd8690dc',
   chainId: 3448148188,
   vault: 'TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY',
   asset: 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf',

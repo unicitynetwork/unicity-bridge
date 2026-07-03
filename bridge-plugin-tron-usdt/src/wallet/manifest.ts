@@ -24,18 +24,24 @@ import {
 } from '../index.js';
 
 /**
- * One bridged asset, integrity-pinned. Keyed by `tokenTypeHex` (derived from
- * `chainId`+`asset`; the registry key). All byte fields are lowercase hex, no `0x`.
+ * Chain-neutral fields every bridged-asset manifest carries, whatever the source
+ * chain family. Integrity-pinned; keyed by `tokenTypeHex` (derived from the source
+ * chain + `asset`). All byte fields are lowercase hex, no `0x`. The chain is
+ * identified by {chainRef} — a CAIP-2-style string/hex reference (`tron:0x…`,
+ * `eip155:1`) — *not* a JavaScript number; a family's numeric id (if it has one)
+ * lives inside that family's variant (08 Phase 4: string/hex chain refs).
  */
-export interface BridgeManifest {
+export interface BridgeManifestBase {
   /** Human label for the bridged asset, e.g. "USDT (bridged · Tron)". */
   readonly label: string;
   /** Short ticker for the primary balance display, e.g. "USDT" — the bridged
    * asset's coinId is bridge-derived and never in the token registry, so the
    * wallet UI has no other source for this. */
   readonly symbol: string;
-  /** Tron network id (e.g. Nile = 3448148188). */
-  readonly chainId: number;
+  /** CAIP-2-style chain reference (e.g. `tron:0xcd8690dc`, `eip155:1`) — the
+   * generic, family-agnostic chain identity. Cross-checked against the variant's
+   * native id at load. */
+  readonly chainRef: string;
   /** Deployed `UnicityBridgeVault` (lock) address (base58 `T…`, `41…`, or 20-byte hex). */
   readonly vault: string;
   /** TRC20 asset (USDT) address (any of the same forms). */
@@ -44,10 +50,6 @@ export interface BridgeManifest {
   readonly confirmations: number;
   /** Token decimals (USDT = 6). */
   readonly decimals: number;
-  /** Tron HTTP RPC base URL. */
-  readonly rpcUrl: string;
-  /** Optional TronGrid API key. */
-  readonly apiKey?: string;
   /** Part-B return-service base URL (bridge-back handoff). */
   readonly returnServiceUrl: string;
   /** `BridgeBackReason` CBOR tag the vault/prover bind (frozen config). */
@@ -64,6 +66,29 @@ export interface BridgeManifest {
   readonly tokenTypeHex?: string;
   /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
   readonly coinIdHex?: string;
+}
+
+/** A Tron-family bridged-asset manifest — the Tron-only fields live here. */
+export interface TronBridgeManifest extends BridgeManifestBase {
+  readonly family: 'tron';
+  /** Tron network id (e.g. Nile = 3448148188). Native id — cross-checked vs `chainRef`. */
+  readonly chainId: number;
+  /** Tron HTTP RPC base URL. */
+  readonly rpcUrl: string;
+  /** Optional TronGrid API key. */
+  readonly apiKey?: string;
+}
+
+/**
+ * A bridged-asset manifest, discriminated on `family`. A second chain family
+ * (e.g. `eip155`) adds a variant here and the union stays additive — Sphere never
+ * branches on it (08 Phase 4).
+ */
+export type BridgeManifest = TronBridgeManifest;
+
+/** The CAIP-2-style chain reference for a Tron numeric chainId (`tron:0x<hex>`). */
+export function tronChainRef(chainId: number): string {
+  return `tron:0x${chainId.toString(16)}`;
 }
 
 /** A manifest entry resolved into everything the wallet needs to use it. */
@@ -106,6 +131,20 @@ export function loadBridges(
 }
 
 function loadOne(m: BridgeManifest, deps: CreateTronUsdtBridgePluginDeps): LoadedBridge {
+  // Discriminate on family so a future variant dispatches to its own loader; today
+  // only Tron exists. Narrowing also unlocks the Tron-only fields below.
+  if (m.family !== 'tron') {
+    throw new Error(`BridgeManifest(${(m as BridgeManifestBase).label}): unsupported chain family ${(m as { family: string }).family}`);
+  }
+  // The generic chainRef must agree with the Tron-native chainId — integrity pin,
+  // like tokenType/coinId/configHash: a misdescribed chain fails loudly at load.
+  const expectedRef = tronChainRef(m.chainId);
+  if (m.chainRef.toLowerCase() !== expectedRef) {
+    throw new Error(
+      `BridgeManifest(${m.label}): chainRef mismatch — declared ${m.chainRef}, derived ${expectedRef} from chainId ${m.chainId}`,
+    );
+  }
+
   const plugin = createTronUsdtBridgePlugin(
     {
       chainId: m.chainId,

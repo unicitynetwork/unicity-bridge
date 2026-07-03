@@ -54,6 +54,11 @@ test('loadBridges rejects a tokenTypeHex that does not match (integrity pin)', (
   assert.throws(() => loadBridges(bad, deps()), /tokenTypeHex mismatch/);
 });
 
+test('loadBridges rejects a chainRef that disagrees with the Tron chainId (integrity pin)', () => {
+  const bad = { ...NILE_USDT_BRIDGE, chainRef: 'tron:0xdeadbeef' };
+  assert.throws(() => loadBridges(bad, deps()), /chainRef mismatch/);
+});
+
 test('buildBridgeInPlan derives tokenId + recipientCommitment + Tron calls', async () => {
   const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
   const owner = SignaturePredicate.create(SigningService.generate().publicKey);
