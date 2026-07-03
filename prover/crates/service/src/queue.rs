@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::{
     prover::Prover,
+    sequencer::ChainEvents,
     store::{BatchBundle, ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
     submitter::Submitter,
 };
@@ -54,6 +55,7 @@ pub fn spawn(
     store: ReturnStore,
     prover: Prover,
     submitter: Submitter,
+    chain_events: ChainEvents,
     batch_target: usize,
     max_wait: Duration,
 ) -> QueueHandle {
@@ -66,18 +68,21 @@ pub fn spawn(
         store,
         prover,
         submitter,
+        chain_events,
         batch_target.max(1),
         max_wait,
     ));
     QueueHandle { tx, state }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn worker_loop(
     mut rx: mpsc::Receiver<QueueCommand>,
     state: Arc<Mutex<QueueState>>,
     store: ReturnStore,
     prover: Prover,
     submitter: Submitter,
+    chain_events: ChainEvents,
     batch_target: usize,
     max_wait: Duration,
 ) {
@@ -119,7 +124,7 @@ async fn worker_loop(
             continue;
         }
 
-        prove_single_flight(ids, &state, &store, &prover, &submitter).await;
+        prove_single_flight(ids, &state, &store, &prover, &submitter, &chain_events).await;
     }
 }
 
@@ -129,6 +134,7 @@ async fn prove_single_flight(
     store: &ReturnStore,
     prover: &Prover,
     submitter: &Submitter,
+    chain_events: &ChainEvents,
 ) {
     let batch_id = batch_id(&ids);
     state.lock().await.active_batch = Some(batch_id.clone());
@@ -145,17 +151,41 @@ async fn prove_single_flight(
         let Some(record) = store.get(&id) else {
             continue;
         };
-        match prover
-            .prove(batch_id.clone(), record.wire_input.clone())
-            .await
-        {
+
+        // Sync the accumulator to the vault's current on-chain `spentRoot` and
+        // rewrite this batch's `spent_root_old/new` + non-membership witnesses to
+        // chain onto it. Intake assembles the wire input against an *empty*
+        // accumulator (`spent_root_old = 0`); proving that as-is reverts with
+        // `vault: stale root` once the vault has settled any prior batch. This runs
+        // in the single-flight worker, so each batch re-syncs *after* the previous
+        // one settles — sequential settlements chain correctly.
+        let wire_input = match sync_and_patch(chain_events, &record.wire_input).await {
+            Ok(patched) => patched,
+            Err(failure) => {
+                tracing::error!(
+                    return_id = %id,
+                    batch_id = %batch_id,
+                    error = %failure.message,
+                    "accumulator sync failed — not proving (would revert on-chain)",
+                );
+                let _ = store.update_status(
+                    &id,
+                    ReturnStatus::Failed,
+                    Some(batch_id.clone()),
+                    Some(failure),
+                );
+                continue;
+            }
+        };
+
+        match prover.prove(batch_id.clone(), wire_input.clone()).await {
             Ok(bundle) => {
                 // The wire input already carries this return's settlement leaf +
-                // lock refs (decoded once at intake, api.rs); re-decode here so the
-                // published bundle carries the plaintext fulfillBatch calldata too —
+                // lock refs; re-decode the *patched* input here so the published
+                // bundle carries the plaintext fulfillBatch calldata too —
                 // otherwise neither a self-settler nor the S4 submit command could
                 // ever actually call fulfillBatch (only the proof would be public).
-                let (leaves, lock_refs) = wire::decode_guest_input(&record.wire_input)
+                let (leaves, lock_refs) = wire::decode_guest_input(&wire_input)
                     .map(|input| (input.return_leaves, input.sorted_lock_refs))
                     .unwrap_or_default();
                 // Publish the bundle (self-settle source, §B4) before advancing.
@@ -248,6 +278,61 @@ async fn submit_batch(
             );
         }
     }
+}
+
+/// Sync the accumulator to the chain and rewrite the batch's accumulator fields
+/// (`spent_root_old/new` + non-membership witnesses) so the proof settles on top
+/// of the vault's current `spentRoot`. Everything else in the wire input (leaves,
+/// lock refs, config, trust base, burns) is accumulator-independent and untouched.
+///
+/// Returns a ready-to-prove wire input, or a `ChainRejected` failure that names
+/// exactly why (diverged log, or a nullifier already spent on-chain).
+async fn sync_and_patch(
+    chain_events: &ChainEvents,
+    wire_input: &[u8],
+) -> Result<Vec<u8>, ReturnFailure> {
+    let reject = |msg: String| ReturnFailure::recoverable(ErrorKind::ChainRejected, msg);
+
+    let acc = chain_events
+        .synced_accumulator()
+        .await
+        .map_err(|e| reject(format!("accumulator not synced to chain: {e}")))?;
+
+    let mut input = wire::decode_guest_input(wire_input)
+        .map_err(|e| reject(format!("cannot decode stored wire input: {e:?}")))?;
+
+    let nullifiers: Vec<[u8; 32]> = input.return_leaves.iter().map(|l| l.nullifier).collect();
+    let next = bridge_return_host::s2::next_batch(&acc, &nullifiers).map_err(|e| {
+        // The dominant real cause is a nullifier already present in the on-chain
+        // accumulator: this return was already settled (or double-submitted).
+        reject(format!(
+            "cannot chain batch onto on-chain spentRoot 0x{} ({} already-spent nullifier(s)): {e} \
+             — the return may already be settled",
+            hex::encode(acc.spent_root),
+            acc.spent_count,
+        ))
+    })?;
+
+    input.public_values.spent_root_old = next.spent_root_old;
+    input.public_values.spent_root_new = next.spent_root_new;
+    input.witness.accumulator_witnesses = next.witnesses;
+
+    let patched = wire::encode_guest_input(&input);
+
+    // Fail-fast host precheck over the exact bytes the prover will consume — a
+    // patched-but-inconsistent input is caught here (seconds) rather than after a
+    // multi-minute proof.
+    bridge_return_host::s1::precheck_wire(&patched)
+        .map_err(|e| reject(format!("patched wire input failed precheck: {e}")))?;
+
+    tracing::info!(
+        spent_root_old = %format!("0x{}", hex::encode(next.spent_root_old)),
+        spent_root_new = %format!("0x{}", hex::encode(next.spent_root_new)),
+        prior_spent = acc.spent_count,
+        chain_synced = chain_events.is_live(),
+        "accumulator synced — batch chained onto vault spentRoot",
+    );
+    Ok(patched)
 }
 
 fn batch_id(ids: &[String]) -> String {

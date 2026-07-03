@@ -6,8 +6,8 @@ use axum::{
 };
 use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
 use bridge_return_service::{
-    config::ServiceConfig, prover::Prover, queue, router, store::ReturnStore, submitter::Submitter,
-    AppState,
+    config::ServiceConfig, prover::Prover, queue, router, sequencer::ChainEvents,
+    store::ReturnStore, submitter::Submitter, AppState,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -23,6 +23,7 @@ fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
         store.clone(),
         Prover::new(config.clone()),
         Submitter::none(),
+        ChainEvents::none(),
         config.batch_target,
         config.max_wait,
     );
@@ -31,6 +32,7 @@ fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
         store,
         queue,
         intake: None,
+        chain_events: ChainEvents::none(),
     })
 }
 

@@ -23,6 +23,9 @@ pub struct AppState {
     /// Loaded when `BRIDGE_DEPLOYMENT_CONFIG` + `TRUST_BASE_PATH` are set — enables
     /// the wallet `{tokenCbor, reasonBytes}` envelope intake (else only `wireInput`).
     pub intake: Option<Arc<EnvelopeIntake>>,
+    /// S2/S3 chain-sync seam — reconstructs the vault's accumulator so proofs
+    /// chain onto its current `spentRoot` (`BRIDGE_RETURN_EVENTS_CMD`).
+    pub chain_events: sequencer::ChainEvents,
 }
 
 /// Load the envelope intake from config (deployment JSON + trust base), if both

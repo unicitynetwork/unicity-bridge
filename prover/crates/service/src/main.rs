@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 
 use bridge_return_service::{
-    config::ServiceConfig, load_intake, prover::Prover, queue, router, store::ReturnStore,
-    submitter::Submitter, AppState,
+    config::ServiceConfig, load_intake, prover::Prover, queue, router, sequencer::ChainEvents,
+    store::ReturnStore, submitter::Submitter, AppState,
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -30,6 +30,15 @@ async fn main() {
     let store = ReturnStore::default();
     let submitter = Submitter::from_env();
     tracing::info!("S4 submitter: {}", submitter.label());
+    let chain_events = ChainEvents::from_env();
+    tracing::info!("accumulator chain-sync: {}", chain_events.label());
+    if !chain_events.is_live() {
+        tracing::warn!(
+            "no chain watcher (BRIDGE_RETURN_EVENTS_CMD unset) — the vault is assumed pristine \
+             (spentRoot=0); settlement will revert with `vault: stale root` once it has settled \
+             any prior batch",
+        );
+    }
     tracing::info!(
         prove_mode = ?config.prove_mode,
         batch_target = config.batch_target,
@@ -41,6 +50,7 @@ async fn main() {
         store.clone(),
         Prover::new(config.clone()),
         submitter,
+        chain_events.clone(),
         config.batch_target,
         config.max_wait,
     );
@@ -49,6 +59,7 @@ async fn main() {
         store,
         queue,
         intake,
+        chain_events,
     })
     .layer(
         TraceLayer::new_for_http()

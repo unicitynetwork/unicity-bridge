@@ -32,6 +32,27 @@ function loadEnv() {
   return env;
 }
 
+// Surface the *actual* revert reason. Tron reports a generic
+// `resMessage = "REVERT opcode executed"`, but the Solidity `require(...)` string
+// lives in `contractResult[0]` as an ABI-encoded `Error(string)`
+// (`0x08c379a0` selector + `abi.encode(string)`). Decoding it turns an opaque
+// REVERT into e.g. `vault: stale root` / `vault: lock digest mismatch`.
+function revertReason(info) {
+  try {
+    let raw = Array.isArray(info?.contractResult) ? info.contractResult[0] : info?.contractResult;
+    if (typeof raw === "string") {
+      if (raw.startsWith("0x")) raw = raw.slice(2);
+      if (raw.length >= 8 && raw.slice(0, 8).toLowerCase() === "08c379a0") {
+        const [msg] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], "0x" + raw.slice(8));
+        if (msg) return msg;
+      }
+    }
+  } catch (_) {
+    /* fall through to the generic message */
+  }
+  return info?.resMessage ? Buffer.from(info.resMessage, "hex").toString() : "unknown revert";
+}
+
 const HOST_BIN =
   process.env.BRIDGE_HOST_BIN ||
   path.join(__dirname, "..", "..", "..", "prover", "target", "debug", "bridge-return-host");
@@ -112,6 +133,29 @@ async function scan() {
   if (!synced) process.exit(1);
 }
 
+// `events` — emit the vault's settlement log as the JSON the bridge-return-service
+// consumes for accumulator sync (BRIDGE_RETURN_EVENTS_CMD). Shape:
+//   { "batches": [{ nullifiers, spent_root_old, spent_root_new }],
+//     "spent_root": <live vault spentRoot> }
+// ONLY this JSON goes to stdout (progress to stderr) so the service can parse it.
+async function events() {
+  const env = loadEnv();
+  const base = (env.TRON_RPC_URL || "https://nile.trongrid.io").replace(/\/$/, "");
+  const tw = new TronWeb({ fullHost: base, privateKey: env.TRON_SK });
+  const vaultBase58 = env.TRON_VAULT;
+  const vaultHex = tw.address.toHex(vaultBase58);
+  const raw = [
+    ...(await fetchEvents(base, vaultBase58, "BatchFulfilled")),
+    ...(await fetchEvents(base, vaultBase58, "Released")),
+  ];
+  const grouped = groupBatches(raw.map(normalizeEvent));
+  const spentRoot = await vaultSpentRoot(tw, vaultHex);
+  console.error(
+    `relayer events: vault ${vaultBase58} -> ${grouped.batches.length} settled batch(es), spentRoot ${spentRoot}`
+  );
+  process.stdout.write(JSON.stringify({ batches: grouped.batches, spent_root: spentRoot }));
+}
+
 // Accept emit-settlement (single leaf/lock_ref) or emit-settlement-b2 (arrays).
 function readBatch(settle) {
   const leaves = settle.leaves || (settle.leaf ? [settle.leaf] : []);
@@ -172,7 +216,7 @@ async function settle(bundlePath, settlePath) {
     `  fulfillBatch tx ${id} -> ${info?.receipt?.result} (energy ${info?.receipt?.energy_usage_total})`
   );
   if (!ok) {
-    console.log("  resMessage:", info?.resMessage ? Buffer.from(info.resMessage, "hex").toString() : "?");
+    console.log(`  ❌ fulfillBatch reverted: ${revertReason(info)}`);
     process.exit(1);
   }
   console.log(`  🎉 settled. https://nile.tronscan.org/#/transaction/${id}`);
@@ -244,8 +288,11 @@ async function settleFromStdin() {
   }
   const ok = info && info.receipt && info.receipt.result === "SUCCESS";
   if (!ok) {
-    console.error(`fulfillBatch tx ${id} -> ${info?.receipt?.result || "unknown"}`);
-    if (info?.resMessage) console.error(Buffer.from(info.resMessage, "hex").toString());
+    // stderr is surfaced verbatim by the service's S4 submit failure log, so the
+    // decoded require() string ("vault: stale root", …) reaches the operator.
+    console.error(
+      `fulfillBatch tx ${id} -> ${info?.receipt?.result || "unknown"}: ${revertReason(info)}`
+    );
     process.exit(1);
   }
   console.error(`settled: https://nile.tronscan.org/#/transaction/${id}`);
@@ -255,13 +302,16 @@ async function settleFromStdin() {
 async function main() {
   const cmd = process.argv[2];
   if (cmd === "scan") return scan();
+  if (cmd === "events") return events();
   if (cmd === "settle") {
     if (process.argv[3] === "--stdin") return settleFromStdin();
     const [, , , bundle, settlePath] = process.argv;
     if (!bundle || !settlePath) throw new Error("usage: relayer.js settle <bundle.json> <settle.json>");
     return settle(bundle, settlePath);
   }
-  console.log("usage: relayer.js scan | settle <bundle.json> <settle.json> | settle --stdin");
+  console.log(
+    "usage: relayer.js scan | events | settle <bundle.json> <settle.json> | settle --stdin"
+  );
 }
 
 main().catch((e) => {

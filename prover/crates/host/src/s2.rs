@@ -34,6 +34,59 @@ pub struct SettledBatch {
     pub spent_root_new: [u8; 32],
 }
 
+/// The decoded settlement log a chain watcher hands to S2: the ordered settled
+/// batches plus, optionally, the vault's current on-chain `spentRoot` so the
+/// caller can assert the rebuilt accumulator actually matches the chain.
+#[derive(Debug, Clone, Default)]
+pub struct SettledLog {
+    pub batches: Vec<SettledBatch>,
+    /// The vault's live `spentRoot()`, if the watcher included it.
+    pub on_chain_spent_root: Option<[u8; 32]>,
+}
+
+/// Parse the settlement-log JSON emitted by a chain watcher (e.g.
+/// `relayer.js events`) into a [`SettledLog`]. Shape:
+/// `{ "batches": [{ "nullifiers": [hex…], "spent_root_old": hex, "spent_root_new": hex }],
+///    "spent_root": hex? }`. This is the single decoder shared by the `s2-rebuild`
+/// CLI and the live service, so both agree on the wire shape.
+pub fn parse_settled_log(json: &serde_json::Value) -> Result<SettledLog> {
+    let err = |m: String| HostError::Check(m);
+    let b32 = |v: &serde_json::Value| -> Result<[u8; 32]> {
+        let s = v
+            .as_str()
+            .ok_or_else(|| err("expected hex string".to_string()))?;
+        hex::decode(s.strip_prefix("0x").unwrap_or(s))?
+            .try_into()
+            .map_err(|_| err("expected 32 bytes".to_string()))
+    };
+    let b32_arr = |v: &serde_json::Value| -> Result<Vec<[u8; 32]>> {
+        v.as_array()
+            .ok_or_else(|| err("expected array".to_string()))?
+            .iter()
+            .map(b32)
+            .collect()
+    };
+    let mut batches = Vec::new();
+    for b in json["batches"]
+        .as_array()
+        .ok_or_else(|| err("settlement log: missing `batches` array".to_string()))?
+    {
+        batches.push(SettledBatch {
+            nullifiers: b32_arr(&b["nullifiers"])?,
+            spent_root_old: b32(&b["spent_root_old"])?,
+            spent_root_new: b32(&b["spent_root_new"])?,
+        });
+    }
+    let on_chain_spent_root = match json.get("spent_root") {
+        Some(v) if !v.is_null() => Some(b32(v)?),
+        _ => None,
+    };
+    Ok(SettledLog {
+        batches,
+        on_chain_spent_root,
+    })
+}
+
 /// The reconstructed accumulator after replaying the event log.
 #[derive(Debug, Clone)]
 pub struct RebuiltAccumulator {
@@ -89,6 +142,28 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         spent_root: root,
         spent_count,
     })
+}
+
+/// Rebuild from a [`SettledLog`] and, when the watcher reported the vault's live
+/// `spentRoot`, assert the reconstructed root matches it. A divergence means the
+/// event log is incomplete/tampered or came from a different accumulator version
+/// — settling on top of it would revert on-chain (`vault: stale root`), so fail
+/// loudly *before* spending a ~7-minute proof.
+pub fn rebuild_verified(log: &SettledLog) -> Result<RebuiltAccumulator> {
+    let acc = rebuild(&log.batches)?;
+    if let Some(on_chain) = log.on_chain_spent_root {
+        if acc.spent_root != on_chain {
+            return Err(HostError::Check(format!(
+                "accumulator diverged from chain: rebuilt spentRoot 0x{} != on-chain 0x{} \
+                 ({} batch(es), {} nullifier(s) replayed) — event log incomplete or stale",
+                hex::encode(acc.spent_root),
+                hex::encode(on_chain),
+                log.batches.len(),
+                acc.spent_count,
+            )));
+        }
+    }
+    Ok(acc)
 }
 
 /// The accumulator inputs a prover needs to settle a new batch on top of a

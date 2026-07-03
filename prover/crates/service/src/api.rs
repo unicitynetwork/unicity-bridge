@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::{
-    sequencer,
     store::{ReturnRecord, ReturnStatus},
     AppState,
 };
@@ -37,6 +36,7 @@ pub struct HealthResponse {
     pub batch_target: usize,
     pub max_wait_ms: u128,
     pub prove_mode: String,
+    pub chain_sync: String,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
@@ -47,6 +47,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         batch_target: state.config.batch_target,
         max_wait_ms: state.config.max_wait.as_millis(),
         prove_mode: format!("{:?}", state.config.prove_mode),
+        chain_sync: state.chain_events.label().to_string(),
     })
 }
 
@@ -58,12 +59,19 @@ pub struct AccumulatorResponse {
     pub spent_count: usize,
 }
 
-async fn accumulator() -> Result<Json<AccumulatorResponse>, ApiError> {
-    // R0/R1 has no live TronGrid watcher yet. Rebuilding the empty log still
-    // exercises the same S2 path and exposes the current disposable state shape.
-    let acc = sequencer::rebuild_accumulator(&[])?;
+async fn accumulator(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<AccumulatorResponse>, ApiError> {
+    // Reconstruct the vault's accumulator from its on-chain settlement events
+    // (via the configured watcher), verified against the live `spentRoot`. With
+    // no watcher this rebuilds the empty log (`spent_root = 0`, pristine vault).
+    let acc = state
+        .chain_events
+        .synced_accumulator()
+        .await
+        .map_err(|e| ApiError::ChainUnsynced(e.to_string()))?;
     Ok(Json(AccumulatorResponse {
-        synced: true,
+        synced: state.chain_events.is_live(),
         spent_root: format!("0x{}", hex::encode(acc.spent_root)),
         spent_count: acc.spent_count,
     }))
@@ -196,6 +204,8 @@ pub enum ApiError {
     Host(#[from] bridge_return_host::HostError),
     #[error("{0}")]
     Queue(#[from] crate::queue::QueueError),
+    #[error("accumulator not synced to chain: {0}")]
+    ChainUnsynced(String),
     #[error("return not found: {0}")]
     NotFound(String),
 }
@@ -207,6 +217,7 @@ impl IntoResponse for ApiError {
             | ApiError::PrecheckRejected(_)
             | ApiError::Host(_)
             | ApiError::Queue(_) => StatusCode::BAD_REQUEST,
+            ApiError::ChainUnsynced(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
         };
         let code = match &self {
@@ -214,11 +225,15 @@ impl IntoResponse for ApiError {
             ApiError::PrecheckRejected(_) => "precheck_rejected",
             ApiError::Host(_) => "host_error",
             ApiError::Queue(_) => "queue_closed",
+            ApiError::ChainUnsynced(_) => "chain_unsynced",
             ApiError::NotFound(_) => "not_found",
         };
         let recoverable = matches!(
             &self,
-            ApiError::PrecheckRejected(_) | ApiError::Queue(_) | ApiError::Host(_)
+            ApiError::PrecheckRejected(_)
+                | ApiError::Queue(_)
+                | ApiError::Host(_)
+                | ApiError::ChainUnsynced(_)
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves
