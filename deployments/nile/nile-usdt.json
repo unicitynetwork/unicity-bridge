@@ -24,7 +24,7 @@
     "deployed_at": "2026-07-03"
   },
   "trust_base": {
-    "file": "bft-trustbase.testnet2.json",
+    "file": "../../bft-trustbase.testnet2.json",
     "network_id": 4,
     "canonical_hash": "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0"
   }

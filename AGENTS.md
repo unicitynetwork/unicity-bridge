@@ -19,7 +19,8 @@ or commit them here.
 | `packages/bridge-core/` | TypeScript | Chain-neutral bridge interfaces and wallet boundaries |
 | `packages/bridge-plugin-tron-usdt/` | TypeScript | Tron USDT bridge plugin, verifier, wallet adapter, CLI/demo |
 | `prover/` | Rust / SP1 | Return relation, host tooling, prover service |
-| `deployments/` | JSON | Frozen deployment configs and trust-base metadata |
+| `bft-trustbase.testnet2.json` | JSON | Unicity testnet2 trust base |
+| `deployments/` | JSON | Frozen deployment configs |
 | `docs/spec/` | Markdown | Engineering specs and design references |
 | `docs/dev-plan/` | Markdown | Historical and planning documents |
 

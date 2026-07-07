@@ -3,7 +3,7 @@ set -euo pipefail
 export BRIDGE_RETURN_BIND=127.0.0.1:8787
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export BRIDGE_DEPLOYMENT_CONFIG="$ROOT/deployments/nile/nile-usdt.json"
-export TRUST_BASE_PATH="$ROOT/deployments/nile/bft-trustbase.testnet2.json"
+export TRUST_BASE_PATH="$ROOT/bft-trustbase.testnet2.json"
 export BRIDGE_RETURN_PROVE_MODE=sp1_groth16
 export SP1_GUEST_ELF="$ROOT/prover/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/bridge-return-sp1-guest"
 export SP1_PROVER=cpu

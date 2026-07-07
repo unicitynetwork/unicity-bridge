@@ -152,7 +152,7 @@ BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer.js settle --
 1. Run the service (precheck mode is enough to exercise the wallet flow):
    ```bash
    BRIDGE_DEPLOYMENT_CONFIG=$PWD/deployments/nile/nile-usdt.json \
-   TRUST_BASE_PATH=$PWD/deployments/nile/bft-trustbase.testnet2.json \
+   TRUST_BASE_PATH=$PWD/bft-trustbase.testnet2.json \
    cargo run -p bridge-return-service
    ```
 2. Point the wallet at it: set `VITE_BRIDGE_RETURN_SERVICE_URL=http://localhost:8787`
