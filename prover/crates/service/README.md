@@ -1,8 +1,8 @@
 # bridge-return-service
 
 The all-Rust **return sequencing + proving service** (dev plan
-[`07-return-service.md`](../../../docs/bridge/dev-plan/07-return-service.md), design
-[`integration.md`](../../../docs/bridge/dev-plan/integration.md) Part B). It turns a
+[`07-return-service.md`](../../../docs/dev-plan/07-return-service.md), design
+[`integration.md`](../../../docs/dev-plan/integration.md) Part B). It turns a
 wallet's bridge-out **burn** into an on-chain **release** of USDT on Tron,
 collapsing S1–S4 into one process:
 
@@ -56,7 +56,7 @@ cargo run -p bridge-return-service
 ```
 
 ### SP1 Groth16 mode (real proofs)
-Reuses the proven CPU-only path (see [`../../../docs/bridge/dev-plan/03-status.md`](../../../docs/bridge/dev-plan/03-status.md)
+Reuses the proven CPU-only path (see [`../../../docs/dev-plan/03-status.md`](../../../docs/dev-plan/03-status.md)
 and the `sp1-real-proving` notes). Prerequisites:
 
 - **Rust** + the `sp1` feature: `cargo build -p bridge-return-service --features sp1 --release`.
@@ -84,7 +84,7 @@ cargo run -p bridge-return-service --features sp1 --release
 | Env var | Default | Purpose |
 |---|---|---|
 | `BRIDGE_RETURN_BIND` | `127.0.0.1:8787` | HTTP bind address. |
-| `BRIDGE_DEPLOYMENT_CONFIG` | — | Path to the frozen deployment JSON (`bridge-vectors/deployment/nile-usdt.json`). **Required for envelope intake.** |
+| `BRIDGE_DEPLOYMENT_CONFIG` | — | Path to the frozen deployment JSON (`deployments/nile/nile-usdt.json`). **Required for envelope intake.** |
 | `TRUST_BASE_PATH` | — | Path to the trust base JSON (`bft-trustbase.testnet2.json`). **Required for envelope intake.** |
 | `BRIDGE_JUSTIFICATION_TAG` | `1330002` | Source-chain lock-justification CBOR tag (Tron USDT). |
 | `BRIDGE_CONFIG_HASH` | — | If set, the intake cross-checks the envelope's declared `configHash`. |
@@ -151,8 +151,8 @@ BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer.js settle --
 
 1. Run the service (precheck mode is enough to exercise the wallet flow):
    ```bash
-   BRIDGE_DEPLOYMENT_CONFIG=$PWD/bridge-vectors/deployment/nile-usdt.json \
-   TRUST_BASE_PATH=$PWD/bft-trustbase.testnet2.json \
+   BRIDGE_DEPLOYMENT_CONFIG=$PWD/deployments/nile/nile-usdt.json \
+   TRUST_BASE_PATH=$PWD/deployments/nile/bft-trustbase.testnet2.json \
    cargo run -p bridge-return-service
    ```
 2. Point the wallet at it: set `VITE_BRIDGE_RETURN_SERVICE_URL=http://localhost:8787`
@@ -162,7 +162,7 @@ BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer.js settle --
    `queued→proving→…→settled` and shows the settle txid.
 
 The wallet derives the **same** nullifier/leaf the service does — the live e2e
-backstop is `bridge-plugin-tron-usdt/demo/bridge-back-e2e.ts` (asserts wallet ==
+backstop is `packages/bridge-plugin-tron-usdt/demo/bridge-back-e2e.ts` (asserts wallet ==
 Rust agreement on the burned token).
 
 ---

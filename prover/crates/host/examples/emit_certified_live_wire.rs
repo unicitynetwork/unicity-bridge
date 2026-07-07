@@ -2,7 +2,7 @@
 //! so it can be fed to `sp1-execute` and run through the relation in the zkVM.
 //!
 //!   cargo run -p bridge-return-host --example emit_certified_live_wire -- \
-//!     ../bridge-plugin-tron-usdt/demo/.bridge-back-state.json ../bft-trustbase.testnet2.json
+//!     ../packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json ../bft-trustbase.testnet2.json
 use std::{env, fs};
 
 use bridge_return_core::{u256_from_u64, BridgeConfig, ReturnLeaf};
@@ -29,7 +29,7 @@ fn u64f(v: &Value, k: &str) -> u64 {
 fn main() {
     let blob = env::args()
         .nth(1)
-        .unwrap_or_else(|| "../bridge-plugin-tron-usdt/demo/.bridge-back-state.json".to_string());
+        .unwrap_or_else(|| "../packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json".to_string());
     let tb = env::args()
         .nth(2)
         .unwrap_or_else(|| "../bft-trustbase.testnet2.json".to_string());

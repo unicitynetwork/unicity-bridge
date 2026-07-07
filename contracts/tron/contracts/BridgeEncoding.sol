@@ -6,10 +6,10 @@ pragma solidity ^0.8.24;
 //
 // Every value below is recomputed on-chain by the vault and MUST be byte-
 // identical to the prover (Rust) and the TS SDK. The single source of truth is
-// docs/bridge/dev-plan/00-interop-contract.md (§1 hash policy, §2 config, §3
+// protocol/interop.md (§1 hash policy, §2 config, §3
 // lock, §7 public statement). The keccak/ABI layouts here mirror the reference
-// generator in bridge-vectors/gen (src/derive.rs, src/abi.rs); the conformance
-// tests assert equality against bridge-vectors/{config,lock,public}.
+// generator in protocol/vectors/gen (src/derive.rs, src/abi.rs); the conformance
+// tests assert equality against protocol/vectors/{config,lock,public}.
 //
 // Hash policy (00 §1): everything the vault recomputes uses keccak256 over
 // abi.encode (`K`). SHA-256/CBOR values (nullifier, accumulator) are never
@@ -62,10 +62,10 @@ struct PublicValues {
 /// @title BridgeEncoding
 /// @notice Pure keccak/ABI derivations the vault recomputes (00 §1). Exposed as
 ///         a library so the Solidity conformance harness can exercise each
-///         derivation directly against the `bridge-vectors` fixtures.
+///         derivation directly against the `protocol/vectors` fixtures.
 library BridgeEncoding {
     // Domain separators (00 §2, §3, §7). `configHash`/`lockDigest` carry the
-    // domain as a dynamic ABI `string` (matches bridge-vectors/gen abi.rs);
+    // domain as a dynamic ABI `string` (matches protocol/vectors/gen abi.rs);
     // `domainTag` is keccak over the raw UTF-8 bytes.
     string internal constant DOMAIN_CONFIG = "unicity-bridge-return-config:v1";
     string internal constant DOMAIN_LOCK   = "unicity-bridge-lock:v1";

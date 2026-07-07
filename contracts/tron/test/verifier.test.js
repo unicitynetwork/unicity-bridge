@@ -1,5 +1,5 @@
 // Stage A verifier smoke (04-deployment.md): the real SP1 v6.1.0 Groth16 proof
-// bundle the prover published (bridge-vectors/proof/b1-groth16.json) must verify
+// bundle the prover published (protocol/vectors/proof/b1-groth16.json) must verify
 // against the *same* SP1 Groth16 verifier bytecode the vault will call on-chain.
 // This is the prover<->source-chain join for M3, run locally before any deploy.
 const { expect } = require("chai");
@@ -7,7 +7,7 @@ const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-const BUNDLE = path.join(__dirname, "..", "..", "..", "bridge-vectors", "proof", "b1-groth16.json");
+const BUNDLE = path.join(__dirname, "..", "..", "..", "protocol", "vectors", "proof", "b1-groth16.json");
 
 // Flip the last byte of a 0x-hex string (smallest tamper that stays well-formed).
 function flipLastByte(hex) {

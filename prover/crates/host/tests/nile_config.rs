@@ -1,5 +1,5 @@
 //! Guards the frozen Nile-USDT deployment config
-//! (`bridge-vectors/deployment/nile-usdt.json`): the Rust core must re-derive the
+//! (`deployments/nile/nile-usdt.json`): the Rust core must re-derive the
 //! same token_type / coin_id / config_hash, and config_hash must equal the value
 //! the deployed vault committed on-chain. If any stack drifts, this fails.
 use std::fs;
@@ -23,7 +23,7 @@ fn h(b: &[u8]) -> String {
 #[test]
 fn frozen_nile_config_is_consistent() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../bridge-vectors/deployment/nile-usdt.json");
+        .join("../../../deployments/nile/nile-usdt.json");
     let doc: Value = serde_json::from_slice(&fs::read(path).expect("read frozen config")).unwrap();
     let c = &doc["config"];
 

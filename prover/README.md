@@ -2,7 +2,7 @@
 
 Rust workspace for the trustless bridge-back prover track.
 
-This is the M0 scaffold from `docs/bridge/dev-plan/03-prover-service.md`:
+This is the M0 scaffold from `docs/dev-plan/03-prover-service.md`:
 
 - `crates/core` is the `no_std` byte-level contract used by the future SP1 guest
   and the host precheck.
@@ -15,12 +15,12 @@ Run the current checks:
 
 ```sh
 cargo test
-cargo run -p bridge-return-host -- check-vectors ../bridge-vectors
+cargo run -p bridge-return-host -- check-vectors ../protocol/vectors
 cargo check -p bridge-return-guest --features sp1 --bin bridge-return-sp1-guest
 ```
 
 The core crate intentionally reproduces the `BRIDGE_PROTO_VERSION=1`
-derivations from `docs/bridge/dev-plan/00-interop-contract.md` rather than
+derivations from `protocol/interop.md` rather than
 depending on the dependency-free reference generator. The generator remains the
 source of conformance fixtures; this workspace is a consuming implementation.
 

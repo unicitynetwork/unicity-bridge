@@ -1,7 +1,7 @@
 //! S1 verifies a REAL aggregator-certified bridge-back token against the REAL
 //! testnet2 trust base — full quorum + chain-linkage + owner-auth verification,
 //! not a synthetic fixture. The sample is a frozen `npm run e2e:back` blob
-//! (`bridge-plugin-tron-usdt/demo/.bridge-back-state.json`, gitignored live) and
+//! (`packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json`, gitignored live) and
 //! the matching trust base; together they verify deterministically forever,
 //! independent of current network state.
 use std::fs;

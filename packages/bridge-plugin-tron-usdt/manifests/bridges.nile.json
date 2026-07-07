@@ -1,0 +1,23 @@
+{
+  "description": "Sphere bridge manifest — Tron Nile USDT (M3/M4). Frozen from deployments/nile/nile-usdt.json; configHash equals the deployed vault CONFIG_HASH. returnServiceUrl is environment-specific.",
+  "bridges": [
+    {
+      "label": "USDT (bridged · Tron)",
+      "symbol": "USDT",
+      "chainId": 3448148188,
+      "vault": "TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY",
+      "asset": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+      "confirmations": 20,
+      "decimals": 6,
+      "rpcUrl": "https://nile.trongrid.io",
+      "returnServiceUrl": "http://localhost:8787",
+      "reasonTag": 39048,
+      "lockDomain": "158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
+      "nullifierDomain": "d4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
+      "vkey": "0x00c34ae0ebb63e86218a754892813f4744b2f6c9ed613c085ea40999b16ce3ad",
+      "configHash": "7f376b16b3bff3455f375e7cf30b9d29d2a14332912f0ffb69d78e1b31d5193f",
+      "tokenTypeHex": "6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74",
+      "coinIdHex": "f1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb"
+    }
+  ]
+}

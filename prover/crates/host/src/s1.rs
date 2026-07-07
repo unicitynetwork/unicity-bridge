@@ -313,7 +313,7 @@ pub struct EnvelopeIntake {
 
 impl EnvelopeIntake {
     /// Load from a frozen deployment-config JSON (the `config` block of
-    /// `bridge-vectors/deployment/<net>.json`, or a bare config object) + a trust
+    /// `deployments/<net>/<asset>.json`, or a bare config object) + a trust
     /// base JSON. `lock_justification_tag` is the source chain's lock tag (Tron
     /// USDT = `1330002`).
     pub fn from_json(

@@ -34,7 +34,7 @@ const SPHERE_PAYMENT_DATA_VERSION: u64 = 1;
 
 /// [`PaymentDataDecoder`] for a bridged token's `data` field. Real Sphere
 /// wallets always wrap the value in `SpherePaymentData`'s envelope (tag
-/// 39048); the canonical `bridge-vectors/gen` conformance fixtures and this
+/// 39048); the canonical `protocol/vectors/gen` conformance fixtures and this
 /// crate's own host fixtures are deliberately app-agnostic and use the bare
 /// `PaymentAssetCollection` with no envelope at all. Accept either: peek the
 /// outer tag and only try to unwrap it when it actually matches, otherwise

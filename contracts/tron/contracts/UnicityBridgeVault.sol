@@ -20,8 +20,8 @@ interface ITRC20 {
 /// @dev    Supersedes `UnicityLock`'s `unlock`/`withdrawn` model. Releases are
 ///         keyed by **nullifier**, not lock nonce (a deposit split on Unicity
 ///         returns as many independent tokens). Conforms to
-///         docs/bridge/dev-plan/00-interop-contract.md §1–3, §7, §9 and
-///         01-source-chain-contracts.md. The proof system is pluggable behind
+///         protocol/interop.md §1–3, §7, §9 and docs/dev-plan/01-source-chain-
+///         contracts.md. The proof system is pluggable behind
 ///         {IProofVerifier} (a mock at M2, real SP1 Groth16 at M3).
 contract UnicityBridgeVault {
     // ----- immutables, all derived from one BridgeConfig (00 §2, ZK_BACK3 §2.3)
@@ -38,7 +38,7 @@ contract UnicityBridgeVault {
     bytes32 public immutable coinId;
 
     /// @notice Empty replay-accumulator root (00 §6). All-zero placeholder; the
-    ///         real empty-tree root is pinned by `bridge-vectors/accumulator` at
+    ///         real empty-tree root is pinned by `protocol/vectors/accumulator` at
     ///         M2 and must equal this constant.
     bytes32 public constant EMPTY_TREE_ROOT = bytes32(0);
 

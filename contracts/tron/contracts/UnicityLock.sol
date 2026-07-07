@@ -12,12 +12,12 @@ interface ITRC20 {
 /// @notice Locks USDT (TRC20) on Tron to back a bridged token mint on Unicity.
 ///         Each lock commits to the exact Unicity `tokenId` and to a
 ///         `recipientCommitment = SHA256(recipient predicate)`, so the resulting
-///         lock proof (see docs/bridge/MINT_REASON.md) can fund exactly one
+///         lock proof (see docs/spec/MINT_REASON.md) can fund exactly one
 ///         Unicity token, owned only by the designated recipient — even though
 ///         minting on Unicity is permissionless.
 /// @dev    Verifiers read the emitted {Lock} event over a Tron RPC node; nothing
 ///         here trusts an operator. The `unlock` (bridge-back) path is wired but
-///         inert until a burn-proof verifier is set (see docs/bridge/BRIDGE_BACK.md).
+///         inert until a burn-proof verifier is set (see docs/spec/ZK_BACK3.md).
 contract UnicityLock {
     struct LockRecord {
         address from;
@@ -125,7 +125,7 @@ contract UnicityLock {
     ///         Unicity token for `nonce` was burned with a reason committing to
     ///         `to`/`amount`. Inert until a verifier is set.
     /// @dev    The proof system itself (committee multisig / aggregation / zk)
-    ///         lives in `burnProofVerifier`; see docs/bridge/BRIDGE_BACK.md.
+    ///         lives in `burnProofVerifier`; see docs/spec/ZK_BACK3.md.
     function unlock(uint256 nonce, address to, uint256 amount) external nonReentrant {
         require(burnProofVerifier != address(0), "UnicityLock: bridge-back disabled");
         require(msg.sender == burnProofVerifier, "UnicityLock: not verifier");

@@ -12,7 +12,7 @@ fn main() {
             let root = args
                 .next()
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("../bridge-vectors"));
+                .unwrap_or_else(|| PathBuf::from("../protocol/vectors"));
             bridge_return_host::check_vectors(&root)
         }
         "emit-b1-token-vector" => {
@@ -152,7 +152,7 @@ fn main() {
 }
 
 fn usage() {
-    eprintln!("usage: bridge-return-host check-vectors [../bridge-vectors]");
+    eprintln!("usage: bridge-return-host check-vectors [../protocol/vectors]");
     eprintln!("       bridge-return-host emit-b1-token-vector");
     eprintln!("       bridge-return-host emit-split-token-vector");
     eprintln!("       bridge-return-host emit-b1-wire-input");

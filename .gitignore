@@ -32,6 +32,7 @@ logs/
 target/
 Cargo.lock
 !prover/Cargo.lock
+!protocol/vectors/gen/Cargo.lock
 
 # Uncomment if building a binary application and you want Cargo.lock tracked
 
@@ -47,6 +48,7 @@ Cargo.lock
 
 proofs/
 artifacts/
+contracts/tron/cache/
 witnesses/
 sp1-cache/
 .sp1/

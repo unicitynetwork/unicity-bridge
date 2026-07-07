@@ -1,0 +1,22 @@
+{
+  "name": "unicity-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unicity external-asset bridge monorepo: protocol vectors, source-chain contracts, TypeScript bridge packages, and return prover.",
+  "workspaces": [
+    "packages/*",
+    "contracts/tron"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "vectors": "cargo run --manifest-path protocol/vectors/gen/Cargo.toml --offline",
+    "prover:test": "cargo test --manifest-path prover/Cargo.toml",
+    "contracts:build": "npm run build -w unicity-bridge-contracts-tron",
+    "contracts:test": "npm test -w unicity-bridge-contracts-tron"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

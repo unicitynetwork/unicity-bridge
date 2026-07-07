@@ -1,19 +1,19 @@
 // Conformance tests: the vault's on-chain keccak/ABI recomputations must equal
-// the cross-stack `bridge-vectors` fixtures (00 §10). The reference generator is
-// Rust (bridge-vectors/gen); here the Solidity side proves it reproduces the
+// the cross-stack `protocol/vectors` fixtures (interop §10). The reference generator is
+// Rust (protocol/vectors/gen); here the Solidity side proves it reproduces the
 // same bytes for the groups the vault recomputes: config, lock, public.
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-const VECTORS = path.join(__dirname, "..", "..", "..", "bridge-vectors");
+const VECTORS = path.join(__dirname, "..", "..", "..", "protocol", "vectors");
 
 function loadVector(group, file) {
   return JSON.parse(fs.readFileSync(path.join(VECTORS, group, file), "utf8"));
 }
 
-describe("bridge-vectors conformance (config/lock/public)", () => {
+describe("protocol/vectors conformance (config/lock/public)", () => {
   let harness;
 
   before(async () => {

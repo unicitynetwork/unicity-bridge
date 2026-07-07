@@ -1,84 +1,9 @@
 {
   "_format": "hh-sol-cache-2",
   "files": {
-    "/Users/risto/uni/br/contracts/tron/contracts/UnicityLock.sol": {
-      "lastModificationDate": 1782819014690,
-      "contentHash": "331f41fc4325158c180cd8dc1b02950d",
-      "sourceName": "contracts/UnicityLock.sol",
-      "solcConfig": {
-        "version": "0.8.24",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "evmVersion": "paris",
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [],
-      "versionPragmas": [
-        "^0.8.20"
-      ],
-      "artifacts": [
-        "ITRC20",
-        "UnicityLock"
-      ]
-    },
-    "/Users/risto/uni/br/contracts/tron/contracts/test/MockTRC20.sol": {
-      "lastModificationDate": 1781649569565,
-      "contentHash": "a1ccfbab4762876e54be8906ae6227a4",
-      "sourceName": "contracts/test/MockTRC20.sol",
-      "solcConfig": {
-        "version": "0.8.24",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "evmVersion": "paris",
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [],
-      "versionPragmas": [
-        "^0.8.20"
-      ],
-      "artifacts": [
-        "MockTRC20"
-      ]
-    },
-    "/Users/risto/uni/br/contracts/tron/contracts/BridgeEncoding.sol": {
-      "lastModificationDate": 1782482390041,
-      "contentHash": "2bd81c6f26d9849bb62ed5b22cacfaf5",
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/BridgeEncoding.sol": {
+      "lastModificationDate": 1783412584286,
+      "contentHash": "b83567b8dc8838a6a55e72897fdfffae",
       "sourceName": "contracts/BridgeEncoding.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -113,7 +38,7 @@
         "BridgeEncoding"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/test/EncodingHarness.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/test/EncodingHarness.sol": {
       "lastModificationDate": 1782482460915,
       "contentHash": "d904630b98c958f51a006a29d5af84ea",
       "sourceName": "contracts/test/EncodingHarness.sol",
@@ -152,9 +77,9 @@
         "EncodingHarness"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/UnicityBridgeVault.sol": {
-      "lastModificationDate": 1782991537704,
-      "contentHash": "560c3978c5d180a8f451b9eab4a65d50",
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/UnicityBridgeVault.sol": {
+      "lastModificationDate": 1783412584856,
+      "contentHash": "9678b37c6eb3d17e05728c1d8c3879c0",
       "sourceName": "contracts/UnicityBridgeVault.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -193,7 +118,7 @@
         "UnicityBridgeVault"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/IProofVerifier.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/IProofVerifier.sol": {
       "lastModificationDate": 1782482397896,
       "contentHash": "6f1dcea169b52d3e572bb76a31ddf879",
       "sourceName": "contracts/IProofVerifier.sol",
@@ -230,7 +155,7 @@
         "IProofVerifier"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/test/MockProofVerifier.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/test/MockProofVerifier.sol": {
       "lastModificationDate": 1782482451882,
       "contentHash": "e9cff319c91a639a1d90838e831535da",
       "sourceName": "contracts/test/MockProofVerifier.sol",
@@ -270,7 +195,82 @@
         "RevertingProofVerifier"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/test/MockTRC20Variants.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/UnicityLock.sol": {
+      "lastModificationDate": 1783412585463,
+      "contentHash": "bd7986ae957eceb2decd22d114897460",
+      "sourceName": "contracts/UnicityLock.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "ITRC20",
+        "UnicityLock"
+      ]
+    },
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/test/MockTRC20.sol": {
+      "lastModificationDate": 1781649569565,
+      "contentHash": "a1ccfbab4762876e54be8906ae6227a4",
+      "sourceName": "contracts/test/MockTRC20.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "MockTRC20"
+      ]
+    },
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/test/MockTRC20Variants.sol": {
       "lastModificationDate": 1782819156107,
       "contentHash": "38442447ab04c405b536c5b69adfef9d",
       "sourceName": "contracts/test/MockTRC20Variants.sol",
@@ -311,7 +311,7 @@
         "MockReentrantTRC20"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/verifier/ISP1Verifier.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/verifier/ISP1Verifier.sol": {
       "lastModificationDate": 1782589458421,
       "contentHash": "084aecb32d5d5c49cbf44994ef3569d2",
       "sourceName": "contracts/verifier/ISP1Verifier.sol",
@@ -348,7 +348,7 @@
         "ISP1VerifierWithHash"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/verifier/v6.1.0/SP1VerifierGroth16.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/verifier/v6.1.0/SP1VerifierGroth16.sol": {
       "lastModificationDate": 1782589446189,
       "contentHash": "5d518db7630eb4080c248b558d68afed",
       "sourceName": "contracts/verifier/v6.1.0/SP1VerifierGroth16.sol",
@@ -387,7 +387,7 @@
         "SP1Verifier"
       ]
     },
-    "/Users/risto/uni/br/contracts/tron/contracts/verifier/v6.1.0/Groth16Verifier.sol": {
+    "/Users/risto/uni/br/unicity-bridge/contracts/tron/contracts/verifier/v6.1.0/Groth16Verifier.sol": {
       "lastModificationDate": 1782589446185,
       "contentHash": "ea2bbe911fb311a8a24dfef9271497fe",
       "sourceName": "contracts/verifier/v6.1.0/Groth16Verifier.sol",

@@ -10,7 +10,7 @@ pub struct ServiceConfig {
     pub vault: Option<String>,
     pub config_hash: Option<[u8; 32]>,
     pub trust_base_path: Option<PathBuf>,
-    /// Frozen deployment config JSON (e.g. `bridge-vectors/deployment/nile-usdt.json`).
+    /// Frozen deployment config JSON (e.g. `deployments/nile/nile-usdt.json`).
     /// Required (with `trust_base_path`) to accept the wallet `{tokenCbor,reasonBytes}` envelope.
     pub deployment_config_path: Option<PathBuf>,
     /// Source-chain lock-justification CBOR tag (Tron USDT = 1330002).

@@ -1,0 +1,37 @@
+{
+  "name": "@unicitylabs/bridge-plugin-tron-usdt",
+  "version": "0.1.0",
+  "description": "Unicity bridge plugin: validates bridged USDT-on-Tron tokens by re-checking the Tron lock proof in a token's mint reason.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": "./lib/index.js",
+    "./lib/*.js": "./lib/*.js"
+  },
+  "bin": {
+    "tron-usdt-bridge": "./lib/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "cli": "tsx src/cli/main.ts",
+    "e2e": "tsx demo/e2e.ts",
+    "e2e:back": "tsx demo/bridge-back-e2e.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.2.0",
+    "@unicitylabs/bridge-core": "file:../bridge-core",
+    "@unicitylabs/state-transition-sdk": "file:../../../state-transition-sdk-js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tronweb": "^6.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

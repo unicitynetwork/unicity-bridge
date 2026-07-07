@@ -1,7 +1,7 @@
 //! Cross-stack closure check for the live bridge-back e2e.
 //!
 //! Decodes the burned-token blob produced by the TS wallet demo
-//! (`bridge-plugin-tron-usdt/demo/bridge-back-e2e.ts` → `.bridge-back-state.json`)
+//! (`packages/bridge-plugin-tron-usdt/demo/bridge-back-e2e.ts` → `.bridge-back-state.json`)
 //! and verifies the Rust prover derives the SAME values the TS side recorded:
 //!   - `bridge_lock_obligation` (E3) reproduces the TS `lockDigest` + nonce (00 §3);
 //!   - `config_hash` matches (00 §2);
@@ -10,7 +10,7 @@
 //! This proves the two stacks are byte-compatible on a *real* aggregator-certified
 //! token (not a synthetic fixture). Run:
 //!   cargo run -p bridge-return-host --example cross_check_live -- \
-//!     ../bridge-plugin-tron-usdt/demo/.bridge-back-state.json
+//!     ../packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json
 use std::{env, fs, process};
 
 use bridge_return_core::{burn_transition_id, config_hash, nullifier, BridgeConfig};
@@ -53,7 +53,7 @@ fn check(label: &str, got: &[u8], want: &[u8]) -> bool {
 fn main() {
     let path = env::args()
         .nth(1)
-        .unwrap_or_else(|| "../bridge-plugin-tron-usdt/demo/.bridge-back-state.json".to_string());
+        .unwrap_or_else(|| "../packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json".to_string());
     let json: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read state file"))
         .expect("parse state file");
 

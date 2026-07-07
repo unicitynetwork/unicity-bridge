@@ -1,7 +1,7 @@
 //! Byte-level bridge return contract shared by the prover host and guest.
 //!
 //! This crate implements the prover-side subset of
-//! `docs/bridge/dev-plan/00-interop-contract.md` for
+//! `protocol/interop.md` for
 //! `BRIDGE_PROTO_VERSION = 1`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
