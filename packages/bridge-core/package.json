@@ -1,13 +1,32 @@
 {
   "name": "@unicitylabs/bridge-core",
-  "version": "0.1.0",
+  "version": "0.1.0-bridge.1",
   "description": "Chain-neutral bridge contracts: the source-adapter, wallet/client boundaries, and presentation interfaces a wallet's bridge orchestration runs on. Chain plugins (Tron, EVM, …) implement these; the orchestrator never imports a chain package.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
-    ".": "./lib/index.js",
-    "./lib/*.js": "./lib/*.js"
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./lib/*.js": {
+      "types": "./lib/*.d.ts",
+      "default": "./lib/*.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unicitynetwork/unicity-bridge.git",
+    "directory": "packages/bridge-core"
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
@@ -17,7 +36,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@unicitylabs/state-transition-sdk": "file:../../../state-transition-sdk-js"
+    "@unicitylabs/state-transition-sdk": "https://registry.npmjs.org/@unicitylabs/state-transition-sdk/-/state-transition-sdk-2.0.0-rc.68bc1e5.tgz"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

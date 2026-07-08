@@ -1,13 +1,50 @@
 {
   "name": "@unicitylabs/bridge-plugin-tron-usdt",
-  "version": "0.1.0",
+  "version": "0.1.0-bridge.1",
   "description": "Unicity bridge plugin: validates bridged USDT-on-Tron tokens by re-checking the Tron lock proof in a token's mint reason.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
+  "files": [
+    "lib",
+    "manifests",
+    "README.md",
+    "DEMO.md",
+    "LICENSE"
+  ],
   "exports": {
-    ".": "./lib/index.js",
-    "./lib/*.js": "./lib/*.js"
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./wallet": {
+      "types": "./lib/wallet/index.d.ts",
+      "default": "./lib/wallet/index.js"
+    },
+    "./bridge-back": {
+      "types": "./lib/bridge-back/index.d.ts",
+      "default": "./lib/bridge-back/index.js"
+    },
+    "./lib/*.js": {
+      "types": "./lib/*.d.ts",
+      "default": "./lib/*.js"
+    },
+    "./lib/wallet/*.js": {
+      "types": "./lib/wallet/*.d.ts",
+      "default": "./lib/wallet/*.js"
+    },
+    "./lib/bridge-back/*.js": {
+      "types": "./lib/bridge-back/*.d.ts",
+      "default": "./lib/bridge-back/*.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unicitynetwork/unicity-bridge.git",
+    "directory": "packages/bridge-plugin-tron-usdt"
   },
   "bin": {
     "tron-usdt-bridge": "./lib/cli/main.js"
@@ -25,8 +62,8 @@
   },
   "dependencies": {
     "@noble/hashes": "2.2.0",
-    "@unicitylabs/bridge-core": "file:../bridge-core",
-    "@unicitylabs/state-transition-sdk": "file:../../../state-transition-sdk-js"
+    "@unicitylabs/bridge-core": "0.1.0-bridge.1",
+    "@unicitylabs/state-transition-sdk": "https://registry.npmjs.org/@unicitylabs/state-transition-sdk/-/state-transition-sdk-2.0.0-rc.68bc1e5.tgz"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

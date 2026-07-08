@@ -1,0 +1,97 @@
+name: Publish GitHub Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version to publish for both bridge packages"
+        required: true
+        type: string
+      tag:
+        description: "npm dist-tag"
+        required: true
+        default: "bridge-test"
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate version
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Invalid semver: ${{ inputs.version }}"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm install --workspaces --include=optional --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Set package versions
+        run: |
+          npm version "${{ inputs.version }}" --workspace @unicitylabs/bridge-core --no-git-tag-version
+          npm version "${{ inputs.version }}" --workspace @unicitylabs/bridge-plugin-tron-usdt --no-git-tag-version
+          npm pkg set "dependencies.@unicitylabs/bridge-core=${{ inputs.version }}" --workspace @unicitylabs/bridge-plugin-tron-usdt
+
+      - name: Verify package contents
+        run: |
+          npm pack --workspace @unicitylabs/bridge-core --dry-run
+          npm pack --workspace @unicitylabs/bridge-plugin-tron-usdt --dry-run
+
+      - name: Configure GitHub Packages auth
+        run: |
+          npm config set @unicitynetwork:registry https://npm.pkg.github.com
+          npm config set //npm.pkg.github.com/:_authToken "${NODE_AUTH_TOKEN}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare GitHub Packages artifacts
+        run: |
+          rm -rf /tmp/unicity-bridge-npm
+          mkdir -p /tmp/unicity-bridge-npm/bridge-core /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt
+          cp -R packages/bridge-core/lib /tmp/unicity-bridge-npm/bridge-core/lib
+          cp packages/bridge-core/package.json /tmp/unicity-bridge-npm/bridge-core/package.json
+          cp -R packages/bridge-plugin-tron-usdt/lib /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt/lib
+          cp -R packages/bridge-plugin-tron-usdt/manifests /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt/manifests
+          cp packages/bridge-plugin-tron-usdt/package.json /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt/package.json
+          cp packages/bridge-plugin-tron-usdt/README.md /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt/README.md
+          cp packages/bridge-plugin-tron-usdt/DEMO.md /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt/DEMO.md
+          npm pkg set name=@unicitynetwork/bridge-core --prefix /tmp/unicity-bridge-npm/bridge-core
+          npm pkg set name=@unicitynetwork/bridge-plugin-tron-usdt --prefix /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt
+          npm pkg set "dependencies.@unicitylabs/bridge-core=npm:@unicitynetwork/bridge-core@${{ inputs.version }}" --prefix /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt
+
+      - name: Publish bridge-core
+        run: npm publish /tmp/unicity-bridge-npm/bridge-core --tag "${{ inputs.tag }}" --registry https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish bridge-plugin-tron-usdt
+        run: npm publish /tmp/unicity-bridge-npm/bridge-plugin-tron-usdt --tag "${{ inputs.tag }}" --registry https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit release metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/bridge-core/package.json packages/bridge-plugin-tron-usdt/package.json package-lock.json
+          git commit -m "chore: publish bridge packages v${{ inputs.version }}"
+          git tag "bridge-v${{ inputs.version }}"
+          git push origin HEAD --tags
