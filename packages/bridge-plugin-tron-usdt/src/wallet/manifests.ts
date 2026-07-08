@@ -8,8 +8,8 @@ import type { BridgeManifest } from './manifest.js';
 
 /**
  * Tron Nile testnet USDT — the **live** deployment (2026-07-03). Vault
- * `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY`, reason_tag **39048** (39050 conflicts with
- * `SpherePaymentData.CBOR_TAG`), real SP1 verifier `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR`
+ * `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY`, BridgeMintReason tag **39048** (distinct
+ * from SpherePaymentData tag 39050), real SP1 verifier `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR`
  * (vkey `0x00c34ae0…` — matches the current prover guest ELF `sp1-vkey`; the guest
  * relation decodes the `SpherePaymentData` envelope real Sphere-minted tokens use),
  * the R6 false-tolerant safe-transfer
