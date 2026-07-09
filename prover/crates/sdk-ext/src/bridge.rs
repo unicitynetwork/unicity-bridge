@@ -5,7 +5,6 @@ use tiny_keccak::{Hasher, Keccak};
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
 use unicity_token::cbor::DecodeLimits;
 use unicity_token::cbor::Decoder;
-use unicity_token::error::CborError;
 use unicity_token::crypto::hash::sha256;
 use unicity_token::payment::{
     split_output_commitment, AssetId, PaymentAssetCollection, SplitManifest, SplitMintJustification,
@@ -24,38 +23,12 @@ const BRIDGE_LOCK_JUSTIFICATION_VERSION: u64 = 1;
 
 pub const TRON_USDT_LOCK_JUSTIFICATION_TAG: u64 = 1_330_002;
 
-/// `SpherePaymentData`'s envelope tag/version (sphere-sdk/token-engine/
-/// SpherePaymentData.ts) — `[version, assets, memo]`, `assets` being the raw
-/// `PaymentAssetCollection` CBOR embedded directly (not further byte-string
-/// wrapped). Every real Sphere-minted token's `data` field is this envelope,
-/// never a bare `PaymentAssetCollection`.
-const SPHERE_PAYMENT_DATA_TAG: u64 = 39_048;
-const SPHERE_PAYMENT_DATA_VERSION: u64 = 1;
-
-/// [`PaymentDataDecoder`] for a bridged token's `data` field. Real Sphere
-/// wallets always wrap the value in `SpherePaymentData`'s envelope (tag
-/// 39048); the canonical `protocol/vectors/gen` conformance fixtures and this
-/// crate's own host fixtures are deliberately app-agnostic and use the bare
-/// `PaymentAssetCollection` with no envelope at all. Accept either: peek the
-/// outer tag and only try to unwrap it when it actually matches, otherwise
-/// decode the bytes directly as a `PaymentAssetCollection`.
+/// [`PaymentDataDecoder`] for a bridged token's `data` field. Bridge tokens use
+/// bare `PaymentAssetCollection` CBOR. Sphere-internal payment envelopes are
+/// not bridge tokens and must fail this decoder.
 pub fn decode_bridged_payment_data(
     bytes: &[u8],
 ) -> core::result::Result<PaymentAssetCollection, unicity_token::Error> {
-    if let Ok((tag, inner)) = Decoder::new(bytes).tag() {
-        if tag == SPHERE_PAYMENT_DATA_TAG {
-            let items = inner.array(Some(3))?;
-            let version = items[0].uint()?;
-            if version != SPHERE_PAYMENT_DATA_VERSION {
-                return Err(CborError::UnexpectedTag {
-                    expected: SPHERE_PAYMENT_DATA_VERSION,
-                    found: version,
-                }
-                .into());
-            }
-            return PaymentAssetCollection::from_cbor_bytes(items[1].bytes());
-        }
-    }
     PaymentAssetCollection::from_cbor_bytes(bytes)
 }
 

@@ -19,7 +19,7 @@ use unicity_token::api::bft::{
     UnicityCertificate, UnicitySeal, UnicityTreeCertificate,
 };
 use unicity_token::api::{CertificationData, InclusionCertificate, InclusionProof, NetworkId};
-use unicity_token::cbor::{encode_array, encode_byte_string, encode_null, encode_tag, encode_uint};
+use unicity_token::cbor::{encode_array, encode_byte_string, encode_tag, encode_uint};
 use unicity_token::crypto::hash::{sha256, DataHash};
 use unicity_token::crypto::signer::{Secp256k1Signer, Signer};
 use unicity_token::payment::{
@@ -1202,18 +1202,6 @@ fn bridge_mint(
     bridge_mint_with_salt(config, owner, amount, nonce, [0x42; 32])
 }
 
-/// Wrap a `PaymentAssetCollection` in the `SpherePaymentData` envelope (CBOR
-/// tag 39048, `[version=1, assets, memo=null]` — sphere-sdk/token-engine/
-/// SpherePaymentData.ts). Every real Sphere-minted token's `data` field is
-/// this envelope, never the bare `PaymentAssetCollection`; fixtures need to
-/// match so they exercise the guest relation's real (envelope-aware) decode.
-fn sphere_payment_data_cbor(assets: &PaymentAssetCollection) -> Vec<u8> {
-    let version = encode_uint(1);
-    let assets_cbor = assets.to_cbor();
-    let memo = encode_null();
-    encode_tag(39_048, &encode_array(&[&version, &assets_cbor, &memo]))
-}
-
 fn bridge_mint_with_salt(
     config: &BridgeConfig,
     owner: &Secp256k1Signer,
@@ -1231,7 +1219,7 @@ fn bridge_mint_with_salt(
         signature_lock(owner),
         TokenType::new(config.token_type.to_vec()),
         TokenSalt::from_bytes(salt),
-        Some(sphere_payment_data_cbor(&assets)),
+        Some(assets.to_cbor()),
         Some(lock_justification(config, amount, nonce)),
     )
     .unwrap()
