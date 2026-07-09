@@ -28,7 +28,7 @@ export * from './value.js';
 export interface CreateTronUsdtBridgePluginDeps {
   /** Inject a TronRpc (e.g. a mock). If omitted, an HTTP client is built from config.rpcUrl. */
   readonly rpc?: TronRpc;
-  /** Override the token-value extractor (sphere-sdk passes a SpherePaymentData-based one). */
+  /** Override the token-value extractor. Defaults to bare SDK PaymentAssetCollection CBOR. */
   readonly extractAmount?: BridgedAmountExtractor;
 }
 

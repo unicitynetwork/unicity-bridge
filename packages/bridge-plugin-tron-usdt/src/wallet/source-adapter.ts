@@ -17,6 +17,7 @@ import { fromHex } from '../hex.js';
 import { decodeLockEvent } from '../lock-event.js';
 import type { TronTxInfo } from '../TronRpcClient.js';
 import { TronUsdtLockJustification } from '../TronUsdtLockJustification.js';
+import { encodeBridgePaymentData } from '../value.js';
 import { queryAllowance } from './allowance.js';
 import { buildBridgeInPlan, type TronCall } from './facade.js';
 import type { LoadedBridge } from './manifest.js';
@@ -61,7 +62,8 @@ export interface AllowanceReader {
 /**
  * Build the Tron/USDT {BridgeSourceAdapter}. Closes over the wallet (for the
  * deposit steps) and a node client (for the allowance read); the mint verifier
- * override is built with `deps` (Sphere injects the SpherePaymentData extractor).
+ * override is built with `deps`; by default it reads bare SDK PaymentAssetCollection
+ * CBOR, which is the production bridge token value format.
  */
 export function createTronSourceAdapter(
   bridge: LoadedBridge,
@@ -144,6 +146,7 @@ export function createTronSourceAdapter(
       return {
         coinIdHex: bridge.plugin.coinIdHex,
         amount,
+        mintData: encodeBridgePaymentData(cfg.coinId, amount),
         tokenType: cfg.tokenType,
         salt: fromHex(saltHex),
         genesisReason,

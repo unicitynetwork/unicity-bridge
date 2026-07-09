@@ -11,7 +11,7 @@ import type { BridgeManifest } from './manifest.js';
  * `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY`, BridgeMintReason tag **39048** (distinct
  * from SpherePaymentData tag 39050), real SP1 verifier `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR`
  * (vkey `0x00c34ae0…` — matches the current prover guest ELF `sp1-vkey`; the guest
- * relation decodes the `SpherePaymentData` envelope real Sphere-minted tokens use),
+ * relation decodes bare SDK `PaymentAssetCollection` value data for bridge tokens),
  * the R6 false-tolerant safe-transfer
  * (with an explicit energy stipend — TVM doesn't reliably forward all remaining
  * energy to a bare nested `.call()`) for the non-standard Nile USDT

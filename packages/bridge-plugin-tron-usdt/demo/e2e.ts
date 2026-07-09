@@ -36,8 +36,8 @@ import { VerificationStatus } from '@unicitylabs/state-transition-sdk/lib/verifi
 
 import {
   createTronUsdtBridgePlugin,
-  decodeBridgedValue,
-  encodeBridgedValue,
+  decodeBridgePaymentData,
+  encodeBridgePaymentData,
   fromHex,
   LOCK_EVENT_TOPIC0,
   recipientCommitment,
@@ -86,8 +86,8 @@ function bridgePlugin(state: DemoState, confirmations: number): ReturnType<typeo
     rpcUrl: env.tronRpc,
     apiKey: env.tronApiKey,
   };
-  // Real HTTP Tron RPC (no mock); value read from the token's own data envelope.
-  return createTronUsdtBridgePlugin(config, { extractAmount: decodeBridgedValue });
+  // Real HTTP Tron RPC (no mock); value read from the token's bridge data.
+  return createTronUsdtBridgePlugin(config);
 }
 
 /** Depth-first search for a verification sub-result whose message matches. */
@@ -285,8 +285,9 @@ async function mint(state: DemoState): Promise<void> {
   const recipientPredicate = SignaturePredicate.fromSigningService(recipientSigning);
   const amount = BigInt(intent.amount);
 
-  // Token value envelope (the value the verifier cross-checks against the lock).
-  const valueData = encodeBridgedValue(plugin.resolvedConfig.coinId, amount);
+  // Bridge token value data (the value the verifier cross-checks against the lock):
+  // bare SDK PaymentAssetCollection CBOR, not SpherePaymentData(39050).
+  const valueData = encodeBridgePaymentData(plugin.resolvedConfig.coinId, amount);
   const tokenType = new TokenType(plugin.resolvedConfig.tokenType);
 
   // Mint reason = self-contained reference to the real Nile lock.
@@ -338,7 +339,7 @@ async function mint(state: DemoState): Promise<void> {
 
   log('\n✔ mint complete. A real Unicity token now encapsulates the bridged USDT.');
   log(`  tokenId  = ${intent.tokenIdHex}`);
-  log(`  value    = ${decodeBridgedValue(valueData, plugin.resolvedConfig.coinId)} (coinId ${plugin.coinIdHex})`);
+  log(`  value    = ${decodeBridgePaymentData(valueData, plugin.resolvedConfig.coinId)} (coinId ${plugin.coinIdHex})`);
   log(`  token    = ${toHex(token.toCBOR()).slice(0, 64)}... (${toHex(token.toCBOR()).length / 2} bytes)`);
 }
 
@@ -413,7 +414,7 @@ async function verify(state: DemoState): Promise<number> {
     // grow between attempts until source finality is reached.
     const result = await token.verify(tb, predicateVerifier, mintJustificationVerifier);
     if (result.status === VerificationStatus.OK) {
-      const value = decodeBridgedValue(token.genesis?.data ?? null, plugin.resolvedConfig.coinId);
+      const value = decodeBridgePaymentData(token.genesis?.data ?? null, plugin.resolvedConfig.coinId);
       log('\n  ownership + history (Unicity)   : OK');
       log('  mint reason (re-checked vs Nile): OK');
       log('\n✔ RECEIVED TOKEN VERIFIED.');

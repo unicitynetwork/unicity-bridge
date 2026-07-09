@@ -83,6 +83,8 @@ export interface CommitInfo {
 export interface MintRequest {
   readonly coinIdHex: string;
   readonly amount: bigint;
+  /** Raw bridge-owned `MintTransaction.data` bytes. For Tron-USDT this is bare SDK `PaymentAssetCollection` CBOR. */
+  readonly mintData: Uint8Array;
   readonly tokenType: Uint8Array;
   readonly salt: Uint8Array;
   readonly genesisReason: Uint8Array;

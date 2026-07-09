@@ -9,7 +9,7 @@ import { recipientCommitment } from './identifiers.js';
 import { decodeLockEvent } from './lock-event.js';
 import { TronUsdtLockJustification, TRON_USDT_LOCK_JUSTIFICATION_TAG } from './TronUsdtLockJustification.js';
 import type { TronRpc } from './TronRpcClient.js';
-import { decodeBridgedValue, type BridgedAmountExtractor } from './value.js';
+import { decodeBridgePaymentData, type BridgedAmountExtractor } from './value.js';
 
 const RULE = 'TronUsdtMintJustificationVerifier';
 
@@ -51,7 +51,7 @@ export class TronUsdtMintJustificationVerifier implements IMintJustificationVeri
     deps: TronUsdtVerifierDeps,
   ) {
     this.rpc = deps.rpc;
-    this.extractAmount = deps.extractAmount ?? decodeBridgedValue;
+    this.extractAmount = deps.extractAmount ?? decodeBridgePaymentData;
   }
 
   public get tag(): bigint {

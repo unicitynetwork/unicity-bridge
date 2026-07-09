@@ -10,7 +10,7 @@ import { TokenType } from '@unicitylabs/state-transition-sdk/lib/transaction/Tok
 
 import {
   createTronUsdtBridgePlugin,
-  encodeBridgedValue,
+  encodeBridgePaymentData,
   LOCK_EVENT_TOPIC0,
   recipientCommitment,
   toHex,
@@ -118,7 +118,7 @@ export async function buildDemo(
     jData = overrides.justification(jData);
   }
 
-  const valueData = encodeBridgedValue(plugin.resolvedConfig.coinId, overrides.tokenValueAmount ?? amount);
+  const valueData = encodeBridgePaymentData(plugin.resolvedConfig.coinId, overrides.tokenValueAmount ?? amount);
   const tokenType = new TokenType(plugin.resolvedConfig.tokenType);
 
   const mint = await MintTransaction.create(

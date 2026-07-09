@@ -20,7 +20,7 @@ import {
   type TronTxInfo,
   type TronUsdtBridgeConfig,
   TRON_NILE_CHAIN_ID,
-  encodeBridgedValue,
+  encodeBridgePaymentData,
 } from '../src/index.js';
 
 export const LOCK_CONTRACT = '410000000000000000000000000000000000000abc';
@@ -146,7 +146,7 @@ export async function buildScenario(
   const justification = new TronUsdtLockJustification(jData);
 
   const valueAmount = overrides.tokenValueAmount === undefined ? AMOUNT : overrides.tokenValueAmount;
-  const valueData = valueAmount === null ? null : encodeBridgedValue(wired.resolvedConfig.coinId, valueAmount);
+  const valueData = valueAmount === null ? null : encodeBridgePaymentData(wired.resolvedConfig.coinId, valueAmount);
 
   const tokenType = new TokenType(overrides.tokenType ?? wired.resolvedConfig.tokenType);
 
