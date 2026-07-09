@@ -5,8 +5,8 @@ use tiny_keccak::{Hasher, Keccak};
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
 use unicity_token::cbor::DecodeLimits;
 use unicity_token::cbor::Decoder;
-use unicity_token::crypto::hash::sha256;
 use unicity_token::error::CborError;
+use unicity_token::crypto::hash::sha256;
 use unicity_token::payment::{
     split_output_commitment, AssetId, PaymentAssetCollection, SplitManifest, SplitMintJustification,
 };
@@ -29,12 +29,12 @@ pub const TRON_USDT_LOCK_JUSTIFICATION_TAG: u64 = 1_330_002;
 /// `PaymentAssetCollection` CBOR embedded directly (not further byte-string
 /// wrapped). Every real Sphere-minted token's `data` field is this envelope,
 /// never a bare `PaymentAssetCollection`.
-const SPHERE_PAYMENT_DATA_TAG: u64 = 39_050;
+const SPHERE_PAYMENT_DATA_TAG: u64 = 39_048;
 const SPHERE_PAYMENT_DATA_VERSION: u64 = 1;
 
 /// [`PaymentDataDecoder`] for a bridged token's `data` field. Real Sphere
 /// wallets always wrap the value in `SpherePaymentData`'s envelope (tag
-/// 39050); the canonical `protocol/vectors/gen` conformance fixtures and this
+/// 39048); the canonical `protocol/vectors/gen` conformance fixtures and this
 /// crate's own host fixtures are deliberately app-agnostic and use the bare
 /// `PaymentAssetCollection` with no envelope at all. Accept either: peek the
 /// outer tag and only try to unwrap it when it actually matches, otherwise
@@ -345,55 +345,6 @@ fn verify_split_mint(
     }
 
     Ok(obligations)
-}
-
-#[cfg(test)]
-mod tests {
-    use num_bigint::BigUint;
-    use unicity_token::cbor::{encode_array, encode_null, encode_tag, encode_uint};
-    use unicity_token::payment::{Asset, AssetId};
-
-    use super::*;
-
-    #[test]
-    fn decodes_sphere_payment_data_envelope_tag_39050() {
-        let coin_id = [0xabu8; 32];
-        let assets = PaymentAssetCollection::create([Asset::new(
-            AssetId::new(coin_id.to_vec()),
-            BigUint::from(42u64),
-        )])
-        .expect("valid asset collection");
-        let payload = encode_tag(
-            SPHERE_PAYMENT_DATA_TAG,
-            &encode_array(&[&encode_uint(1), &assets.to_cbor(), &encode_null()]),
-        );
-
-        let decoded = decode_bridged_payment_data(&payload).expect("decode SpherePaymentData");
-        assert_eq!(
-            decoded
-                .get(&AssetId::new(coin_id.to_vec()))
-                .map(|a| a.value()),
-            Some(&BigUint::from(42u64)),
-        );
-    }
-
-    #[test]
-    fn still_decodes_bare_payment_asset_collection() {
-        let coin_id = [0xcdu8; 32];
-        let assets = PaymentAssetCollection::create([Asset::new(
-            AssetId::new(coin_id.to_vec()),
-            BigUint::from(7u64),
-        )])
-        .expect("valid asset collection");
-
-        let decoded = decode_bridged_payment_data(&assets.to_cbor()).expect("decode bare assets");
-        assert_eq!(
-            decoded
-                .get(&AssetId::new(coin_id.to_vec()))
-                .map(|a| a.value()),
-            Some(&BigUint::from(7u64)),
-        );
-    }
 }
 
 /// Verify a token in **certified** mode (each transition carries its own

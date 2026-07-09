@@ -1203,7 +1203,7 @@ fn bridge_mint(
 }
 
 /// Wrap a `PaymentAssetCollection` in the `SpherePaymentData` envelope (CBOR
-/// tag 39050, `[version=1, assets, memo=null]` — sphere-sdk/token-engine/
+/// tag 39048, `[version=1, assets, memo=null]` — sphere-sdk/token-engine/
 /// SpherePaymentData.ts). Every real Sphere-minted token's `data` field is
 /// this envelope, never the bare `PaymentAssetCollection`; fixtures need to
 /// match so they exercise the guest relation's real (envelope-aware) decode.
@@ -1211,7 +1211,7 @@ fn sphere_payment_data_cbor(assets: &PaymentAssetCollection) -> Vec<u8> {
     let version = encode_uint(1);
     let assets_cbor = assets.to_cbor();
     let memo = encode_null();
-    encode_tag(39_050, &encode_array(&[&version, &assets_cbor, &memo]))
+    encode_tag(39_048, &encode_array(&[&version, &assets_cbor, &memo]))
 }
 
 fn bridge_mint_with_salt(
