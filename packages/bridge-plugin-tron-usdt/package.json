@@ -1,6 +1,6 @@
 {
   "name": "@unicitylabs/bridge-plugin-tron-usdt",
-  "version": "0.1.0-bridge.1",
+  "version": "0.1.0-bridge.2",
   "description": "Unicity bridge plugin: validates bridged USDT-on-Tron tokens by re-checking the Tron lock proof in a token's mint reason.",
   "type": "module",
   "main": "./lib/index.js",

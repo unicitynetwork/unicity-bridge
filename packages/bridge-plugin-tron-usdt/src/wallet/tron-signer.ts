@@ -49,6 +49,8 @@ export interface TronSendOptions {
 }
 
 const DEFAULT_FEE_LIMIT_SUN = 150_000_000; // 150 TRX — generous cap; Nile calls cost far less.
+const SIGN_TIMEOUT_MS = 120_000;
+const BROADCAST_TIMEOUT_MS = 45_000;
 
 /** Minimal shape of the TronWeb instance TronLink injects on `window`. */
 export interface InjectedTronWeb {
@@ -211,8 +213,15 @@ export async function sendCallSigned(
   if (built.result && built.result.result === false) {
     throw new Error(`Tron call ${call.functionSignature} could not be built (constant-call reverted).`);
   }
-  const signed = await sign(built.transaction);
-  const receipt = await tw.trx.sendRawTransaction(signed);
+  const signed = normalizeSignedTransaction(
+    await withTimeout(sign(built.transaction), SIGN_TIMEOUT_MS, `Timed out waiting for wallet signature for ${call.functionSignature}.`),
+    call.functionSignature,
+  );
+  const receipt = await withTimeout(
+    tw.trx.sendRawTransaction(signed),
+    BROADCAST_TIMEOUT_MS,
+    `Timed out broadcasting ${call.functionSignature} to Tron.`,
+  );
   // Reject an explicit broadcast failure (SIGERROR, DUP_TRANSACTION, …) instead
   // of returning a phantom txid the caller would then wait on forever (08 §1.4).
   if (receipt.result === false) {
@@ -223,6 +232,40 @@ export async function sendCallSigned(
     throw new Error(`Tron broadcast of ${call.functionSignature} returned no txid: ${JSON.stringify(receipt)}`);
   }
   return txid;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function hasSignatureArray(value: unknown): value is { signature: unknown[] } {
+  return isRecord(value) && Array.isArray(value.signature);
+}
+
+function normalizeSignedTransaction(value: unknown, functionSignature: string): unknown {
+  if (hasSignatureArray(value)) return value;
+
+  if (isRecord(value)) {
+    for (const key of ['transaction', 'signedTransaction', 'signed_transaction', 'tx']) {
+      const nested = value[key];
+      if (hasSignatureArray(nested)) return nested;
+    }
+  }
+
+  throw new Error(
+    `Wallet returned an unsigned or unsupported transaction for ${functionSignature}; ` +
+      'expected a signed Tron transaction object with a signature array.',
+  );
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**
