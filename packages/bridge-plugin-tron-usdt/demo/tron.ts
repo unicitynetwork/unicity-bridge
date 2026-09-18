@@ -8,7 +8,7 @@ import { TronWeb } from 'tronweb';
 import type { DemoEnv } from './env.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ARTIFACTS = join(HERE, '..', '..', 'contracts', 'tron', 'artifacts', 'contracts');
+const ARTIFACTS = join(HERE, '..', '..', '..', 'contracts', 'tron', 'artifacts', 'contracts');
 
 interface HardhatArtifact {
   abi: unknown[];
