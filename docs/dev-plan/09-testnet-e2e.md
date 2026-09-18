@@ -159,13 +159,22 @@ use. Two stacked pieces:
   per-mint verifiers; engine `burn` with a reason; payments-v2 `mintCustom`,
   `burn`, `pendingBurns`, `acknowledgeBurn`, journal-first with crash replay.
   Nothing in it names a bridge or Tron. Upstreamable on its own.
-- *Piece 2, unicity-bridge `feat/sphere-plugin` (next):* `bridge-core` defines
-  the bridge plugin shape over those seams; `bridge-plugin-tron-usdt` implements
-  it (`tokenPlugin()` for `Sphere.init`, `bridgeMint` over `payments.mintCustom`,
-  `bridgeBurn` over `payments.burn` + `acknowledgeBurn`). Sphere's three call
-  sites then target the plugin façade instead of `sphere.payments.bridgeMint/Burn`.
+- *Piece 2, unicity-bridge `feat/sphere-plugin` (done, `54dda89`, on
+  `feat/sdk3-port`):* `bridge-core` defines the wallet contract structurally
+  (`WalletTokenPlugin`, `BridgePayments`) and the composition helpers
+  `mintBridgedToken`, `burnForReturn` (persist-then-acknowledge),
+  `recoverPendingBurns`; the plugin adds `bridgeTokenPlugin()` for
+  `Sphere.init({ plugins })`, `selfMintVerifier()` in the mint request, and
+  `burnIdentifiers()` to read a burned blob. Sphere's three call sites will
+  target these instead of `sphere.payments.bridgeMint/Burn` in [4].
 
-Open decision blocking piece 2's mint path: the bridged token's value envelope.
+Decision taken (2026-09-18): **(A)**, framed as "the bridge defines no value
+format; it writes and reads the network's, which today is the wallet's". Done in
+piece 2 for the TypeScript side; the Rust prover follows in Phase 2 and
+`BRIDGE_PROTO_VERSION` bumps then (`interop.md` §2.1). Recommendation to raise
+with the SDK and wallet teams: one canonical fungible-value payload for the
+network, so no future wallet, bridge or prover hits the same fork. The
+background, kept for the record:
 The inventory's per-token `assets` are decided by wallet-api (the server decodes
 the blob; `applyDelta.added` carries only `{tokenId, key}`), and sphere-sdk `main`
 classifies a bare `PaymentAssetCollection` genesis as `'bare_collection'`: stored,
