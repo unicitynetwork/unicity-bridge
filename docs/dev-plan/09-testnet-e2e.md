@@ -1,0 +1,265 @@
+# 09 — Testnet end-to-end plan: real USDT, current Unicity testnet, local Sphere
+
+Status: plan, 2026-09-18. Nothing here has been started. Companion to
+[`../../BRIDGING_ANALYSIS.md`](../../BRIDGING_ANALYSIS.md) (what the bridge is)
+and [`07-return-service.md`](./07-return-service.md) (the service design).
+
+## Goal
+
+Bridge a real Nile USDT deposit into a Unicity token on the **current** Unicity
+testnet, show it in a **locally run Sphere**, then bridge it back through a
+**locally run return service**. Everything that is ours runs locally, in Docker
+where it makes sense, reachable from the host browser. Tron Nile and Unicity
+testnet2 are reached over the internet.
+
+## Findings that shape the plan
+
+Read-only probes on 2026-09-18.
+
+| Fact | Consequence |
+|---|---|
+| `gateway.testnet2.unicity.network` is alive but **sharded**: a request without `stateId` or `shardId` is rejected. Sphere `main` uses `@unicitylabs/state-transition-sdk` **3.0.1**; `bridge-core`, `bridge-plugin-tron-usdt`, and the Sphere bridge branch pin **2.0.0-rc.68bc1e5**. | Every JS component must move to SDK 3.x before it can talk to testnet. First task. |
+| The prover pins `state-transition-sdk-rust` at `branch = "token-split-2"`. That branch **no longer exists** upstream (branches: `main`, `service-time`, `archive/1.0-compat`; tag `v3.0.1`). It builds today only from the local cargo cache. The aggregator changed the inclusion-proof wire format on 2026-08-26 (`aggregator-go/docs/inclusion-proof-wire.md`). | Port the prover to Rust SDK `v3.0.1`. The guest program changes, so the verification key changes, so the vault must be **redeployed (v2)**. |
+| Sphere `feat/unicity-bridge` is 18 commits ahead and **457 behind** `origin/main` (merge base 2026-06-30). `main` moved sphere-sdk 0.11 → **0.17.2** and is multi-network (testnet2 + mainnet). | The "rebase" is a re-application onto a very different `main`, in two repositories (Sphere and sphere-sdk). New branches only. |
+| The bridge npm packages (`@unicitynetwork/bridge-core`, `@unicitynetwork/bridge-plugin-tron-usdt`, `@unicity-sphere/sphere-sdk@bridge-test`) are **not on the public registry** (404). They were published to GitHub Packages. | Local testing links local builds (`file:` dependencies). No registry tags. |
+| The Nile vault `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY` exists (`UnicityBridgeVault`, deployer `TFVJsmN8SE64QsgGxP3wR9S6MsGDCwDuSu`). | The v1 vault is usable for bridge-in tests now. |
+| `goggregator-test.unicity.network` (the `BRIDGE_RETURN_SERVICE_URL` in Sphere's compose, and the `/rpc` dev-proxy target in Sphere `main`) does not answer. | Stale. The return service will be ours, at `http://localhost:8787`. |
+| The trust base is embedded in sphere-sdk (`assets/trustbase.ts`, `TRUSTBASE_TESTNET2`). On `main` (0.17.3) it has the **same four nodes, epoch 1, quorum 3** as our `bft-trustbase.testnet2.json`. | Testnet2 validators have not rotated. The v1 vault's allow-listed trust-base hash is still current. No file to obtain. |
+| Local checkouts now present beside this repo: `sphere/` (bridge branch 18 ahead / 457 behind `main`), `sphere-sdk/` (bridge branch **9 ahead / 208 behind** `main` v0.17.3), `state-transition-sdk-js/` (`main`, 3.0.1). sphere-sdk's bridge commits import nothing from the plugin packages. | The sphere-sdk rebase and the plugin port are independent; both depend only on SDK 3.0.1. |
+| The return service has no CORS handling. | Add it; the browser calls the service cross-origin. |
+
+## URLs
+
+| What | URL | Source |
+|---|---|---|
+| Sphere production | `https://sphere.unicity.network` | Sphere `main` |
+| Sphere staging (auto-deployed from `main` via `sphere-infra` to ECS) | `https://sphere.staging.unicity.network` | HTTP 200 on 2026-09-18; the hostname lives in `sphere-infra`, not in the Sphere repo |
+| Sphere per-branch preview (GitHub Pages) | `https://unicity-sphere.github.io/sphere/<branch>/`, e.g. `.../sphere/main/` | `.github/workflows/deploy-pages-branch.yml` |
+| Unicity testnet2 gateway (sharded) | `https://gateway.testnet2.unicity.network/` | `.env.example`; answered on 2026-09-18 |
+| Unicity mainnet gateway (do not use) | `https://gateway.mainnet.unicity.network` | Sphere `main` |
+| Staging wallet API / quest API | `https://wallet-api.staging.unicity.network`, `https://quest-api.staging.unicity.network` | Sphere `docker-compose.yml` |
+| Tron Nile | `https://nile.trongrid.io` | `.env.example` |
+| Nile vault v1 / SP1 verifier / USDT | `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY` / `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR` / `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` | `deployments/nile/nile-usdt.json` |
+
+The testnet2 aggregator API key: Sphere `main`'s `.env.example` carries one it
+describes as non-secret on testnet2. Confirm that is the one to use before
+relying on it.
+
+### Network vs. environment
+
+These are two independent axes in Sphere `main` (`deploy/runtime-config.sh`):
+
+- **Network** is which Unicity chain the tokens live on, `testnet2` or
+  `mainnet`, selected inside the app (Settings → Network; `DEFAULT_NETWORK`
+  picks the start). Gateways come from sphere-sdk's per-network table. The
+  bridge, the Nile vault, and our trust base are bound to **testnet2**.
+- **Environment** is which deployment of the app and its backends you use:
+  staging (`sphere.staging…`, `wallet-api.staging…`, `quest-api.staging…`) or
+  production (`sphere.unicity.network`, `wallet-api.mainnet…`). One image
+  serves both; `runtime-config.sh` rewrites the URLs at container start.
+
+A deployment offers mainnet only when `WALLET_API_URL_MAINNET` is set and
+`MAINNET_ROLLOUT_ENABLED='true'`. Staging is the pre-production environment
+that exposes testnet2 (and mainnet, if configured); it is not "the testnet
+environment". The legacy `WALLET_API_URL` alone means testnet2, which is what
+Sphere's own `docker-compose.yml` still uses.
+
+**For this plan:** our local Sphere is its own environment, pointed at the
+testnet2 network, with `WALLET_API_URL_MAINNET` unset so mainnet cannot be
+selected. If the non-bridge features (marketplace, quests) are wanted, point
+`SPHERE_API_URL` and `WALLET_API_URL_TESTNET2` at the staging hosts, as
+Sphere's compose already does.
+
+## Decisions taken (2026-09-18)
+
+- **Network:** testnet2, the same network a user gets by selecting "testnet"
+  in `https://sphere.unicity.network`.
+- **Base branch:** Sphere `origin/main` (`762d350d`, 2026-09-15). The deployed
+  image (staging and production) is built on every push to `main`
+  (`.github/workflows/docker-build.yml`); there are no release branches or
+  version tags.
+- **First item:** rebase the Sphere bridging branch onto that base, on a new
+  branch. Existing branches are not edited.
+
+## Order of work
+
+### Phase 0: prerequisites (no code)
+
+1. Confirm the testnet2 aggregator API key (Sphere `main`'s `.env.example`
+   carries one described as non-secret on testnet2).
+2. Confirm we hold the **Nile vault admin key** (deployer `TFVJsmN8…`). Not
+   needed for bridge-in; needed in Phase 2 to decide reuse vs. redeploy.
+3. Read the v1 vault's `PULL_PAYMENTS` and `spentRoot` (two constant calls) so
+   we know whether payouts need a `withdraw()` claim. Phase 2 only.
+4. Fund a Nile account with test TRX and faucet USDT; install TronLink on Nile
+   or pick a private key for `ManagedTronSigner`.
+
+### Phase 1: local Sphere on testnet2 with the bridge in scope
+
+Goal of the phase: `npm run dev` in Sphere, on testnet2, with the bridge code
+present and working. The dependency graph:
+
+```
+ [1] Sphere main runs locally         [2] plugin + bridge-core     [3] sphere-sdk bridge
+     on testnet2, no bridge               on SDK 3.0.1                 hooks on main 0.17.3
+     (baseline)                           (this repo)                  (sphere-sdk repo)
+          \                                   |                            /
+           \                                  |                           /
+            +----------------------------> [4] Sphere feat/bridge-v2 <---+
+                                              cherry-pick 18 commits onto main,
+                                              file: links to [2] and [3], build, run
+                                                            |
+                                                            v
+                                           [5] bridge-in from local Sphere (Milestone 1)
+```
+
+[1], [2], [3] have no dependencies on each other and can run in parallel. [4]
+needs all three. [5] needs [4] plus Nile funds.
+
+Why the rebase is not step one on its own: the 18 Sphere commits import
+`@unicitylabs/sphere-sdk@bridge-test` (0.11 + hooks) and the plugin packages
+(SDK 2.0), none of which can talk to the sharded testnet2. Cherry-picking them
+onto `main` (sphere-sdk 0.17.3, SDK 3.0.1) produces a branch that cannot build
+until [2] and [3] exist. Doing [1] first also proves the toolchain, the API
+key, and the gateway before any bridge code is in the way.
+
+**[1] Baseline.** In `sphere/`, check out `origin/main` (no new branch needed
+yet). `.env` from `.env.example`: `VITE_AGGREGATOR_API_KEY` (testnet2 key),
+`VITE_WALLET_API_URL_TESTNET2` pointed at the staging wallet API, mainnet URL
+unset. `npm install`, `npm run dev`. Gate: the wallet opens on testnet2, shows
+a balance, and an ordinary transfer succeeds. No bridge code involved.
+
+**[2] Plugin port.** Branch `feat/sdk3-port` in this repository. Move
+`packages/bridge-core` and `packages/bridge-plugin-tron-usdt` from
+`state-transition-sdk 2.0.0-rc.68bc1e5` to 3.0.1 (the local
+`state-transition-sdk-js/` checkout is the reference): sharded aggregator
+client, the new certificate format (shard-tree certificate,
+`ShardIdMatchesStateIdRule`), the mint-justification extension point,
+payment-data format. Gate: `npm test` and `npm run vectors` green; the byte
+contract does not move. Optional stronger gate: `demo/e2e.ts` adapted to lock
+on the existing vault mints a token on testnet2 without any browser.
+
+**[3] sphere-sdk hooks.** In `sphere-sdk/`, branch `feat/bridge-v2` from
+`origin/main` (v0.17.3). Cherry-pick the 9 bridge commits
+`origin/main..origin/feat/unicity-bridge` (`a1eab69e` 2026-06-30 to `f5d6f98e`
+2026-07-09), skipping the merge commit `ab3ed379` and the two "publish" chores.
+They add `SphereInitOptions.{bridgeJustificationVerifiers, bridges}`,
+`Sphere.bridges` / `bridgeForCoin()`, the `bridgeMint` mint path, the burn
+path, and the burned-token inventory filter. Gate: sphere-sdk builds and its
+tests pass. `feat/unicity-bridge` is not touched.
+
+**[4] Sphere rebase.** In `sphere/`, branch `feat/bridge-v2` from
+`origin/main` (`762d350d`). Cherry-pick the 18 commits
+`origin/main..feat/unicity-bridge` (`e0c683b3` 2026-06-30 to `6e8c2034`
+2026-07-10) in order. In `package.json` replace the `bridge-test` and
+`2.0.0-rc` pins with `file:../sphere-sdk`, `file:../packages/bridge-core`,
+`file:../packages/bridge-plugin-tron-usdt`. Expected conflict areas:
+`package.json`, `src/sdk/SphereProvider.tsx`, the L3 wallet view and
+`AssetRow`, the Vite proxy config, and anything touched by the multi-network
+work (per-network gateway, `DEFAULT_NETWORK`, SGW subscriptions). Gate:
+`npx tsc --noEmit` clean, `npm run dev` shows the wallet on testnet2 with the
+"Bridge USDT" entry point. `feat/unicity-bridge` is not touched.
+
+**[5] Bridge-in from local Sphere.** Against the existing v1 vault
+(`configHash` in the manifest already equals its `CONFIG_HASH`). approve +
+lock on Nile via TronLink or `ManagedTronSigner`, mint on testnet2.
+
+**Milestone 1:** the token shows in local Sphere with the bridged badge and
+passes the in-wallet re-verification at 20 confirmations. Its blob is the test
+data for Phase 2.
+
+**Sizing notes (2026-09-18), after reading the code:**
+
+- [2]: all 31 SDK import paths still exist in 3.0.1; 22 of those files changed
+  (74 commits between `68bc1e5` and 3.0.1). Concrete changes:
+  `IMintJustificationVerifier.verify(tx, nestedTokenCollector)`;
+  `MintTransaction.create(networkId, recipient, options)` with an options
+  object and a new `expiresAt` (leave unset); mint transaction is now
+  **VERSION 2** with an 8th CBOR field, so every new genesis is v2 and the
+  Rust prover must parse it in Phase 2; `Token.mint` / `token.verify` take one
+  `IVerificationContext`; `AggregatorClient` / `StateTransitionClient` /
+  `InclusionProofUtils` / `RootTrustBase` carry the shard-bound certificate;
+  `PaymentAssetCollection` enforces canonical asset order (moot for one
+  asset). Roughly a few dozen call sites across src, demo, test.
+- [3]: 9 commits, 18 files (+715/-31). `main` deleted the old money stack on
+  2026-08-05 (`75c35776`, "P11 deletion wave") and replaced it with
+  `modules/payments-v2/`. The token-engine and `core/Sphere.ts` pieces
+  cherry-pick with conflicts (17-18 `main` commits on each); the payments
+  piece (`PaymentsModule.bridgeMint/bridgeBurn`, burned-token inventory
+  filter) must be re-implemented on `modules/payments-v2/PaymentsFacade.ts`
+  and `inventory/InventoryView.ts`, keeping the method names so Sphere's
+  commits still bind. Read `docs/MIGRATION-PAYMENTS-V2.md` first.
+- Order: [2] first (mechanical, gives a real SDK-3 token to test [3]'s mint
+  path), then [3].
+
+Docker for Sphere (`sphere/Dockerfile`, `docker-compose.yml`) comes after [5]
+works in dev mode; it changes packaging, not behaviour.
+
+### Phase 2: return service and v2 vault
+
+Branch: `feat/sdk3-port`, continued.
+
+1. Port the prover workspace to Rust SDK `v3.0.1`; adopt the new
+   inclusion-proof wire format. Fix the empty-burns early return
+   (`BRIDGING_ANALYSIS.md` section 9) in the same change, since the vkey
+   changes anyway. Regenerate vectors, `cargo test`, SP1 execute on the Phase 1
+   blob.
+2. Compute the new vkey. Deploy **v2 vault** on Nile with
+   `contracts/tron/scripts/deploy-nile.js real-vault` (reuses the existing SP1
+   verifier contract). Allow-list the current trust base hash. Freeze
+   `deployments/nile/nile-usdt-v2.json`; update the manifest `configHash`.
+   Tokens minted against v1 cannot return through v2; on testnet, mint fresh
+   tokens against v2 rather than migrating.
+3. Dockerize the service: Rust binary, Node for `relayer.js`, SP1 artifacts on
+   a volume (the Groth16 proving key is about 6 GB). Start in
+   `BRIDGE_RETURN_PROVE_MODE=precheck_only`; switch to `sp1_groth16` once the
+   pipeline is green. Add CORS to the axum router.
+
+**Milestone 2:** a burned blob from Sphere is accepted, proven, and settled on
+the v2 vault; USDT lands on the Tron address.
+
+### Phase 3: full loop from Sphere
+
+Bridge-in from Sphere → transfer → bridge-out from Sphere → `Released`
+observed → balance on Tron. Then the negative cases: replayed blob, tampered
+leaf, wrong config.
+
+## Docker topology
+
+```
+docker compose (repo root)
+  sphere            nginx serving the built app        host :3010
+  return-service    Rust binary + Node relayer.js      host :8787
+                    volume: SP1 circuit + groth16 pk
+                    env: gateway URL, API key, trust base path, TRON_SK,
+                         BRIDGE_RETURN_EVENTS_CMD, prove mode
+```
+
+- The browser reaches the service at `http://localhost:8787`;
+  `BRIDGE_RETURN_SERVICE_URL` is set to that, and the service needs CORS for
+  the Sphere origin.
+- Testnet2 and Nile are reached over the internet; nothing else runs locally.
+- Proving needs 16 GB or more of RAM inside the container. If the Docker host
+  cannot give that, run the service natively for the proving step and keep
+  Sphere in Docker.
+
+## Decisions needed before starting
+
+1. **Vault:** reuse v1 for Phase 1 and redeploy v2 in Phase 2 (recommended,
+   since the vkey must change), or go straight to v2 before Phase 1?
+2. **Sphere strategy:** cherry-pick the 18 commits onto `main` (recommended)
+   or re-implement the UI against the new SDK from scratch?
+3. **Keys:** do we hold the Nile deployer key, and which testnet2 aggregator
+   key do we use?
+4. **Proving machine:** what RAM does the Docker host have?
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| SDK 3.x changed token serialization or the justification extension point | Port the plugin first, in isolation, with the conformance vectors as the guard |
+| Rust SDK `v3.0.1` changed `Token::verify` inputs or the certificate format | Port against the Phase 1 blob; the aggregator's `inclusion-proof-wire.md` is the reference |
+| Validators rotated since epoch 1 | New trust base hash allow-listed on the v2 vault at deploy time |
+| Sphere cherry-picks conflict heavily | Cherry-pick the plugin-facing files first (`src/bridge/*`, hooks), UI last |
+| Proving too heavy for the Docker host | Native service for proving; `precheck_only` in Docker for everything else |
+| v1 vault holds test USDT that cannot return through v2 | Return it under v1 before abandoning, or accept the loss on testnet |
