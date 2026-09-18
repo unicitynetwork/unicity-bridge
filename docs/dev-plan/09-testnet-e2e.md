@@ -148,7 +148,36 @@ gateway, transferred, and re-verified by a second owner at 20 confirmations.
 genesis is a VERSION 2 mint transaction (Rust port must parse it), and SDK 3's
 `TokenIssuanceVerifierService` is where a per-type issuance rule could live.
 
-**[3] sphere-sdk hooks.** In `sphere-sdk/`, branch `feat/bridge-v2` from
+**[3] redefined (2026-09-18): plugin architecture instead of cherry-picks.**
+Decision: bridge code is isolated in its own packages and pulled in only when a
+bridge is configured; sphere-sdk gets generic seams that any token plugin can
+use. Two stacked pieces:
+
+- *Piece 1, sphere-sdk `feat/token-plugins` (done, `0300cc97`):* `TokenPlugin`
+  (mint-reason verifiers by CBOR tag) registered through
+  `Sphere.init({ plugins })`; `mintDataToken` with a genesis `justification` and
+  per-mint verifiers; engine `burn` with a reason; payments-v2 `mintCustom`,
+  `burn`, `pendingBurns`, `acknowledgeBurn`, journal-first with crash replay.
+  Nothing in it names a bridge or Tron. Upstreamable on its own.
+- *Piece 2, unicity-bridge `feat/sphere-plugin` (next):* `bridge-core` defines
+  the bridge plugin shape over those seams; `bridge-plugin-tron-usdt` implements
+  it (`tokenPlugin()` for `Sphere.init`, `bridgeMint` over `payments.mintCustom`,
+  `bridgeBurn` over `payments.burn` + `acknowledgeBurn`). Sphere's three call
+  sites then target the plugin façade instead of `sphere.payments.bridgeMint/Burn`.
+
+Open decision blocking piece 2's mint path: the bridged token's value envelope.
+The inventory's per-token `assets` are decided by wallet-api (the server decodes
+the blob; `applyDelta.added` carries only `{tokenId, key}`), and sphere-sdk `main`
+classifies a bare `PaymentAssetCollection` genesis as `'bare_collection'`: stored,
+value unreadable, refused for whole-send. The bridge contract currently mandates
+bare payment data and the prover rejects the Sphere envelope (`0fbfb2f`). Options:
+(A) bridged genesis carries `SpherePaymentData` (tag 39050); the whole wallet
+stack reads it natively; the prover decodes the envelope (as the reverted
+`8798b6f` did), interop.md + vectors move, BRIDGE_PROTO_VERSION bumps.
+(B) keep bare payment data; needs wallet-api to classify bare collections for
+registered token types, outside this repo. Recommendation: A.
+
+**[3] original text (superseded) — sphere-sdk hooks.** In `sphere-sdk/`, branch `feat/bridge-v2` from
 `origin/main` (v0.17.3). Cherry-pick the 9 bridge commits
 `origin/main..origin/feat/unicity-bridge` (`a1eab69e` 2026-06-30 to `f5d6f98e`
 2026-07-09), skipping the merge commit `ab3ed379` and the two "publish" chores.

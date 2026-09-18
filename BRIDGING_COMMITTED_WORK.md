@@ -45,9 +45,10 @@ Base: `origin/main` at `be75bc9a` (v0.17.3, 2026-09-17).
 
 | Branch | Commit | Date | Plan step | Summary | Pushed |
 |---|---|---|---|---|---|
-| (not started) | | | Phase 1 [3] | | |
+| `feat/token-plugins` | `0300cc97` | 2026-09-18 | Phase 1 [3], piece 1 | Generic token-plugin seams, no bridge code: `TokenPlugin` (mint-reason verifiers by tag) registered via `EngineConfig.plugins` / `SphereInitOptions.plugins`; `mintDataToken` gains `justification` + per-mint verifiers; `ITokenEngine.burn` (BurnPredicate(sha256(reason)), deterministic realization); payments-v2 `mintCustom`, `burn`, `pendingBurns`, `acknowledgeBurn`, both journal-first with crash replay. 24 files, +1156/−58. typecheck, typecheck:tests, lint 0 errors, build, vitest 140 files / 2732 tests. | no |
 
-`feat/unicity-bridge` (9 commits, 208 behind `main`) is untouched.
+`feat/unicity-bridge` (9 commits, 208 behind `main`) is untouched. The cherry-pick
+approach was dropped in favour of the plugin architecture (see the plan).
 
 ## Not committed anywhere
 
