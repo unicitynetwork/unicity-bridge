@@ -139,6 +139,15 @@ payment-data format. Gate: `npm test` and `npm run vectors` green; the byte
 contract does not move. Optional stronger gate: `demo/e2e.ts` adapted to lock
 on the existing vault mints a token on testnet2 without any browser.
 
+**[2] status (2026-09-18): done.** Commits `7eb60be`, `96ae51c` on
+`feat/sdk3-port`. Offline gates green (48/48 tests, build, typecheck, vectors
+unchanged, attack matrix). Live gate passed: 1 USDT locked in the deployed
+vault (nonce 19), token `d7ad6460…` minted on testnet2 through the sharded
+gateway, transferred, and re-verified by a second owner at 20 confirmations.
+`bridge-core` needed no code change. Two findings for later phases: every new
+genesis is a VERSION 2 mint transaction (Rust port must parse it), and SDK 3's
+`TokenIssuanceVerifierService` is where a per-type issuance rule could live.
+
 **[3] sphere-sdk hooks.** In `sphere-sdk/`, branch `feat/bridge-v2` from
 `origin/main` (v0.17.3). Cherry-pick the 9 bridge commits
 `origin/main..origin/feat/unicity-bridge` (`a1eab69e` 2026-06-30 to `f5d6f98e`
