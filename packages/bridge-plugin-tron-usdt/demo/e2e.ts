@@ -22,9 +22,9 @@ import { SigningService } from '@unicitylabs/state-transition-sdk/lib/crypto/sec
 import { SignaturePredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicate.js';
 import { SignaturePredicateUnlockScript } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicateUnlockScript.js';
 import { EncodedPredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/EncodedPredicate.js';
-import { PredicateVerifierService } from '@unicitylabs/state-transition-sdk/lib/predicate/verification/PredicateVerifierService.js';
 import { StateTransitionClient } from '@unicitylabs/state-transition-sdk/lib/StateTransitionClient.js';
 import { MintTransaction } from '@unicitylabs/state-transition-sdk/lib/transaction/MintTransaction.js';
+import { StateMask } from '@unicitylabs/state-transition-sdk/lib/transaction/StateMask.js';
 import { Token } from '@unicitylabs/state-transition-sdk/lib/transaction/Token.js';
 import { TokenId } from '@unicitylabs/state-transition-sdk/lib/transaction/TokenId.js';
 import { TokenSalt } from '@unicitylabs/state-transition-sdk/lib/transaction/TokenSalt.js';
@@ -33,6 +33,8 @@ import { TransferTransaction } from '@unicitylabs/state-transition-sdk/lib/trans
 import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
 import { waitInclusionProof } from '@unicitylabs/state-transition-sdk/lib/util/InclusionProofUtils.js';
 import { VerificationStatus } from '@unicitylabs/state-transition-sdk/lib/verification/VerificationStatus.js';
+
+import { verificationStack } from './sdk3.js';
 
 import {
   createTronUsdtBridgePlugin,
@@ -180,6 +182,43 @@ async function deploy(state: DemoState): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. attach (use an already deployed vault + real asset instead of deploying)
+// ---------------------------------------------------------------------------
+async function attach(state: DemoState): Promise<void> {
+  const key = requireTronKey(env);
+  const vaultBase58 = process.env.TRON_VAULT;
+  const assetBase58 = process.env.TRON_USDT;
+  if (!vaultBase58 || !assetBase58) {
+    throw new Error('attach needs TRON_VAULT and TRON_USDT (base58 addresses of the deployed vault and its asset).');
+  }
+  const tronWeb = makeTronWeb(env, key);
+  const deployer = tronWeb.defaultAddress.base58 as string;
+  log(`Depositor: ${deployer}  (chainId ${env.tronChainId})`);
+  log(`RPC: ${env.tronRpc}`);
+  log(`Attaching to vault ${vaultBase58} / asset ${assetBase58} (no deployment).`);
+  log('The depositor must already hold the asset (Nile faucet USDT) and TRX for fees.\n');
+
+  state.tron = {
+    chainId: env.tronChainId,
+    rpcUrl: env.tronRpc,
+    deployerBase58: deployer,
+    deployerEvmHex: toEvmHex(tronWeb, deployer),
+    assetBase58,
+    assetEvmHex: toEvmHex(tronWeb, assetBase58),
+    lockBase58: vaultBase58,
+    lockEvmHex: toEvmHex(tronWeb, vaultBase58),
+    deployTxids: { asset: '', lock: '', mint: '' },
+  };
+  saveState(state);
+
+  const plugin = bridgePlugin(state, env.confirmations);
+  log('Bridged-asset identifiers (deterministic from chainId + asset):');
+  log(`  TokenType = ${plugin.tokenTypeHex}`);
+  log(`  coinId    = ${plugin.coinIdHex}`);
+  log('\n✔ attach complete.');
+}
+
+// ---------------------------------------------------------------------------
 // 2. lock
 // ---------------------------------------------------------------------------
 async function lock(state: DemoState): Promise<void> {
@@ -277,7 +316,6 @@ async function mint(state: DemoState): Promise<void> {
   const plugin = bridgePlugin(state, env.mintConfirmations);
   const mintJustificationVerifier = new MintJustificationVerifierService();
   mintJustificationVerifier.register(plugin.verifier); // dispatched by CBOR tag 1330002
-  const predicateVerifier = PredicateVerifierService.create();
 
   const networkId = NetworkId.fromId(env.networkId);
   const salt = TokenSalt.fromBytes(fromHex(intent.saltHex));
@@ -301,14 +339,12 @@ async function mint(state: DemoState): Promise<void> {
     nonce: BigInt(lk.nonce),
   }).toCBOR();
 
-  const mintTransaction = await MintTransaction.create(
-    networkId,
-    recipientPredicate,
-    valueData,
+  const mintTransaction = await MintTransaction.create(networkId, recipientPredicate, {
+    data: valueData,
     tokenType,
     salt,
     justification,
-  );
+  });
 
   log(`Submitting mint commitment to ${env.aggregatorUrl} ...`);
   const client = unicityClient();
@@ -316,16 +352,18 @@ async function mint(state: DemoState): Promise<void> {
   await client.submitCertificationRequest(certificationData);
 
   const tb = await trustBase();
+  const v = verificationStack(tb, mintJustificationVerifier);
   log('Waiting for inclusion proof + checking the lock is in a block on Nile...');
   const certified = await mintTransaction.toCertifiedTransaction(
     tb,
-    predicateVerifier,
-    await waitInclusionProof(client, tb, predicateVerifier, mintTransaction),
+    v.predicateVerifier,
+    v.unicityCertificateVerifier,
+    await waitInclusionProof(client, tb, v.predicateVerifier, v.unicityCertificateVerifier, mintTransaction),
   );
   // Token.mint runs token.verify(...) which invokes the bridge plugin. At
   // MINT_CONFIRMATIONS=0 it confirms the lock exists, succeeded, and binds this
   // exact token+recipient — without waiting for finality (the minter self-trusts).
-  const token = await Token.mint(tb, predicateVerifier, mintJustificationVerifier, certified);
+  const token = await Token.mint(certified, v.context);
 
   state.mint = {
     networkId: env.networkId,
@@ -350,8 +388,8 @@ async function transfer(state: DemoState): Promise<void> {
   const m = requireState(state, 'mint', 'mint');
   // token.transfer only checks the transfer proof — it does not re-run the mint
   // justification — so the self-trusting owner needs no Tron finality here.
-  const predicateVerifier = PredicateVerifierService.create();
   const tb = await trustBase();
+  const v = verificationStack(tb);
   const client = unicityClient();
 
   const token = await Token.fromCBOR(fromHex(m.tokenCborHex));
@@ -363,11 +401,7 @@ async function transfer(state: DemoState): Promise<void> {
   const recipient = EncodedPredicate.fromPredicate(newPredicate);
 
   log('Building transfer to a new Unicity owner...');
-  const transferTransaction = await TransferTransaction.create(
-    token,
-    recipient,
-    crypto.getRandomValues(new Uint8Array(32)),
-  );
+  const transferTransaction = await TransferTransaction.create(token, recipient, StateMask.generate());
   const certificationData = await CertificationData.fromTransaction(
     transferTransaction,
     await SignaturePredicateUnlockScript.create(transferTransaction, ownerSigning),
@@ -379,13 +413,13 @@ async function transfer(state: DemoState): Promise<void> {
 
   log('Waiting for inclusion proof...');
   const transferred = await token.transfer(
-    tb,
-    predicateVerifier,
     await transferTransaction.toCertifiedTransaction(
       tb,
-      predicateVerifier,
-      await waitInclusionProof(client, tb, predicateVerifier, transferTransaction),
+      v.predicateVerifier,
+      v.unicityCertificateVerifier,
+      await waitInclusionProof(client, tb, v.predicateVerifier, v.unicityCertificateVerifier, transferTransaction),
     ),
+    v.context,
   );
 
   state.transfer = { recipientPrivKeyHex: toHex(newPriv), tokenCborHex: toHex(transferred.toCBOR()) };
@@ -403,8 +437,8 @@ async function verify(state: DemoState): Promise<number> {
   const plugin = bridgePlugin(state, env.confirmations);
   const mintJustificationVerifier = new MintJustificationVerifierService();
   mintJustificationVerifier.register(plugin.verifier);
-  const predicateVerifier = PredicateVerifierService.create();
   const tb = await trustBase();
+  const v = verificationStack(tb, mintJustificationVerifier);
   const token = await Token.fromCBOR(fromHex(tr.tokenCborHex));
 
   log(`Receiver verifies from scratch (requires ${env.confirmations} confirmations on Tron)...`);
@@ -412,7 +446,7 @@ async function verify(state: DemoState): Promise<number> {
   for (let attempt = 1; ; attempt++) {
     // Re-running token.verify re-queries the live Nile node, so confirmations
     // grow between attempts until source finality is reached.
-    const result = await token.verify(tb, predicateVerifier, mintJustificationVerifier);
+    const result = await token.verify(v.context);
     if (result.status === VerificationStatus.OK) {
       const value = decodeBridgePaymentData(token.genesis?.data ?? null, plugin.resolvedConfig.coinId);
       log('\n  ownership + history (Unicity)   : OK');
@@ -469,6 +503,9 @@ async function main(): Promise<void> {
     case 'deploy':
       await deploy(state);
       break;
+    case 'attach':
+      await attach(state);
+      break;
     case 'lock':
       await lock(state);
       break;
@@ -489,7 +526,8 @@ async function main(): Promise<void> {
       break;
     default:
       log(`Unknown command: ${cmd}`);
-      log('Commands: deploy | lock | mint | transfer | verify | status   (wait = optional finality watcher)');
+      log('Commands: deploy | attach | lock | mint | transfer | verify | status   (wait = optional finality watcher)');
+      log('  attach = use TRON_VAULT + TRON_USDT instead of deploying a fresh vault and mock asset');
       code = 2;
   }
   process.exit(code);

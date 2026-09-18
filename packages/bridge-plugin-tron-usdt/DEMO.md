@@ -95,6 +95,20 @@ Minting 10000000 test-USDT to deployer...
 ✔ deploy complete.
 ```
 
+### Step 1 alternative — attach to the deployed vault and real Nile USDT
+
+```bash
+TRON_VAULT=TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY \
+TRON_USDT=TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf \
+npm run e2e attach
+```
+
+Skips deployment and records the live Nile vault (`deployments/nile/nile-usdt.json`)
+and the faucet USDT as the target. Your `TRON_PRIVATE_KEY` account must already
+hold Nile USDT (faucet: https://nileex.io/join/getJoinPage) and TRX for fees.
+Everything after (`lock`, `mint`, `transfer`, `verify`) is unchanged, and the
+resulting token is minted against the same vault the wallet manifest points at.
+
 ## Step 2 — Lock USDT, bound to a specific Unicity token + recipient
 
 ```bash

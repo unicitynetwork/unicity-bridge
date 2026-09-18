@@ -32,7 +32,6 @@ import { SigningService } from '@unicitylabs/state-transition-sdk/lib/crypto/sec
 import { SignaturePredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicate.js';
 import { SignaturePredicateUnlockScript } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicateUnlockScript.js';
 import { EncodedPredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/EncodedPredicate.js';
-import { PredicateVerifierService } from '@unicitylabs/state-transition-sdk/lib/predicate/verification/PredicateVerifierService.js';
 import { StateTransitionClient } from '@unicitylabs/state-transition-sdk/lib/StateTransitionClient.js';
 import { Asset } from '@unicitylabs/state-transition-sdk/lib/payment/asset/Asset.js';
 import { AssetId } from '@unicitylabs/state-transition-sdk/lib/payment/asset/AssetId.js';
@@ -44,6 +43,8 @@ import { TokenSalt } from '@unicitylabs/state-transition-sdk/lib/transaction/Tok
 import { TokenType } from '@unicitylabs/state-transition-sdk/lib/transaction/TokenType.js';
 import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
 import { waitInclusionProof } from '@unicitylabs/state-transition-sdk/lib/util/InclusionProofUtils.js';
+
+import { verificationStack } from './sdk3.js';
 
 import { sha256 } from '@noble/hashes/sha2.js';
 
@@ -154,7 +155,6 @@ function client(): StateTransitionClient {
 
 async function main(): Promise<void> {
   const tb = trustBase();
-  const predicateVerifier = PredicateVerifierService.create();
   const c = client();
 
   // Owner of the freshly minted token.
@@ -168,19 +168,27 @@ async function main(): Promise<void> {
 
   // Bridge plugin (minter self-trusts its lock: confirmations 0) + mock Nile RPC
   // returning a Lock event that matches this exact token + recipient + amount.
-  const lockLog = makeLockLog('', {
+  const pluginConfig = {
+    chainId: TRON_NILE_CHAIN_ID,
+    lockContract: LOCK_TRON,
+    assetContract: ASSET_TRON,
+    confirmations: 0,
+    decimals: 6,
+  };
+  const lockContractHex = createTronUsdtBridgePlugin(pluginConfig, {
+    rpc: new MockTronRpc({ blockNumber: 100n, success: true, logs: [] }, 100n),
+  }).resolvedConfig.lockContractHex;
+  const lockLog = makeLockLog(lockContractHex, {
     nonce: NONCE,
     fromEvmHex: 'ab'.repeat(20),
     amount: AMOUNT,
     unicityTokenId: tokenId.bytes,
     recipientCommitment: recipientCommitmentBytes,
   });
-  const plugin = createTronUsdtBridgePlugin(
-    { chainId: TRON_NILE_CHAIN_ID, lockContract: LOCK_TRON, assetContract: ASSET_TRON, confirmations: 0, decimals: 6 },
-    { rpc: new MockTronRpc({ blockNumber: 100n, success: true, logs: [lockLog] }, 100n), extractAmount: extractSdkAmount },
-  );
-  // Fix the mock log address to the plugin's normalized EVM-form lock address.
-  lockLog.address = plugin.resolvedConfig.lockContractHex;
+  const plugin = createTronUsdtBridgePlugin(pluginConfig, {
+    rpc: new MockTronRpc({ blockNumber: 100n, success: true, logs: [lockLog] }, 100n),
+    extractAmount: extractSdkAmount,
+  });
 
   // The bridge config the reason/nullifier bind to (and the prover must use).
   const cfg: BridgeConfig = {
@@ -212,23 +220,23 @@ async function main(): Promise<void> {
     nonce: NONCE,
   }).toCBOR();
   const valueData = PaymentAssetCollection.create(new Asset(new AssetId(cfg.coinId), AMOUNT)).toCBOR();
-  const mintTx = await MintTransaction.create(
-    networkId,
-    ownerPredicate,
-    valueData,
-    new TokenType(cfg.tokenType),
+  const mintTx = await MintTransaction.create(networkId, ownerPredicate, {
+    data: valueData,
+    tokenType: new TokenType(cfg.tokenType),
     salt,
     justification,
-  );
+  });
   await c.submitCertificationRequest(await CertificationData.fromMintTransaction(mintTx));
   const mintJustVerifier = new MintJustificationVerifierService();
   mintJustVerifier.register(plugin.verifier);
+  const v = verificationStack(tb, mintJustVerifier);
   const certifiedMint = await mintTx.toCertifiedTransaction(
     tb,
-    predicateVerifier,
-    await waitInclusionProof(c, tb, predicateVerifier, mintTx),
+    v.predicateVerifier,
+    v.unicityCertificateVerifier,
+    await waitInclusionProof(c, tb, v.predicateVerifier, v.unicityCertificateVerifier, mintTx),
   );
-  const token = await Token.mint(tb, predicateVerifier, mintJustVerifier, certifiedMint);
+  const token = await Token.mint(certifiedMint, v.context);
   log(`   minted: ${toHex(token.toCBOR()).length / 2} bytes, value ${extractSdkAmount(valueData, cfg.coinId)}, backing OK\n`);
 
   // 2. burn it to a BridgeBackReason -----------------------------------------
@@ -251,9 +259,13 @@ async function main(): Promise<void> {
   const resp = await c.submitCertificationRequest(await CertificationData.fromTransaction(burnTx, unlock));
   if (resp.status !== String(CertificationStatus.SUCCESS)) throw new Error(`burn certification failed: ${resp.status}`);
   const burnedToken = await token.transfer(
-    tb,
-    predicateVerifier,
-    await burnTx.toCertifiedTransaction(tb, predicateVerifier, await waitInclusionProof(c, tb, predicateVerifier, burnTx)),
+    await burnTx.toCertifiedTransaction(
+      tb,
+      v.predicateVerifier,
+      v.unicityCertificateVerifier,
+      await waitInclusionProof(c, tb, v.predicateVerifier, v.unicityCertificateVerifier, burnTx),
+    ),
+    v.context,
   );
   log(`   burned: ${toHex(burnedToken.toCBOR()).length / 2} bytes, reasonHash ${toHex(burnReason.reasonHash)}\n`);
 

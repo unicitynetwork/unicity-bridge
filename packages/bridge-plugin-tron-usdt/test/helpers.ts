@@ -150,14 +150,12 @@ export async function buildScenario(
 
   const tokenType = new TokenType(overrides.tokenType ?? wired.resolvedConfig.tokenType);
 
-  const mint = await MintTransaction.create(
-    NETWORK,
-    recipient,
-    valueData,
+  const mint = await MintTransaction.create(NETWORK, recipient, {
+    data: valueData,
     tokenType,
     salt,
-    justification.toCBOR(),
-  );
+    justification: justification.toCBOR(),
+  });
 
   return {
     plugin: wired,

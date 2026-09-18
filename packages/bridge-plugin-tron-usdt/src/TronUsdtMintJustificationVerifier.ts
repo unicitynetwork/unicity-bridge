@@ -1,6 +1,6 @@
 import type { CertifiedMintTransaction } from '@unicitylabs/state-transition-sdk/lib/transaction/CertifiedMintTransaction.js';
+import type { Token } from '@unicitylabs/state-transition-sdk/lib/transaction/Token.js';
 import type { IMintJustificationVerifier } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/IMintJustificationVerifier.js';
-import type { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
 import { VerificationResult } from '@unicitylabs/state-transition-sdk/lib/verification/VerificationResult.js';
 import { VerificationStatus } from '@unicitylabs/state-transition-sdk/lib/verification/VerificationStatus.js';
 
@@ -60,7 +60,7 @@ export class TronUsdtMintJustificationVerifier implements IMintJustificationVeri
 
   public async verify(
     transaction: CertifiedMintTransaction,
-    _service: MintJustificationVerifierService,
+    _nestedTokenCollector: (token: Token) => void,
   ): Promise<VerificationResult<VerificationStatus>> {
     const bytes = transaction.justification;
     if (!bytes) {
