@@ -1,27 +1,16 @@
 /**
- * Self-mint verifier (06 §A1.1, frozen decision: "the minter trusts its own
- * lock" — mints at `confirmations: 0` right after locking, since the wallet
- * itself just broadcast and witnessed the lock; there is no reorg risk it
- * hasn't already accepted by locking in the first place).
- *
- * The manifest's K-confirmation threshold still guards every OTHER
- * verification — an independent receiver accepting this token later, or this
- * same wallet reloading it — via the shared `bridgeJustificationVerifiers`
- * service registered once at `Sphere.init()`. This builds a throwaway,
- * one-off verifier service for a single immediate post-lock mint call; it
- * never replaces or mutates the shared service.
+ * The depositor's own mint-reason verifier: identical to the strict one the
+ * wallet registers, but at `confirmations: 0`. The depositor witnessed its own
+ * lock, so it accepts the mint as soon as the lock is in a block; every other
+ * wallet that receives the token re-verifies under the manifest's `K`.
  */
-import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
+import type { IMintJustificationVerifier } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/IMintJustificationVerifier.js';
 
 import { createTronUsdtBridgePlugin, type CreateTronUsdtBridgePluginDeps } from '../index.js';
 import type { LoadedBridge } from './manifest.js';
 
-/** A one-off {MintJustificationVerifierService} that trusts this bridge's own lock at 0 confirmations. */
-export function buildSelfMintVerifierService(
-  bridge: LoadedBridge,
-  deps: CreateTronUsdtBridgePluginDeps = {},
-): MintJustificationVerifierService {
-  const selfMintPlugin = createTronUsdtBridgePlugin(
+export function selfMintVerifier(bridge: LoadedBridge, deps: CreateTronUsdtBridgePluginDeps = {}): IMintJustificationVerifier {
+  return createTronUsdtBridgePlugin(
     {
       chainId: bridge.manifest.chainId,
       lockContract: bridge.manifest.vault,
@@ -32,8 +21,5 @@ export function buildSelfMintVerifierService(
       apiKey: bridge.manifest.apiKey,
     },
     deps,
-  );
-  const service = new MintJustificationVerifierService();
-  service.register(selfMintPlugin.verifier);
-  return service;
+  ).verifier;
 }

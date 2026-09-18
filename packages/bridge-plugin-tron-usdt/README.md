@@ -45,9 +45,13 @@ service.register(plugin.verifier); // dispatched by CBOR tag 1330002
 // plugin.tokenTypeHex / plugin.coinIdHex identify the bridged asset.
 ```
 
-In `sphere-sdk`, the plugin is registered in `token-engine/factory.ts` via
-`EngineConfig.bridgePlugins`, with `extractAmount` backed by
-`decodeSpherePaymentData` so the token's declared value is checked too.
+In a Sphere wallet the plugin is registered through the SDK's generic token-plugin
+seam, `Sphere.init({ plugins: [bridgeTokenPlugin(loaded)] })` (see
+`src/wallet/token-plugin.ts`); the wallet SDK has no bridge-specific code. The
+bridge-in mint and the bridge-out burn are composed over the wallet's generic
+`mintCustom` / `burn` by `@unicitylabs/bridge-core` (`mintBridgedToken`,
+`burnForReturn`, `recoverPendingBurns`). The token's declared value is checked
+by `decodeBridgePaymentData` (the wallet's value format, `src/value.ts`).
 
 ## CLI
 

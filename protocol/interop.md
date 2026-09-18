@@ -73,6 +73,37 @@ configHash = K(abi.encode(
   `coinId = SHA256("unicity-bridge-coin:tron:<chainId>:<assetEvmHex>")`. Those
   derivations are frozen here too (they feed `config`).
 
+### 2.1 The bridged token's value payload (CHANGED 2026-09-18, lands in `BRIDGE_PROTO_VERSION = 2`)
+
+The bridge defines no value format of its own. A bridged token's genesis `data`
+is the **wallet's value payload**, the format the network's wallets and their
+servers read natively, so a bridged token is an ordinary valued token to them
+from the moment it is minted. Today that is sphere-sdk's `SpherePaymentData`:
+
+```
+data = tag(39050) [ version = 1, PaymentAssetCollection, memo: bstr | null ]
+```
+
+with the collection inline (not wrapped in a byte string) and the memo `null`
+for bridge mints. The amount the bridge checks (mint-time value == locked
+amount; return-time burned value == locked amount) is the collection's entry for
+`config.coinId`.
+
+- **TS plugin:** `packages/bridge-plugin-tron-usdt/src/value.ts` encodes and
+  decodes it (pinned byte-for-byte against sphere-sdk's encoder in
+  `test/value.test.ts`). Bare `PaymentAssetCollection` bytes, the v1 dialect,
+  now decode as "no value".
+- **Circuit / prover:** `decode_bridged_payment_data` MUST accept this envelope
+  and reject the bare collection. Until the prover port lands (`09-testnet-e2e.md`
+  Phase 2) the Rust side still implements v1, so `BRIDGE_PROTO_VERSION` stays 1
+  and the `token/` vectors are regenerated with the bump.
+- **Why:** wallet-api decides a token's assets server-side from the blob, and
+  sphere-sdk classifies a bare collection as an unreadable dialect; a client-side
+  decoder alone cannot make a v1 bridged token spendable. Adopting the wallet's
+  format needs nothing from the wallet or server teams. If the network later
+  fixes one canonical value payload, the bridge follows it: one function per
+  implementation plus a version bump.
+
 ---
 
 ## 3. Bridge-in: lock event, `LockRecord`, `lockDigest`
