@@ -231,6 +231,16 @@ reads `.env` and `walletApi.test.ts` fails with the flag set.
 (`configHash` in the manifest already equals its `CONFIG_HASH`). approve +
 lock on Nile via TronLink or `ManagedTronSigner`, mint on testnet2.
 
+**[5] status (2026-09-21): done from the UI.** Two 10 USDT deposits signed with
+TronLink on Nile from the demo account, locks `e6bccb2e…` (block 71153704) and
+`e20e481d…` (block 71154887), each minted a wallet-format token that Sphere shows
+with the Tron badge and offers for sending. Their blobs are in the wallet-api
+inventory of the test wallet. See `BRIDGING_COMMITTED_WORK.md` for the four
+follow-up commits the live run surfaced (layering, picker, coin display,
+exact-amount approval). Still open for Milestone 1: send one of the tokens to a
+second wallet and confirm the receiver accepts it under the strict verifier at
+20 confirmations.
+
 **Milestone 1:** the token shows in local Sphere with the bridged badge and
 passes the in-wallet re-verification at 20 confirmations. Its blob is the test
 data for Phase 2.

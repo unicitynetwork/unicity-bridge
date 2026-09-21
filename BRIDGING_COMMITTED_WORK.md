@@ -38,6 +38,21 @@ Base: `origin/main` at `762d350d` (2026-09-15).
 |---|---|---|---|---|---|
 | `test/baseline-testnet2` | (none, checkout of `origin/main`) | 2026-09-18 | Phase 1 [1] | Baseline run: `docker compose build && up`, image `sphere-frontend` on `localhost:3010`, testnet2 only. Gate passed: gateway calls 200, transfer completed. No source change was needed. | n/a |
 | `feat/bridge-v2` (from `origin/main` `762d350d`) | `ec5966de` | 2026-09-21 | Phase 1 [4] | The bridge as a **wallet module**, not a cherry-pick: `src/modules/registry.ts` globs `src/modules/<name>/module.ts`; the core knows the contract only (token plugins for `Sphere.init`, `describeCoin` for rows, actions with their own screen). `src/modules/bridge/` is assets-in only and is itself pluggable: `assets/<name>/index.ts` per bridgeable asset (`tron-usdt` today), the screen and `bridgeIn.ts` name no chain; mint via bridge-core `mintBridgedToken`. Core touch points: `SphereProvider` (plugins), `L3WalletView` (`ModuleActions`, `describeCoin`), `AssetRow` badge, `vite.config` dedupe of state-transition-sdk. `package.json`: sphere-sdk + both bridge packages as `file:` links (tripwire in `dependency-hygiene.test.ts`); `tronweb` for the dev-key signer. Docs: `docs/WALLET-MODULES.md`. 29 files, +2347/−214. Gate: `tsc -b`, `typecheck:tests`, eslint 0 errors, `vite build`, vitest 1531/1531 (1 skipped tripwire), `npm run dev` serves the module graph with every linked import resolving. The 18 old UI commits stay unused. | no |
+| `feat/bridge-v2` | `7ce057af` | 2026-09-21 | Phase 1 [4] | Module screens mounted with the built-in modals (the tab bar bled through); signer availability re-checked while the screen is open (TronLink injects late). | no |
+| `feat/bridge-v2` | `47f6c73a` | 2026-09-21 | Phase 1 [4] | Picker: network → asset → form, every step shown even with one option; `BridgeAsset.chain` descriptor (id, family, network name, testnet flag); component test walks the steps. | no |
+| `feat/bridge-v2` | `68ab6cc0` | 2026-09-21 | Phase 1 [5] | A module's coin shown as the module says everywhere (`moduleAssetView` / `moduleTokenView` in `useAssets` / `useTokens`), reference price for USDT; long names expand on click; send dialog header wraps. Fixes "Available 10000000 F16348", the $0 column and the 64-hex header. | no |
+| `feat/bridge-v2` | `bcbe1356` | 2026-09-21 | Phase 1 [5] | Approval is exactly the deposit amount; max-approve option removed. | no |
+
+Live gate for [5] (2026-09-21, not a commit): bridge-in from the local Sphere UI
+(`npm run dev`, testnet2, TronLink on Nile with the demo depositor account). Two
+deposits of 10 USDT: lock `e6bccb2e…` (block 71153704, 10:17 UTC, approval
+reused from `5ae0487a…`) and, after the exact-amount change, approve
+`97214259…` + lock `e20e481d…` (block 71154887, 11:16 UTC). Both tokens showed
+under Assets and Tokens with the Tron badge, correct decimals and a dollar
+value, and were offered for sending. A first attempt at 10:06 was killed by a
+hot reload after its approval and before its lock; nothing was locked and the
+record was discarded from the UI. Not yet exercised: receipt of a bridged token
+by an independent wallet under the strict 20-confirmation verifier.
 
 `feat/unicity-bridge` (18 commits, 457 behind `main`) is untouched.
 
