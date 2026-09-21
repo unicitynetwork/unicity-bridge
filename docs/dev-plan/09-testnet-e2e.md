@@ -281,6 +281,28 @@ Branch: `feat/sdk3-port`, continued.
    (`BRIDGING_ANALYSIS.md` section 9) in the same change, since the vkey
    changes anyway. Regenerate vectors, `cargo test`, SP1 execute on the Phase 1
    blob.
+   **Step 1 status (2026-09-21): done, `548f7b3` on `feat/sphere-plugin`** (the
+   tip of the sdk3-port stack). Decisions taken with it:
+   - The prover reads the wallet's value payload and nothing else; the bare
+     collection is refused. `BRIDGE_PROTO_VERSION` is 2. The five domain
+     strings stay `:v1`, so `configHash` does not move and the v2 vault differs
+     from v1 by the verifying key only.
+   - Anchored (shared-root) verification stays hand-rolled in sdk-ext, mirroring
+     the SDK's `verify_inclusion_proof_for` minus the quorum check; the SDK
+     offers no against-root entry point. Certified mode goes through the same
+     code with the proof's own certificate.
+   - Bridge transactions carry no deadline (`expires_at = None`); the aggregator's
+     service-assigned deadline is not recorded and not re-checked, as in the SDK.
+   - The Rust SDK's `TokenSplit` commits split outputs to the bare asset
+     collection, while the split protocol (and the TS SDK) binds the output
+     mint's actual payload bytes. Verification in sdk-ext uses the mint's bytes
+     (correct for wallet-made splits); the fixture builds its splits with its own
+     wallet-style builder. Worth raising with the SDK team: a split builder that
+     takes the payload encoder.
+   - The three live-sample tests are ignored until a wallet-format burn is
+     recorded (Milestone 2 data).
+   Not done here: `SP1 execute` on a real blob (no SP1 toolchain on this
+   machine; `sp1-sdk` also needs `protoc`). Runs on the prover box with step 2.
 2. Compute the new vkey. Deploy **v2 vault** on Nile with
    `contracts/tron/scripts/deploy-nile.js real-vault` (reuses the existing SP1
    verifier contract). Allow-list the current trust base hash. Freeze
