@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 : "${BRIDGE_RETURN_BIND:=0.0.0.0:8787}"
-: "${BRIDGE_DEPLOYMENT_CONFIG:=/app/deployments/nile/nile-usdt.json}"
+: "${BRIDGE_DEPLOYMENT_CONFIG:=/app/deployments/nile/nile-usdt-v2.json}"
 : "${TRUST_BASE_PATH:=/app/bft-trustbase.testnet2.json}"
 : "${BRIDGE_RETURN_PROVE_MODE:=precheck_only}"
 : "${SP1_GUEST_ELF:=/app/sp1/bridge-return-sp1-guest}"

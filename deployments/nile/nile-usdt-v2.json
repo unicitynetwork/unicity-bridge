@@ -1,0 +1,37 @@
+{
+  "description": "Frozen canonical Nile-USDT bridge deployment config, v2 (2026-09-21). config_hash equals the LIVE deployed vault CONFIG_HASH (TBKJ844…, reason_tag 39048, real SP1 verifier, R6 false-tolerant safe-transfer); the vault, the prover and the wallet all use these values. v2 differs from v1 (nile-usdt.json) by the vault address and hence config_hash, and by the verifying key: vkey 0x0039a542… is the BRIDGE_PROTO_VERSION 2 guest (Rust SDK v3.0.1, wallet value payload, empty burn batches rejected). Tokens minted against v1 cannot return through v2. Deployed with contracts/tron/scripts/deploy-nile.js real-vault <asset> <vkey>; config derived and cross-checked with `bridge-return-host emit-config`.",
+  "proto": 2,
+  "network": "tron-nile",
+  "chain_id_str": "3448148188",
+  "asset_evm_hex": "eca9bc828a3005b9a3b909f2cc5c2a54794de05f",
+  "config": {
+    "asset": "0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f",
+    "coin_id": "0xf1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb",
+    "config_hash": "0xfa77a13a6fb24658fa75377b0eef7cf3e92f8caede9ea127afe21be7a036cb1b",
+    "domain_tag": "0x6a6b3d1a43cfa710342bd7b7aee2a83362f60d065500fb8b7ec1ef2e04822b0f",
+    "lock_domain": "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
+    "nullifier_domain": "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
+    "reason_tag": 39048,
+    "source_chain_id": 3448148188,
+    "token_type": "0x6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74",
+    "vault": "0x0ec4b82f92c849f38201c8f1745560bd1a0dc49b"
+  },
+  "deployment": {
+    "vault": "TBKJ84417jdxo6j92TxQuYpZdRZGaeZVrv",
+    "vault_evm_hex": "0x0ec4b82f92c849f38201c8f1745560bd1a0dc49b",
+    "verifier_sp1": "TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR",
+    "asset_usdt": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+    "vkey": "0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5",
+    "guest_elf_sha256": "ce8b6ddb882c5da2f7fb995ddcd9193e289c5b195a22f994841d4601b125f1d8",
+    "sp1_version": "v6.3.1",
+    "deploy_txid": "6a66003106eaaafb692a4f18a3078bd92641b2c2025a8be21a6a4e62801f7f5d",
+    "deployed_at": "2026-09-21",
+    "admin": "THkA8JuurBh19mMamdHCoTXtwETzSAfgaj",
+    "supersedes": "nile-usdt.json"
+  },
+  "trust_base": {
+    "file": "../../bft-trustbase.testnet2.json",
+    "network_id": 4,
+    "canonical_hash": "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0"
+  }
+}
