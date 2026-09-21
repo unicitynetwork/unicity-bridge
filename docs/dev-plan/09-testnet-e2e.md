@@ -303,6 +303,18 @@ Branch: `feat/sdk3-port`, continued.
      recorded (Milestone 2 data).
    Not done here: `SP1 execute` on a real blob (no SP1 toolchain on this
    machine; `sp1-sdk` also needs `protoc`). Runs on the prover box with step 2.
+   **Step 2, first half (2026-09-21): vkey computed in Docker.** No SP1 toolchain
+   goes on the laptop: `prover/Dockerfile` builds the guest ELF inside Succinct's
+   own image for SP1 v6.3.1 (the reproducible build), the host and service with
+   the SP1 host SDK (protoc + Go 1.24 for the native Groth16 library), derives the
+   key from the ELF and runs `check-vectors`; `docker-compose.yml` at the repo
+   root runs the service on :8787 (precheck mode by default, CORS open, SP1
+   artifacts on a volume). Docker Desktop here has 15.6 GB, enough for the build
+   and the key, borderline for a Groth16 proof.
+   New guest vkey: `0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5`
+   (v1 vault: `0x00c34ae0…`). Deployment is the remaining half: it needs no key
+   from v1, any funded Nile account becomes v2's admin, the SP1 verifier contract
+   is shared. Not done yet; it is an outward action on the testnet.
 2. Compute the new vkey. Deploy **v2 vault** on Nile with
    `contracts/tron/scripts/deploy-nile.js real-vault` (reuses the existing SP1
    verifier contract). Allow-list the current trust base hash. Freeze
