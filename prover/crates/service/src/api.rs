@@ -11,6 +11,7 @@ use bridge_return_guest::wire;
 use bridge_return_host::s1;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use tower_http::cors::CorsLayer;
 
 use crate::{
     store::{ReturnRecord, ReturnStatus},
@@ -24,6 +25,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/returns", post(create_return).get(get_return_by_nullifier))
         .route("/returns/:id", get(get_return))
         .route("/batches/:id", get(get_batch))
+        .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
