@@ -7,7 +7,7 @@ not fixed here. It refines [`../ZK_BACK3.md`](../ZK_BACK3.md) §2, §5, §14 and
 yellowpaper `appendix-bridging.tex` "Shared Parameters" table into a frozen,
 testable form.
 
-**Version:** `BRIDGE_PROTO_VERSION = 1` — decisions below are fixed; vectors are
+**Version:** `BRIDGE_PROTO_VERSION = 2` — decisions below are fixed; vectors are
 published at M0. Every repo pins this constant; the conformance vectors are tagged
 with it.
 
@@ -73,7 +73,7 @@ configHash = K(abi.encode(
   `coinId = SHA256("unicity-bridge-coin:tron:<chainId>:<assetEvmHex>")`. Those
   derivations are frozen here too (they feed `config`).
 
-### 2.1 The bridged token's value payload (CHANGED 2026-09-18, lands in `BRIDGE_PROTO_VERSION = 2`)
+### 2.1 The bridged token's value payload (CHANGED 2026-09-18; `BRIDGE_PROTO_VERSION = 2` since 2026-09-21)
 
 The bridge defines no value format of its own. A bridged token's genesis `data`
 is the **wallet's value payload**, the format the network's wallets and their
@@ -93,10 +93,11 @@ amount; return-time burned value == locked amount) is the collection's entry for
   decodes it (pinned byte-for-byte against sphere-sdk's encoder in
   `test/value.test.ts`). Bare `PaymentAssetCollection` bytes, the v1 dialect,
   now decode as "no value".
-- **Circuit / prover:** `decode_bridged_payment_data` MUST accept this envelope
-  and reject the bare collection. Until the prover port lands (`09-testnet-e2e.md`
-  Phase 2) the Rust side still implements v1, so `BRIDGE_PROTO_VERSION` stays 1
-  and the `token/` vectors are regenerated with the bump.
+- **Circuit / prover:** `decode_bridged_payment_data`
+  (`prover/crates/sdk-ext/src/bridge.rs`) accepts this envelope and rejects the
+  bare collection, since 2026-09-21 (Rust SDK v3.0.1 port). `BRIDGE_PROTO_VERSION`
+  is 2 and the `token/` vectors are regenerated. The deployed v1 vault's verifying
+  key predates this guest; the v2 vault is deployed with the new key.
 - **Why:** wallet-api decides a token's assets server-side from the blob, and
   sphere-sdk classifies a bare collection as an unreadable dialect; a client-side
   decoder alone cannot make a v1 bridged token spendable. Adopting the wallet's

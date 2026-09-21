@@ -6,7 +6,7 @@ One reference generator produces them; the contracts (Solidity), the TS SDK, and
 the prover (Rust) each consume them as test input. A component is "in sync" iff
 its CI reproduces every vector for its subset.
 
-**`BRIDGE_PROTO_VERSION`** is in [`VERSION`](./VERSION) (`= 1`). Every consumer
+**`BRIDGE_PROTO_VERSION`** is in [`VERSION`](./VERSION) (`= 2`). Every consumer
 pins it; a version skew is a CI failure.
 
 ## Layout

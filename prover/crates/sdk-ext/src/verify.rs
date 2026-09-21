@@ -2,7 +2,7 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
-use unicity_token::api::InclusionProof;
+use unicity_token::api::{calculate_leaf_value, InclusionProof};
 use unicity_token::api::StateId;
 use unicity_token::crypto::hash::{DataHash, HashAlgorithm};
 use unicity_token::crypto::signature::Signature;
@@ -78,17 +78,11 @@ pub fn verify_inclusion_against_root(
     proof: &InclusionProof,
     transaction: &impl Transaction,
 ) -> Result<()> {
-    let inclusion_certificate = proof
-        .inclusion_certificate
-        .as_ref()
-        .ok_or(BridgeExtError::InclusionCertificateMissing)?;
-    let certification_data = proof
-        .certification_data
-        .as_ref()
-        .ok_or(BridgeExtError::CertificationDataMissing)?;
+    let certification_data = &proof.certification_data;
 
     if certification_data.lock_script() != transaction.lock_script()
         || certification_data.source_state_hash() != transaction.source_state_hash()
+        || certification_data.expires_at() != transaction.expires_at()
     {
         return Err(BridgeExtError::CertificationDataMismatch);
     }
@@ -98,14 +92,20 @@ pub fn verify_inclusion_against_root(
         return Err(BridgeExtError::TransactionHashMismatch);
     }
 
+    if let Some(expires_at) = certification_data.expires_at() {
+        if proof.reference_time >= expires_at {
+            return Err(BridgeExtError::RequestExpired);
+        }
+    }
+
     let state_id = StateId::derive(transaction.lock_script(), transaction.source_state_hash());
     let expected_root = DataHash::new(HashAlgorithm::Sha256, *expected_root)
         .map_err(|_| BridgeExtError::PathInvalid)?;
-    if !inclusion_certificate.verify(
-        &state_id,
-        certification_data.transaction_hash(),
-        &expected_root,
-    ) {
+    let leaf_value = calculate_leaf_value(&tx_hash, proof.reference_time);
+    if !proof
+        .inclusion_certificate
+        .verify(&state_id, &leaf_value, &expected_root)
+    {
         return Err(BridgeExtError::PathInvalid);
     }
 
@@ -128,20 +128,7 @@ fn verify_genesis_with_own_certificate(token: &Token, trust_base: &RootTrustBase
     if mint.network_id() != trust_base.network_id {
         return Err(BridgeExtError::NetworkMismatch);
     }
-
-    let expected_lock = SignaturePredicate::new(
-        Minter::public_key(mint.token_id()).map_err(|_| BridgeExtError::InvalidMintLockScript)?,
-    )
-    .to_encoded();
-    let certified_lock = genesis
-        .inclusion_proof()
-        .certification_data
-        .as_ref()
-        .map(|c| c.lock_script());
-    if certified_lock != Some(&expected_lock) {
-        return Err(BridgeExtError::InvalidMintLockScript);
-    }
-
+    check_mint_lock_script(token)?;
     verify_inclusion_with_own_certificate(trust_base, genesis.inclusion_proof(), mint)
         .map_err(|_| BridgeExtError::Genesis)
 }
@@ -165,22 +152,26 @@ fn verify_genesis_against_root(
     if mint.network_id() != trust_base.network_id {
         return Err(BridgeExtError::NetworkMismatch);
     }
+    check_mint_lock_script(token)?;
+    verify_inclusion_against_root(anchor_root, genesis.inclusion_proof(), mint)
+        .map_err(|_| BridgeExtError::Genesis)
+}
 
+fn check_mint_lock_script(token: &Token) -> Result<()> {
+    let mint = token.genesis().transaction();
     let expected_lock = SignaturePredicate::new(
         Minter::public_key(mint.token_id()).map_err(|_| BridgeExtError::InvalidMintLockScript)?,
     )
     .to_encoded();
-    let certified_lock = genesis
+    let certified_lock = token
+        .genesis()
         .inclusion_proof()
         .certification_data
-        .as_ref()
-        .map(|c| c.lock_script());
-    if certified_lock != Some(&expected_lock) {
+        .lock_script();
+    if certified_lock != &expected_lock {
         return Err(BridgeExtError::InvalidMintLockScript);
     }
-
-    verify_inclusion_against_root(anchor_root, genesis.inclusion_proof(), mint)
-        .map_err(|_| BridgeExtError::Genesis)
+    Ok(())
 }
 
 fn verify_unicity_certificate(

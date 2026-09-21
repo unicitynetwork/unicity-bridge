@@ -3,8 +3,7 @@ use alloc::vec::Vec;
 use num_bigint::BigUint;
 use tiny_keccak::{Hasher, Keccak};
 use unicity_token::api::bft::{RootTrustBase, UnicityCertificate};
-use unicity_token::cbor::DecodeLimits;
-use unicity_token::cbor::Decoder;
+use unicity_token::cbor::{encode_array, encode_null, encode_tag, encode_uint, DecodeLimits, Decoder};
 use unicity_token::crypto::hash::sha256;
 use unicity_token::payment::{
     split_output_commitment, AssetId, PaymentAssetCollection, SplitManifest, SplitMintJustification,
@@ -23,13 +22,34 @@ const BRIDGE_LOCK_JUSTIFICATION_VERSION: u64 = 1;
 
 pub const TRON_USDT_LOCK_JUSTIFICATION_TAG: u64 = 1_330_002;
 
-/// [`PaymentDataDecoder`] for a bridged token's `data` field. Bridge tokens use
-/// bare `PaymentAssetCollection` CBOR. Sphere-internal payment envelopes are
-/// not bridge tokens and must fail this decoder.
+pub const WALLET_VALUE_TAG: u64 = 39050;
+pub const WALLET_VALUE_VERSION: u64 = 1;
+
+/// [`PaymentDataDecoder`] for a bridged token's `data` field: the wallet's
+/// value payload, `tag(39050) [ version = 1, PaymentAssetCollection, memo ]`,
+/// with the collection inline and the memo a byte string or null.
 pub fn decode_bridged_payment_data(
     bytes: &[u8],
 ) -> core::result::Result<PaymentAssetCollection, unicity_token::Error> {
-    PaymentAssetCollection::from_cbor_bytes(bytes)
+    let decoder = Decoder::new(bytes);
+    decoder.finish()?;
+    let inner = decoder.expect_tag(WALLET_VALUE_TAG)?;
+    let items = inner.array(Some(3))?;
+    if items[0].uint()? != WALLET_VALUE_VERSION {
+        return Err(unicity_token::Error::UnexpectedValue(
+            "unsupported wallet value payload version",
+        ));
+    }
+    let assets = PaymentAssetCollection::from_cbor(items[1])?;
+    items[2].nullable(|d| d.bytes_value().map(|_| ()).map_err(Into::into))?;
+    Ok(assets)
+}
+
+pub fn encode_bridged_payment_data(assets: &PaymentAssetCollection) -> Vec<u8> {
+    encode_tag(
+        WALLET_VALUE_TAG,
+        &encode_array(&[&encode_uint(WALLET_VALUE_VERSION), &assets.to_cbor(), &encode_null()]),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -447,4 +467,46 @@ fn keccak256(input: &[u8]) -> [u8; 32] {
     hasher.update(input);
     hasher.finalize(&mut out);
     out
+}
+
+#[cfg(test)]
+mod value_payload_tests {
+    use super::{decode_bridged_payment_data, encode_bridged_payment_data};
+    use alloc::vec;
+    use num_bigint::BigUint;
+    use unicity_token::cbor::{encode_array, encode_byte_string, encode_null, encode_tag, encode_uint};
+    use unicity_token::payment::{Asset, AssetId, PaymentAssetCollection};
+
+    fn assets() -> PaymentAssetCollection {
+        PaymentAssetCollection::create([Asset::new(AssetId::new(vec![0xab; 32]), BigUint::from(1_000_000u64))])
+            .unwrap()
+    }
+
+    #[test]
+    fn encodes_the_wallets_bytes() {
+        let mut expected = vec![0xd9, 0x98, 0x8a, 0x83, 0x01, 0x81, 0x82, 0x58, 0x20];
+        expected.extend_from_slice(&[0xab; 32]);
+        expected.extend_from_slice(&[0x43, 0x0f, 0x42, 0x40, 0xf6]);
+        assert_eq!(encode_bridged_payment_data(&assets()), expected);
+    }
+
+    #[test]
+    fn decodes_the_envelope_with_or_without_memo() {
+        let no_memo = encode_bridged_payment_data(&assets());
+        assert_eq!(decode_bridged_payment_data(&no_memo).unwrap(), assets());
+        let with_memo = encode_tag(
+            39050,
+            &encode_array(&[&encode_uint(1), &assets().to_cbor(), &encode_byte_string(&[1, 2])]),
+        );
+        assert_eq!(decode_bridged_payment_data(&with_memo).unwrap(), assets());
+    }
+
+    #[test]
+    fn rejects_the_bare_collection_and_other_versions() {
+        assert!(decode_bridged_payment_data(&assets().to_cbor()).is_err());
+        let v2 = encode_tag(39050, &encode_array(&[&encode_uint(2), &assets().to_cbor(), &encode_null()]));
+        assert!(decode_bridged_payment_data(&v2).is_err());
+        let other_tag = encode_tag(39048, &encode_array(&[&encode_uint(1), &assets().to_cbor(), &encode_null()]));
+        assert!(decode_bridged_payment_data(&other_tag).is_err());
+    }
 }
