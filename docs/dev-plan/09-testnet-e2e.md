@@ -317,6 +317,14 @@ Branch: `feat/sdk3-port`, continued.
    is shared. Not done yet; it is an outward action on the testnet.
    Runtime image built and smoke-tested the same day (`2b30bba`): step 3's
    container exists in precheck mode; real proving in it is untested.
+   **Step 2 done (2026-09-21, `08316b8`): v2 vault `TBKJ84417jdxo6j92TxQuYpZdRZGaeZVrv`**,
+   CONFIG_HASH `0xfa77a13a…`, trust base allow-listed, frozen in
+   `deployments/nile/nile-usdt-v2.json`. Decisions: one active bridge per asset
+   (the registry keys on chain + asset and mint-reason tags cannot repeat across
+   plugins), so the manifest simply moved to v2 and v1 stays as a record; v1's
+   locked test USDT is written off; the demo depositor is v2's admin, since
+   nothing ties v2 to v1's keys. Next: bridge fresh USDT in against v2 from
+   Sphere, then the burn side (Phase 3 UI or the plugin CLI) for Milestone 2.
 2. Compute the new vkey. Deploy **v2 vault** on Nile with
    `contracts/tron/scripts/deploy-nile.js real-vault` (reuses the existing SP1
    verifier contract). Allow-list the current trust base hash. Freeze
