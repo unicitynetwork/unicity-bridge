@@ -139,7 +139,7 @@ payment-data format. Gate: `npm test` and `npm run vectors` green; the byte
 contract does not move. Optional stronger gate: `demo/e2e.ts` adapted to lock
 on the existing vault mints a token on testnet2 without any browser.
 
-**[2] status (2026-09-18): done.** Commits `726316b`, `fdbbbab` on
+**[2] status (2026-09-18): done.** Commits `fba8325`, `7eb5874` on
 `feat/sdk3-port`. Offline gates green (48/48 tests, build, typecheck, vectors
 unchanged, attack matrix). Live gate passed: 1 USDT locked in the deployed
 vault (nonce 19), token `d7ad6460…` minted on testnet2 through the sharded
@@ -153,13 +153,13 @@ Decision: bridge code is isolated in its own packages and pulled in only when a
 bridge is configured; sphere-sdk gets generic seams that any token plugin can
 use. Two stacked pieces:
 
-- *Piece 1, sphere-sdk `feat/token-plugins` (done, `47ab5008`):* `TokenPlugin`
+- *Piece 1, sphere-sdk `feat/token-plugins` (done, `5beaca67`):* `TokenPlugin`
   (mint-reason verifiers by CBOR tag) registered through
   `Sphere.init({ plugins })`; `mintDataToken` with a genesis `justification` and
   per-mint verifiers; engine `burn` with a reason; payments-v2 `mintCustom`,
   `burn`, `pendingBurns`, `acknowledgeBurn`, journal-first with crash replay.
   Nothing in it names a bridge or Tron. Upstreamable on its own.
-- *Piece 2, unicity-bridge `feat/sphere-plugin` (done, `68c59ea`, on
+- *Piece 2, unicity-bridge `feat/sphere-plugin` (done, `f97299b`, on
   `feat/sdk3-port`):* `bridge-core` defines the wallet contract structurally
   (`WalletTokenPlugin`, `BridgePayments`) and the composition helpers
   `mintBridgedToken`, `burnForReturn` (persist-then-acknowledge),
@@ -207,7 +207,7 @@ work (per-network gateway, `DEFAULT_NETWORK`, SGW subscriptions). Gate:
 `npx tsc --noEmit` clean, `npm run dev` shows the wallet on testnet2 with the
 "Bridge USDT" entry point. `feat/unicity-bridge` is not touched.
 
-**[4] status (2026-09-21): done, differently.** Commit `bd164c5f` on Sphere
+**[4] status (2026-09-21): done, differently.** Commit `8b308813` on Sphere
 `feat/bridge-v2` (from `origin/main`). The cherry-pick was dropped: the 18 old
 commits wired the bridge into `SphereProvider`, the L3 view, `AssetRow` and the
 SDK's since-deleted `bridgeMint`, and the requirement became that deleting the
@@ -281,7 +281,7 @@ Branch: `feat/sdk3-port`, continued.
    (`BRIDGING_ANALYSIS.md` section 9) in the same change, since the vkey
    changes anyway. Regenerate vectors, `cargo test`, SP1 execute on the Phase 1
    blob.
-   **Step 1 status (2026-09-21): done, `c16860e` on `feat/sphere-plugin`** (the
+   **Step 1 status (2026-09-21): done, `2b66e9a` on `feat/sphere-plugin`** (the
    tip of the sdk3-port stack). Decisions taken with it:
    - The prover reads the wallet's value payload and nothing else; the bare
      collection is refused. `BRIDGE_PROTO_VERSION` is 2. The five domain
@@ -315,9 +315,9 @@ Branch: `feat/sdk3-port`, continued.
    (v1 vault: `0x00c34ae0…`). Deployment is the remaining half: it needs no key
    from v1, any funded Nile account becomes v2's admin, the SP1 verifier contract
    is shared. Not done yet; it is an outward action on the testnet.
-   Runtime image built and smoke-tested the same day (`f8d3fc4`): step 3's
+   Runtime image built and smoke-tested the same day (`905389b`): step 3's
    container exists in precheck mode; real proving in it is untested.
-   **Step 2 done (2026-09-21, `65b4c68`): v2 vault `TBKJ84417jdxo6j92TxQuYpZdRZGaeZVrv`**,
+   **Step 2 done (2026-09-21, `6394729`): v2 vault `TBKJ84417jdxo6j92TxQuYpZdRZGaeZVrv`**,
    CONFIG_HASH `0xfa77a13a…`, trust base allow-listed, frozen in
    `deployments/nile/nile-usdt-v2.json`. Decisions: one active bridge per asset
    (the registry keys on chain + asset and mint-reason tags cannot repeat across
@@ -341,7 +341,7 @@ the v2 vault; USDT lands on the Tron address.
 
 ### Phase 3: full loop from Sphere
 
-**UI status (2026-09-21, `b7938a6d` on Sphere `feat/bridge-v2`): the assets-out
+**UI status (2026-09-21, `ffd27a43` on Sphere `feat/bridge-v2`): the assets-out
 screen exists.** Burn from the wallet, blob recorded before the wallet releases
 its copy, hand-off to the return service, status tracking with resubmission.
 Not yet exercised live. The return-service container runs from the repo root
