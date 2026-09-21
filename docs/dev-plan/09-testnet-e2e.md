@@ -341,6 +341,13 @@ the v2 vault; USDT lands on the Tron address.
 
 ### Phase 3: full loop from Sphere
 
+**UI status (2026-09-21, `0120e635` on Sphere `feat/bridge-v2`): the assets-out
+screen exists.** Burn from the wallet, blob recorded before the wallet releases
+its copy, hand-off to the return service, status tracking with resubmission.
+Not yet exercised live. The return-service container runs from the repo root
+(`docker compose up -d return-service`, reads TRON_SK / TRON_VAULT from `.env`)
+in precheck mode; a real release needs `BRIDGE_RETURN_PROVE_MODE=sp1_groth16`.
+
 Bridge-in from Sphere → transfer → bridge-out from Sphere → `Released`
 observed → balance on Tron. Then the negative cases: replayed blob, tampered
 leaf, wrong config.
