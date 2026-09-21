@@ -207,6 +207,26 @@ work (per-network gateway, `DEFAULT_NETWORK`, SGW subscriptions). Gate:
 `npx tsc --noEmit` clean, `npm run dev` shows the wallet on testnet2 with the
 "Bridge USDT" entry point. `feat/unicity-bridge` is not touched.
 
+**[4] status (2026-09-21): done, differently.** Commit `ec5966de` on Sphere
+`feat/bridge-v2` (from `origin/main`). The cherry-pick was dropped: the 18 old
+commits wired the bridge into `SphereProvider`, the L3 view, `AssetRow` and the
+SDK's since-deleted `bridgeMint`, and the requirement became that deleting the
+bridge files leaves a wallet without a bridge. So Sphere gained a small module
+system (`src/modules/`, discovered by folder glob, contract in `types.ts`) and
+the bridge is its first module, assets-in only; bridge-out waits for Phase 2.
+The module is pluggable in turn: one folder per bridgeable asset under
+`src/modules/bridge/assets/`, the screen and flow chain-agnostic. Wallets that
+can sign a deposit: TronLink, plus a dev-only "development key" signer from
+`VITE_BRIDGE_DEV_TRON_KEY` (needs `tronweb`, loaded lazily; tree-shaken out of
+production). Gate passed: `tsc -b`, tests typecheck, eslint, `vite build`,
+vitest 1531/1531, dev server serving the whole linked import graph. Not yet
+seen in a browser: the Bridge button under Top Up / Swap / Send, which is [5]'s
+first step. Sphere's `.env` (gitignored) carries the staging backends and the
+public testnet2 key; `VITE_REQUIRE_WALLET_API` must stay out of it, since vitest
+reads `.env` and `walletApi.test.ts` fails with the flag set.
+`file:` links resolve through the unicity-bridge working tree, so it must stay on
+`feat/sphere-plugin` (the checkout was found on `docs/bridging-analysis` mid-session).
+
 **[5] Bridge-in from local Sphere.** Against the existing v1 vault
 (`configHash` in the manifest already equals its `CONFIG_HASH`). approve +
 lock on Nile via TronLink or `ManagedTronSigner`, mint on testnet2.
