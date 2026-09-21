@@ -315,6 +315,8 @@ Branch: `feat/sdk3-port`, continued.
    (v1 vault: `0x00c34ae0…`). Deployment is the remaining half: it needs no key
    from v1, any funded Nile account becomes v2's admin, the SP1 verifier contract
    is shared. Not done yet; it is an outward action on the testnet.
+   Runtime image built and smoke-tested the same day (`2b30bba`): step 3's
+   container exists in precheck mode; real proving in it is untested.
 2. Compute the new vkey. Deploy **v2 vault** on Nile with
    `contracts/tron/scripts/deploy-nile.js real-vault` (reuses the existing SP1
    verifier contract). Allow-list the current trust base hash. Freeze
