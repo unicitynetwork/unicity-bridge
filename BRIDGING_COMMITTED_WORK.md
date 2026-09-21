@@ -73,6 +73,23 @@ Base: `origin/main` at `be75bc9a` (v0.17.3, 2026-09-17).
 `feat/unicity-bridge` (9 commits, 208 behind `main`) is untouched. The cherry-pick
 approach was dropped in favour of the plugin architecture (see the plan).
 
+## Deployed contracts (Tron Nile testnet)
+
+Live on chain, outside git. The frozen record of each vault is
+`deployments/nile/<file>`; `prover/crates/host/tests/nile_config.rs` checks
+every freeze against the hash the contract committed on chain.
+
+| Contract | Address | Deployed | Facts | Status |
+|---|---|---|---|---|
+| **Vault v2** `UnicityBridgeVault` | `TBKJ84417jdxo6j92TxQuYpZdRZGaeZVrv` (EVM `0x0ec4b82f…`) | 2026-09-21, tx `6a66003106eaaafb692a4f18a3078bd92641b2c2025a8be21a6a4e62801f7f5d` | vkey `0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5` (BRIDGE_PROTO_VERSION 2 guest, ELF sha256 `ce8b6ddb…`); CONFIG_HASH `0xfa77a13a6fb24658fa75377b0eef7cf3e92f8caede9ea127afe21be7a036cb1b`; trust base `0x72a67260…` allow-listed in tx `f22aae9acd1a5e65c41740b4145ccc1dea0d963605ac178abe7456b984dd90a5` (block 71158544); admin `THkA8JuurBh19mMamdHCoTXtwETzSAfgaj`; push-payment; freeze `nile-usdt-v2.json` | **active** (wallet manifest, service, env) |
+| Vault v1 `UnicityBridgeVault` | `TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY` (EVM `0xbe47c0b7…`) | 2026-07-03 | vkey `0x00c34ae0ebb63e86218a754892813f4744b2f6c9ed613c085ea40999b16ce3ad` (BRIDGE_PROTO_VERSION 1 guest); CONFIG_HASH `0x7f376b16b3bff3455f375e7cf30b9d29d2a14332912f0ffb69d78e1b31d5193f`; freeze `nile-usdt.json` | superseded: its key names the old guest, which cannot read SDK-3 tokens; holds ~13 test USDT from the 2026-09-18/21 locks, written off |
+| SP1 Groth16 verifier | `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR` | before 2026-07-03 | stateless, shared by every vault; SP1 v6 circuit | active |
+| Test USDT (asset) | `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` (EVM `0xeca9bc82…`) | Nile's own | non-standard TRC20 (false-returning transfer; the vault's R6 safe-transfer covers it); token type `0x6f2d10d2…`, coin id `0xf1634862…` are derived from it and are the same for v1 and v2 | active |
+
+Deployer for v2: the demo depositor account, funded with test TRX (962 TRX before
+the deployment). Nothing ties v2 to v1's keys; settlement on either vault is
+permissionless.
+
 ## Not committed anywhere
 
 - Running state: the Sphere baseline container (`sphere-frontend`) and Docker
