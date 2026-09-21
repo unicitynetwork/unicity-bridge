@@ -237,9 +237,9 @@ TronLink on Nile from the demo account, locks `e6bccb2e…` (block 71153704) and
 with the Tron badge and offers for sending. Their blobs are in the wallet-api
 inventory of the test wallet. See `BRIDGING_COMMITTED_WORK.md` for the four
 follow-up commits the live run surfaced (layering, picker, coin display,
-exact-amount approval). Still open for Milestone 1: send one of the tokens to a
-second wallet and confirm the receiver accepts it under the strict verifier at
-20 confirmations.
+exact-amount approval). Receiver check done the same day: sent to a second
+derived address, accepted under the strict verifier at 20 confirmations.
+**Milestone 1 met (2026-09-21).**
 
 **Milestone 1:** the token shows in local Sphere with the bridged badge and
 passes the in-wallet re-verification at 20 confirmations. Its blob is the test

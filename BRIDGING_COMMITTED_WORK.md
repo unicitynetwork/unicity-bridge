@@ -51,8 +51,11 @@ reused from `5ae0487a…`) and, after the exact-amount change, approve
 under Assets and Tokens with the Tron badge, correct decimals and a dollar
 value, and were offered for sending. A first attempt at 10:06 was killed by a
 hot reload after its approval and before its lock; nothing was locked and the
-record was discarded from the UI. Not yet exercised: receipt of a bridged token
-by an independent wallet under the strict 20-confirmation verifier.
+record was discarded from the UI. Receiver check (2026-09-21, later the same day): one of the bridged tokens was
+sent from the wallet's first address to a second derived address (a separate
+identity with its own inventory); the receiver accepted it under the strict
+20-confirmation verifier and shows it with the Tron badge. **Milestone 1 met.**
+Phase 2 (assets out) starts here.
 
 `feat/unicity-bridge` (18 commits, 457 behind `main`) is untouched.
 
