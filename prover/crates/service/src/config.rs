@@ -2,6 +2,11 @@ use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{
+    policy::{BatchPolicy, Limits},
+    retry::RetryPolicy,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ServiceConfig {
     pub bind: SocketAddr,
@@ -15,8 +20,11 @@ pub struct ServiceConfig {
     pub deployment_config_path: Option<PathBuf>,
     /// Source-chain lock-justification CBOR tag (Tron USDT = 1330002).
     pub justification_tag: u64,
-    pub max_wait: Duration,
-    pub batch_target: usize,
+    pub idle_wait: Duration,
+    pub max_batch_size: usize,
+    pub max_batch_bytes: usize,
+    pub state_dir: Option<PathBuf>,
+    pub retry: RetryPolicy,
     pub elf_path: Option<PathBuf>,
     pub proof_dir: PathBuf,
     pub prove_mode: ProveMode,
@@ -40,8 +48,11 @@ impl Default for ServiceConfig {
             trust_base_path: None,
             deployment_config_path: None,
             justification_tag: 1_330_002,
-            max_wait: Duration::from_secs(60),
-            batch_target: 1,
+            idle_wait: Duration::ZERO,
+            max_batch_size: 8,
+            max_batch_bytes: 8 << 20,
+            state_dir: None,
+            retry: RetryPolicy::default(),
             elf_path: None,
             proof_dir: PathBuf::from("target/bridge-return-service/proofs"),
             prove_mode: ProveMode::PrecheckOnly,
@@ -71,19 +82,24 @@ impl ServiceConfig {
         if let Some(v) = env_opt("BRIDGE_RETURN_PROOF_DIR") {
             cfg.proof_dir = PathBuf::from(v);
         }
-        if let Some(v) = env_opt("BRIDGE_RETURN_MAX_WAIT_SECS") {
-            cfg.max_wait = Duration::from_secs(
-                v.parse()
-                    .map_err(|_| ConfigError::Invalid("BRIDGE_RETURN_MAX_WAIT_SECS"))?,
-            );
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_IDLE_WAIT_SECS")? {
+            cfg.idle_wait = Duration::from_secs(secs);
         }
-        if let Some(v) = env_opt("BRIDGE_RETURN_BATCH_TARGET") {
-            cfg.batch_target = v
-                .parse()
-                .map_err(|_| ConfigError::Invalid("BRIDGE_RETURN_BATCH_TARGET"))?;
-            if cfg.batch_target == 0 {
-                return Err(ConfigError::Invalid("BRIDGE_RETURN_BATCH_TARGET"));
-            }
+        if let Some(size) = env_parsed("BRIDGE_RETURN_MAX_BATCH_SIZE")? {
+            cfg.max_batch_size = positive(size, "BRIDGE_RETURN_MAX_BATCH_SIZE")?;
+        }
+        if let Some(bytes) = env_parsed("BRIDGE_RETURN_MAX_BATCH_BYTES")? {
+            cfg.max_batch_bytes = positive(bytes, "BRIDGE_RETURN_MAX_BATCH_BYTES")?;
+        }
+        cfg.state_dir = env_opt("BRIDGE_RETURN_STATE_DIR").map(PathBuf::from);
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_RETRY_BASE_SECS")? {
+            cfg.retry.base = Duration::from_secs(secs);
+        }
+        if let Some(attempts) = env_parsed("BRIDGE_RETURN_MAX_ATTEMPTS")? {
+            cfg.retry.max_attempts = positive(attempts, "BRIDGE_RETURN_MAX_ATTEMPTS")? as u32;
+        }
+        if let Some(rebases) = env_parsed("BRIDGE_RETURN_MAX_REBASES")? {
+            cfg.retry.max_rebases = rebases;
         }
         if let Some(v) = env_opt("BRIDGE_CONFIG_HASH") {
             cfg.config_hash = Some(
@@ -97,6 +113,24 @@ impl ServiceConfig {
     }
 }
 
+impl From<&ServiceConfig> for Limits {
+    fn from(config: &ServiceConfig) -> Self {
+        Self {
+            max_size: config.max_batch_size,
+            max_bytes: config.max_batch_bytes,
+            idle_wait: config.idle_wait,
+        }
+    }
+}
+
+impl From<&ServiceConfig> for BatchPolicy {
+    fn from(config: &ServiceConfig) -> Self {
+        Self {
+            limits: Limits::from(config),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("invalid environment variable: {0}")]
@@ -105,4 +139,17 @@ pub enum ConfigError {
 
 fn env_opt(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+fn env_parsed<T: std::str::FromStr>(key: &'static str) -> Result<Option<T>, ConfigError> {
+    env_opt(key)
+        .map(|v| v.parse().map_err(|_| ConfigError::Invalid(key)))
+        .transpose()
+}
+
+fn positive(value: usize, key: &'static str) -> Result<usize, ConfigError> {
+    if value == 0 {
+        return Err(ConfigError::Invalid(key));
+    }
+    Ok(value)
 }

@@ -127,7 +127,6 @@ mod tests {
                 [0; 32],
                 [0; 32],
                 public_values,
-                Vec::new(),
                 created_at_ms,
             ),
         }

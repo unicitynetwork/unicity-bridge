@@ -14,6 +14,7 @@ use sha2::Digest;
 use tower_http::cors::CorsLayer;
 
 use crate::{
+    domain::burn::Burn,
     store::{ReturnRecord, ReturnStatus},
     AppState,
 };
@@ -35,19 +36,26 @@ pub struct HealthResponse {
     pub status: &'static str,
     pub queue_depth: usize,
     pub active_batch: Option<String>,
-    pub batch_target: usize,
-    pub max_wait_ms: u128,
+    pub active_batch_size: usize,
+    pub proving_since_ms: Option<u128>,
+    pub last_proof_ms: Option<u128>,
+    pub max_batch_size: usize,
+    pub idle_wait_ms: u128,
     pub prove_mode: String,
     pub chain_sync: String,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+    let health = state.store.health();
     Json(HealthResponse {
         status: "ok",
-        queue_depth: state.queue.depth().await,
-        active_batch: state.queue.active_batch().await,
-        batch_target: state.config.batch_target,
-        max_wait_ms: state.config.max_wait.as_millis(),
+        queue_depth: health.queue_depth,
+        active_batch: health.active_batch,
+        active_batch_size: health.active_batch_size,
+        proving_since_ms: health.proving_since_ms,
+        last_proof_ms: health.last_proof_ms,
+        max_batch_size: state.config.max_batch_size,
+        idle_wait_ms: state.config.idle_wait.as_millis(),
         prove_mode: format!("{:?}", state.config.prove_mode),
         chain_sync: state.chain_events.label().to_string(),
     })
@@ -141,17 +149,16 @@ async fn create_return(
     }
     let nullifier = input.return_leaves[0].nullifier;
     let return_id = return_id(&report.public_values_digest, &nullifier);
+    let burn = Burn::from_input(return_id.clone(), &input, wire_input);
     let record = ReturnRecord::queued(
         return_id,
         nullifier,
         report.public_values_digest,
         report.public_values,
-        wire_input,
-        crate::store::now_ms(),
+        state.clock.now_ms(),
     );
-    let (record, inserted) = state.store.insert_or_requeue(record);
+    let (record, inserted) = state.store.accept(burn, record, state.clock.now_ms());
     if inserted {
-        state.queue.enqueue(record.return_id.clone()).await?;
         tracing::info!(
             return_id = %record.return_id,
             nullifier = %record.nullifier,
@@ -205,8 +212,6 @@ pub enum ApiError {
     PrecheckRejected(String),
     #[error("{0}")]
     Host(#[from] bridge_return_host::HostError),
-    #[error("{0}")]
-    Queue(#[from] crate::queue::QueueError),
     #[error("accumulator not synced to chain: {0}")]
     ChainUnsynced(String),
     #[error("return not found: {0}")]
@@ -216,10 +221,9 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self {
-            ApiError::BadRequest(_, _)
-            | ApiError::PrecheckRejected(_)
-            | ApiError::Host(_)
-            | ApiError::Queue(_) => StatusCode::BAD_REQUEST,
+            ApiError::BadRequest(_, _) | ApiError::PrecheckRejected(_) | ApiError::Host(_) => {
+                StatusCode::BAD_REQUEST
+            }
             ApiError::ChainUnsynced(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
         };
@@ -227,14 +231,10 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(code, _) => *code,
             ApiError::PrecheckRejected(_) => "precheck_rejected",
             ApiError::Host(_) => "host_error",
-            ApiError::Queue(_) => "queue_closed",
             ApiError::ChainUnsynced(_) => "chain_unsynced",
             ApiError::NotFound(_) => "not_found",
         };
-        let recoverable = matches!(
-            &self,
-            ApiError::Queue(_) | ApiError::Host(_) | ApiError::ChainUnsynced(_)
-        );
+        let recoverable = matches!(&self, ApiError::Host(_) | ApiError::ChainUnsynced(_));
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves
         // to when the caller only reports a code, not the full message.

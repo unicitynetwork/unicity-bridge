@@ -92,7 +92,6 @@ mod tests {
             fixture.input.return_leaves[0].nullifier,
             [0; 32],
             fixture.input.public_values,
-            Vec::new(),
             1_000,
         );
         record.not_before_ms = not_before_ms;

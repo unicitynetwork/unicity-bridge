@@ -425,14 +425,7 @@ mod tests {
                 leaf: leaf(nullifier),
                 wire_input: vec![nullifier_byte; 8],
             },
-            record: ReturnRecord::queued(
-                id.to_string(),
-                nullifier,
-                [0; 32],
-                public_values,
-                Vec::new(),
-                at_ms,
-            ),
+            record: ReturnRecord::queued(id.to_string(), nullifier, [0; 32], public_values, at_ms),
         }
     }
 

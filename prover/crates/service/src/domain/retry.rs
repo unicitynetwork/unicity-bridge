@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     pub base: Duration,
     pub max_attempts: u32,

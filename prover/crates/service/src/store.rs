@@ -1,22 +1,43 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    io,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 
 use bridge_return_core::{PublicValues, ReturnLeaf, SourceLockRef};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
 
-#[derive(Clone, Default)]
+use crate::{
+    domain::{
+        batch::Batch,
+        burn::Burn,
+        event::Event,
+        ledger::{Health, Ledger},
+        policy::{BatchPolicy, Decision},
+        retry::RetryPolicy,
+    },
+    journal::Journal,
+    prover::ProofBundle,
+};
+
+#[derive(Clone)]
 pub struct ReturnStore {
-    inner: Arc<RwLock<StoreInner>>,
+    inner: Arc<Mutex<Inner>>,
+    changed: Arc<Notify>,
 }
 
-#[derive(Default)]
-struct StoreInner {
-    by_id: HashMap<String, ReturnRecord>,
-    by_nullifier: HashMap<String, String>,
-    batches: HashMap<String, BatchBundle>,
+struct Inner {
+    ledger: Ledger,
+    journal: Journal,
+    retry: RetryPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Taken {
+    Batch(Batch),
+    WaitUntil(u128),
+    Idle,
 }
 
 /// A proven batch's published on-chain bundle (§B4 `/batches/:id`) — anyone can
@@ -139,8 +160,6 @@ pub struct ReturnRecord {
     pub total_amount: String,
     pub public_values_digest: String,
     pub public_values: PublicValuesHex,
-    #[serde(skip)]
-    pub wire_input: Vec<u8>,
     #[serde(default)]
     pub attempts: u32,
     #[serde(default)]
@@ -165,123 +184,141 @@ pub struct PublicValuesHex {
     pub total_amount: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum StoreError {
-    #[error("return not found: {0}")]
-    NotFound(String),
+impl Default for ReturnStore {
+    fn default() -> Self {
+        Self::memory(RetryPolicy::default())
+    }
 }
 
 impl ReturnStore {
-    pub fn insert_or_requeue(&self, record: ReturnRecord) -> (ReturnRecord, bool) {
-        let mut guard = self.inner.write().expect("store poisoned");
-        let known = guard
-            .by_nullifier
-            .get(&record.nullifier)
-            .and_then(|id| guard.by_id.get(id))
-            .filter(|existing| !existing.failed_recoverably())
-            .cloned();
-        if let Some(existing) = known {
-            return (existing, false);
+    pub fn memory(retry: RetryPolicy) -> Self {
+        Self::new(Ledger::default(), Journal::Memory, retry)
+    }
+
+    pub fn open(dir: &Path, retry: RetryPolicy, now_ms: u128) -> io::Result<Self> {
+        let (mut journal, events) = Journal::open(dir)?;
+        let mut ledger = Ledger::default();
+        for event in events {
+            ledger.apply(event, &retry);
         }
-        guard
-            .by_nullifier
-            .insert(record.nullifier.clone(), record.return_id.clone());
-        guard.by_id.insert(record.return_id.clone(), record.clone());
-        (record, true)
+        for event in ledger.recover(now_ms) {
+            journal.append(&event)?;
+            ledger.apply(event, &retry);
+        }
+        journal.compact(&ledger)?;
+        Ok(Self::new(ledger, journal, retry))
+    }
+
+    fn new(ledger: Ledger, journal: Journal, retry: RetryPolicy) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                ledger,
+                journal,
+                retry,
+            })),
+            changed: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn accept(&self, burn: Burn, record: ReturnRecord, now_ms: u128) -> (ReturnRecord, bool) {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        let known = inner
+            .ledger
+            .by_nullifier(&record.nullifier)
+            .map(|r| (r.burn.id.clone(), r.record.failed_recoverably()));
+        let id = match known {
+            Some((id, false)) => return (inner.ledger.record(&id).expect("known"), false),
+            Some((id, true)) => {
+                inner.commit(Event::Requeued {
+                    id: id.clone(),
+                    at_ms: now_ms,
+                });
+                id
+            }
+            None => {
+                let id = burn.id.clone();
+                inner.commit(Event::Accepted { burn, record });
+                id
+            }
+        };
+        self.changed.notify_one();
+        (inner.ledger.record(&id).expect("just committed"), true)
+    }
+
+    pub fn apply(&self, event: Event) {
+        self.inner.lock().expect("store poisoned").commit(event);
+    }
+
+    pub fn take_next(&self, policy: &BatchPolicy, now_ms: u128, collect: bool) -> Taken {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        match policy.next(&inner.ledger.pending(), now_ms, collect) {
+            Decision::Batch(members) => {
+                inner.commit(Event::BatchFormed {
+                    members,
+                    at_ms: now_ms,
+                });
+                Taken::Batch(inner.ledger.active_batch().cloned().expect("just formed"))
+            }
+            Decision::WaitUntil(at_ms) => Taken::WaitUntil(at_ms),
+            Decision::Idle => Taken::Idle,
+        }
+    }
+
+    pub fn read<T>(&self, f: impl FnOnce(&Ledger) -> T) -> T {
+        f(&self.inner.lock().expect("store poisoned").ledger)
     }
 
     pub fn get(&self, id: &str) -> Option<ReturnRecord> {
-        self.inner
-            .read()
-            .expect("store poisoned")
-            .by_id
-            .get(id)
-            .cloned()
+        self.read(|ledger| ledger.record(id))
     }
 
-    /// Lookup by nullifier (`0x…` hex, case-insensitive) — wallet idempotency.
     pub fn get_by_nullifier(&self, nullifier: &str) -> Option<ReturnRecord> {
-        let key = nullifier.to_lowercase();
-        let guard = self.inner.read().expect("store poisoned");
-        guard
-            .by_nullifier
-            .get(&key)
-            .and_then(|id| guard.by_id.get(id).cloned())
-    }
-
-    /// Persist a proven batch's published bundle (idempotent on batch id).
-    pub fn put_batch(&self, bundle: BatchBundle) {
-        self.inner
-            .write()
-            .expect("store poisoned")
-            .batches
-            .insert(bundle.batch_id.clone(), bundle);
+        self.read(|ledger| {
+            let id = ledger.by_nullifier(nullifier)?.burn.id.clone();
+            ledger.record(&id)
+        })
     }
 
     pub fn get_batch(&self, batch_id: &str) -> Option<BatchBundle> {
-        self.inner
-            .read()
-            .expect("store poisoned")
-            .batches
-            .get(batch_id)
-            .cloned()
+        self.read(|ledger| ledger.batch(batch_id)?.bundle.clone())
     }
 
-    /// Record the settle txid on a batch (S4) — surfaced on `/batches/:id`.
-    pub fn set_batch_settle_txid(&self, batch_id: &str, txid: String) {
-        if let Some(b) = self
-            .inner
-            .write()
-            .expect("store poisoned")
-            .batches
-            .get_mut(batch_id)
-        {
-            b.settle_txid = Some(txid);
+    pub fn health(&self) -> Health {
+        self.read(Ledger::health)
+    }
+
+    pub async fn changed(&self) {
+        self.changed.notified().await
+    }
+}
+
+impl Inner {
+    fn commit(&mut self, event: Event) {
+        if let Err(e) = self.journal.append(&event) {
+            tracing::error!(error = %e, "journal append failed; the state directory is unusable");
+            std::process::exit(70);
         }
+        self.ledger.apply(event, &self.retry);
     }
+}
 
-    /// Record the settle txid on a return record (denormalized for the wallet).
-    pub fn set_return_settle_txid(&self, id: &str, txid: String) {
-        if let Some(r) = self
-            .inner
-            .write()
-            .expect("store poisoned")
-            .by_id
-            .get_mut(id)
-        {
-            r.settle_txid = Some(txid);
+impl BatchBundle {
+    pub fn proven(
+        batch_id: String,
+        proof: &ProofBundle,
+        leaves: &[ReturnLeaf],
+        lock_refs: &[SourceLockRef],
+    ) -> Self {
+        Self {
+            batch_id,
+            mode: proof.mode.clone(),
+            vkey: proof.vkey_hash.clone(),
+            public_values: format!("0x{}", hex::encode(&proof.public_values)),
+            proof_bytes: format!("0x{}", hex::encode(&proof.proof_bytes)),
+            settle_txid: None,
+            leaves: leaves.iter().copied().map(LeafHex::from).collect(),
+            lock_refs: lock_refs.iter().copied().map(LockRefHex::from).collect(),
         }
-    }
-
-    pub fn queued(&self) -> Vec<ReturnRecord> {
-        self.inner
-            .read()
-            .expect("store poisoned")
-            .by_id
-            .values()
-            .filter(|r| r.status == ReturnStatus::Queued)
-            .cloned()
-            .collect()
-    }
-
-    pub fn update_status(
-        &self,
-        id: &str,
-        status: ReturnStatus,
-        batch_id: Option<String>,
-        failure: Option<ReturnFailure>,
-    ) -> Result<ReturnRecord, StoreError> {
-        let mut guard = self.inner.write().expect("store poisoned");
-        let record = guard
-            .by_id
-            .get_mut(id)
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        if batch_id.is_some() {
-            record.batch_id = batch_id;
-        }
-        record.failure = failure;
-        record.transition(status, now_ms());
-        Ok(record.clone())
     }
 }
 
@@ -291,7 +328,6 @@ impl ReturnRecord {
         nullifier: [u8; 32],
         public_values_digest: [u8; 32],
         public_values: PublicValues,
-        wire_input: Vec<u8>,
         now: u128,
     ) -> Self {
         Self {
@@ -324,7 +360,6 @@ impl ReturnRecord {
             total_amount: hex32(&public_values.total_amount),
             public_values_digest: hex32(&public_values_digest),
             public_values: PublicValuesHex::from(public_values),
-            wire_input,
             attempts: 0,
             not_before_ms: None,
             queue_position: None,
@@ -468,11 +503,4 @@ fn event_code(status: &ReturnStatus) -> &'static str {
         ReturnStatus::Settled => "settled",
         ReturnStatus::Failed => "failed",
     }
-}
-
-pub(crate) fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
-        .as_millis()
 }
