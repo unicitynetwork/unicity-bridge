@@ -90,6 +90,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
 | `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, unset | settlement, event scan and transfer pre-simulation hooks; replaceable by any program with the same stdin/stdout contract |
 | `BRIDGE_RETURN_BIND` | `0.0.0.0:8787` | listen address |
+| `SP1_WORKER_NUM_*` | `1` | single-worker proving; the only setting that fits a 16 GB host (`docs/dev-plan/03-status.md`) |
 
 ## 5. Running the service
 
@@ -181,7 +182,8 @@ Worth alerting on:
 | Return `failed` with a non-recoverable message | the burn will never be accepted (wrong config, malformed reason) | the funds stay on Unicity as a burned token; investigate before telling the user |
 | Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
 | Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
-| Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
+| Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
+| Service restarts every few minutes while proving (`docker inspect` shows `OOMKilled`) | the proof needs more memory than the container has | keep the single-worker `SP1_WORKER_NUM_*=1` settings from `docker-compose.yml` and give the container 16 GB; each interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
 | A recipient's transfer would revert and take the batch with it | push payments, a hostile or blocked recipient | with `BRIDGE_RETURN_SIMULATE_CMD` set the service excludes the leaf before proving and fails that return recoverably; without it the batch reverts on chain and is retried with the same members; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |

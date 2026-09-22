@@ -52,7 +52,7 @@ impl Ledger {
                 at_ms,
             } => self.fail(&id, kind, &message, at_ms, retry),
             Event::BatchRebased { id, at_ms } => self.rebase(&id, at_ms),
-            Event::BatchInterrupted { id, at_ms } => self.interrupt(&id, at_ms),
+            Event::BatchInterrupted { id, at_ms } => self.interrupt(&id, at_ms, retry),
             Event::ReturnExcluded { id, reason, at_ms } => self.exclude(&id, reason, at_ms, retry),
         }
     }
@@ -293,7 +293,7 @@ impl Ledger {
         }
     }
 
-    fn interrupt(&mut self, id: &str, at_ms: u128) {
+    fn interrupt(&mut self, id: &str, at_ms: u128, retry: &RetryPolicy) {
         let Some(batch) = self.batches.get_mut(id) else {
             tracing::warn!(
                 batch_id = id,
@@ -304,11 +304,7 @@ impl Ledger {
         batch.status = BatchStatus::Interrupted;
         for entry in self.members_of(id) {
             if entry.record.status == ReturnStatus::Proving {
-                entry.record.transition_with(
-                    ReturnStatus::Queued,
-                    at_ms,
-                    "Proof interrupted by a service restart; re-queued",
-                );
+                schedule_after_interruption(&mut entry.record, at_ms, retry);
             }
         }
     }
@@ -350,6 +346,33 @@ impl Ledger {
             .values_mut()
             .filter(move |r| ids.contains(&r.burn.id) && r.in_batch(&batch_id))
     }
+}
+
+fn schedule_after_interruption(record: &mut ReturnRecord, at_ms: u128, retry: &RetryPolicy) {
+    record.attempts += 1;
+    if retry.parked(record.attempts) {
+        record.not_before_ms = None;
+        record.failure = Some(ReturnFailure::terminal(
+            ErrorKind::ProvingFailed,
+            format!(
+                "proof interrupted by a service restart; parked after {} attempts, needs operator attention",
+                record.attempts
+            ),
+        ));
+        record.transition(ReturnStatus::Failed, at_ms);
+        return;
+    }
+    record.not_before_ms = Some(retry.not_before(record.attempts, at_ms));
+    record.failure = None;
+    record.transition_with(
+        ReturnStatus::Queued,
+        at_ms,
+        &format!(
+            "Proof interrupted by a service restart; retry {} of {} scheduled",
+            record.attempts + 1,
+            retry.max_attempts
+        ),
+    );
 }
 
 fn schedule_retry(
@@ -719,25 +742,44 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_requeues_proving_members_without_attempt() {
+    fn interrupted_requeues_with_backoff_and_parks_after_max_attempts() {
         let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
-        let batch_id = formed(&mut ledger, &["a"], 300);
+        let first = formed(&mut ledger, &["a"], 300);
         ledger.apply(
             Event::BatchInterrupted {
-                id: batch_id.clone(),
+                id: first.clone(),
                 at_ms: 500,
             },
             &retry(),
         );
         let record = ledger.record("a").unwrap();
         assert_eq!(record.status, ReturnStatus::Queued);
-        assert_eq!(record.attempts, 0);
+        assert_eq!(record.attempts, 1);
+        assert_eq!(record.not_before_ms, Some(500 + MINUTE));
+        assert_eq!(record.failure, None);
+        assert!(record.message.contains("retry 2 of 2"));
         assert_eq!(record.queue_position, Some(1));
         assert_eq!(
-            ledger.batch(&batch_id).unwrap().status,
+            ledger.batch(&first).unwrap().status,
             BatchStatus::Interrupted
         );
         assert!(ledger.active_batch().is_none());
+
+        let second = formed(&mut ledger, &["a"], 70_000);
+        ledger.apply(
+            Event::BatchInterrupted {
+                id: second,
+                at_ms: 71_000,
+            },
+            &retry(),
+        );
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Failed);
+        assert_eq!(record.attempts, 2);
+        let failure = record.failure.unwrap();
+        assert!(!failure.recoverable);
+        assert!(failure.message.contains("interrupted"));
+        assert!(ledger.pending().is_empty());
     }
 
     #[test]

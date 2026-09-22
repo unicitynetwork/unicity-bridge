@@ -216,8 +216,10 @@ Rust agreement on the burned token).
 ## Ops & disposability (§B7)
 
 A restart replays `journal.jsonl` from `BRIDGE_RETURN_STATE_DIR`: queued burns
-stay queued, a batch that was proving is re-formed, a proven batch is settled or
-resubmitted after a chain check, scheduled retries keep their schedule. The
+stay queued, a batch that was proving is re-formed after the retry backoff (an
+interruption counts as an attempt, so a service that dies on every proof parks
+the return instead of looping), a proven batch is settled or resubmitted after
+a chain check, scheduled retries keep their schedule. The
 journal is one JSON object per line (`jq -c 'keys[0]' journal.jsonl` lists the
 event types) and is compacted to one snapshot line at start. The **burned blob**
 is still the claim, and the wallet still resubmits it on a 404. Monitor:

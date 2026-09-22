@@ -519,7 +519,10 @@ async fn restart_requeues_queued_and_interrupted() {
 
     let store = reopen(dir.path(), retry);
     assert_eq!(store.get("a").unwrap().status, ReturnStatus::Queued);
+    assert_eq!(store.get("a").unwrap().attempts, 1);
+    assert!(store.get("a").unwrap().not_before_ms.is_some());
     assert_eq!(store.get("b").unwrap().status, ReturnStatus::Queued);
+    assert_eq!(store.get("b").unwrap().attempts, 0);
     assert_eq!(
         store.read(|l| l.batch(&interrupted).unwrap().status),
         BatchStatus::Interrupted
@@ -533,11 +536,12 @@ async fn restart_requeues_queued_and_interrupted() {
         ScriptedSettler::settling("0xfeed"),
         FakeChainLog::new(),
     );
-    h.reach("a", ReturnStatus::Settled).await;
-    assert_eq!(h.status("b"), ReturnStatus::Settled);
-    assert_eq!(h.record("a").batch_id, h.record("b").batch_id);
-    assert_eq!(h.record("a").attempts, 0);
-    assert_eq!(h.prover.calls(), 1);
+    h.reach("b", ReturnStatus::Settled).await;
+    assert_eq!(h.status("a"), ReturnStatus::Queued);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(120))
+        .await;
+    assert_ne!(h.record("a").batch_id, h.record("b").batch_id);
+    assert_eq!(h.prover.calls(), 2);
 }
 
 #[tokio::test(start_paused = true)]
