@@ -10,6 +10,8 @@ services:
       - "8787:8787"
     environment:
       BRIDGE_RETURN_PROVE_MODE: ${BRIDGE_RETURN_PROVE_MODE:-precheck_only}
+      BRIDGE_RETURN_MAX_BATCH_SIZE: ${BRIDGE_RETURN_MAX_BATCH_SIZE:-8}
+      BRIDGE_RETURN_IDLE_WAIT_SECS: ${BRIDGE_RETURN_IDLE_WAIT_SECS:-0}
       BRIDGE_DEPLOYMENT_CONFIG: /app/deployments/nile/${BRIDGE_DEPLOYMENT:-nile-usdt-v2.json}
       UNICITY_GATEWAY: ${UNICITY_GATEWAY:-https://gateway.testnet2.unicity.network}
       TRON_SK: ${TRON_SK:-}

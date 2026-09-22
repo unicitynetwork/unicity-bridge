@@ -55,8 +55,11 @@ export interface ReturnServiceHealth {
   readonly queueDepth: number;
   /** The batch currently proving, if any. */
   readonly activeBatch?: string | null;
-  readonly batchTarget: number;
-  readonly maxWaitMs: number;
+  readonly activeBatchSize: number;
+  readonly provingSinceMs?: number | null;
+  readonly lastProofMs?: number | null;
+  readonly maxBatchSize: number;
+  readonly idleWaitMs: number;
   /** `PrecheckOnly` | `Sp1Groth16`. */
   readonly proveMode: string;
 }

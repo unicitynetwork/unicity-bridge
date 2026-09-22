@@ -67,9 +67,12 @@ blob passes `s1::precheck`, and reports `queued`.
   `failed(100)` with `{kind,message,recoverable}`. Rebase/retry appends an event
   and moves the record back to the earliest still-valid stage; the wallet should
   follow `nextPollMs` and independently watch `Released{nullifier}`.
-- **S1 extension (host):** generalize `build_certified_guest_input` from **B=1 to
-  multi-burn** (assemble several certified burns into one `GuestInput`) — the
-  load-bearing gap for live batching.
+- **S1 extension:** several burns in one `GuestInput`. Built as
+  `service/src/domain/assembler.rs`, which merges the stored single-burn inputs
+  (verification kept, roots recomputed, one accumulator transition) and refuses
+  two burns that trace to the same deposit, because the guest requires the
+  concatenated lock obligations to equal the batch's sorted refs. The host's
+  `build_certified_guest_input_batch` stays for token-level assembly.
 - Fetch inclusion proofs via `s1::aggregator` (`http` feature, already verified live).
 
 **Tests:** accept B=1/split/B=2 certified inputs; reject tampered public-values /
@@ -85,15 +88,19 @@ multi-burn certified `GuestInput` assembles + prechecks.
 - `s2::rebuild` → **verify rebuilt root == on-chain `spentRoot`** (SYNCED gate;
   refuse to build on divergence). `s2::next_batch` → order-coupled witnesses +
   `spent_root_old/new`.
-- **Queue (`queue.rs`):** a `tokio` task draining the precheck-passed set into
-  batches. **Single-flight** (one batch proving at a time — no parallel proving).
-  Close a batch when `len == batch_target` **or** `max_wait` elapses (demo default
-  **60 s**). Rebase on `"stale root"`.
+- **Orchestrator (`orchestrator.rs`):** one task over a journal-backed ledger
+  (`domain/ledger.rs`). **Single-flight**: when the prover is free the policy
+  (`domain/policy.rs`) forms the next batch from everything pending, oldest
+  first, one trust base, disjoint lock nonces, up to `max_batch_size`; an
+  optional idle window replaces the count-or-timeout close. `"stale root"`
+  re-proves the same batch, bounded by `max_rebases`; batch-wide failures retry
+  with backoff and park after `max_attempts`; a restart replays the journal.
 
 **Tests:** multi-batch rebuild matches chain (≥2-element trees); next-batch
 witnesses fold to `spent_root_new`; tampered/out-of-order/double-spend logs
-rejected (mirror `s2_rebuild.rs`); queue closes on count and on timeout; rebase
-re-forms a batch after an external `spentRoot` advance.
+rejected (mirror `s2_rebuild.rs`); policy, ledger and orchestrator under paused
+time with a scripted prover, settler and chain log, including the restart rows;
+rebase after an external `spentRoot` advance.
 **Exit:** from queued burns, the service forms a batch on the live vault's current
 root and produces a prove-ready `GuestInput`; `/accumulator` reports SYNCED.
 
@@ -121,7 +128,10 @@ service (matches a hand-run `sp1-groth16` for the same wire).
 - `tron/tx.rs`: build the `fulfillBatch` tx (lock-seed + leaves + lock-refs +
   proof), **dry-run via `triggerconstantcontract`** (drop reverting recipients in
   push mode; pull mode credits `owed[]`), **k256-sign**, broadcast, poll the
-  receipt + `Released` events. Status `submitted → settled`.
+  receipt + `Released` events. Status `submitted → settled`. The dry-run is
+  delivered ahead of the Rust submitter as `relayer.js simulate --stdin`, a
+  per-leaf `transfer` constant call behind the service's `Settler::simulate`
+  port (`BRIDGE_RETURN_SIMULATE_CMD`).
 - Rebase on `"stale root"` (re-scan → rebuild → re-prove).
 - Remove the Node `relayer.js` from the live path (keep `relayer-lib.js` only as a
   grouping oracle in tests).
