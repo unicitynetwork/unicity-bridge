@@ -162,8 +162,9 @@ Worth alerting on:
 | Symptom | Cause | What to do |
 |---|---|---|
 | Wallet shows a return as `burned` that never becomes `queued` | service unreachable | fix the service; the wallet resubmits on its own |
-| Service refuses a burn with a config-hash mismatch | the token was minted against another vault (a v1 token after the v2 redeploy) | nothing to do here; only that vault's program can release it |
+| Service refuses a burn with a config-hash mismatch | the token was minted against another vault (a v1 token after the v2 redeploy) | nothing to do here; only that vault's program can release it. The wallet does not offer such tokens for a burn; a blob that reaches the service anyway is refused as final |
 | Return `failed` with a non-recoverable message | the burn will never be accepted (wrong config, malformed reason) | the funds stay on Unicity as a burned token; investigate before telling the user |
+| Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the wallet resubmits the blob after a minute, or at once from the row's retry button, and the service queues it again; fix the cause (gas, memory, node) meanwhile |
 | Service restarted, wallet's `returnId` unknown | the service holds nothing durable | the wallet detects the 404 and resubmits the blob |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service rebases and proves again; costs another proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |

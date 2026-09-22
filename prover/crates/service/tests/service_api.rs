@@ -6,13 +6,22 @@ use axum::{
 };
 use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
 use bridge_return_service::{
-    config::ServiceConfig, prover::Prover, queue, router, sequencer::ChainEvents,
-    store::ReturnStore, submitter::Submitter, AppState,
+    config::ServiceConfig,
+    prover::Prover,
+    queue, router,
+    sequencer::ChainEvents,
+    store::{ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
+    submitter::Submitter,
+    AppState,
 };
 use serde_json::Value;
 use tower::ServiceExt;
 
 fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
+    app_with_store(max_wait, batch_target).0
+}
+
+fn app_with_store(max_wait: Duration, batch_target: usize) -> (axum::Router, ReturnStore) {
     let config = ServiceConfig {
         max_wait,
         batch_target,
@@ -27,13 +36,14 @@ fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
         config.batch_target,
         config.max_wait,
     );
-    router(AppState {
+    let app = router(AppState {
         config,
-        store,
+        store: store.clone(),
         queue,
         intake: None,
         chain_events: ChainEvents::none(),
-    })
+    });
+    (app, store)
 }
 
 #[tokio::test]
@@ -122,7 +132,32 @@ async fn rejects_truncated_wire() {
         .unwrap();
     let error: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(error["error"]["code"], "precheck_rejected");
-    assert_eq!(error["error"]["recoverable"], true);
+    assert_eq!(error["error"]["recoverable"], false);
+}
+
+#[tokio::test]
+async fn resubmitting_a_recoverably_failed_return_requeues_it() {
+    let (app, store) = app_with_store(Duration::from_millis(20), 1);
+    let input = build_b1_direct_bridge_fixture().input;
+    let id = post_wire(&app, input.clone()).await;
+    wait_status(&app, &id, "proven").await;
+    store
+        .update_status(
+            &id,
+            ReturnStatus::Failed,
+            None,
+            Some(ReturnFailure::recoverable(
+                ErrorKind::SubmissionFailed,
+                "out of gas",
+            )),
+        )
+        .unwrap();
+
+    let again = post_return(&app, input).await;
+    assert_eq!(again["returnId"].as_str().unwrap(), id);
+    assert_eq!(again["duplicate"], false);
+    assert_eq!(again["status"], "queued");
+    wait_status(&app, &id, "proven").await;
 }
 
 #[tokio::test]
@@ -189,6 +224,13 @@ async fn nullifier_lookup_and_unknown_batch_404() {
 }
 
 async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -> String {
+    post_return(app, input).await["returnId"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn post_return(app: &axum::Router, input: bridge_return_guest::GuestInput) -> Value {
     let wire = bridge_return_guest::wire::encode_guest_input(&input);
     let body = serde_json::json!({ "wireInput": format!("0x{}", hex::encode(wire)) }).to_string();
     let response = app
@@ -205,8 +247,7 @@ async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let created: Value = serde_json::from_slice(&bytes).unwrap();
-    created["returnId"].as_str().unwrap().to_string()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 async fn assert_status(app: &axum::Router, id: &str, status: &str) {

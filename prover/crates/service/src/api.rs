@@ -148,7 +148,7 @@ async fn create_return(
         report.public_values,
         wire_input,
     );
-    let (record, inserted) = state.store.insert_or_get(record);
+    let (record, inserted) = state.store.insert_or_requeue(record);
     if inserted {
         state.queue.enqueue(record.return_id.clone()).await?;
         tracing::info!(
@@ -232,10 +232,7 @@ impl IntoResponse for ApiError {
         };
         let recoverable = matches!(
             &self,
-            ApiError::PrecheckRejected(_)
-                | ApiError::Queue(_)
-                | ApiError::Host(_)
-                | ApiError::ChainUnsynced(_)
+            ApiError::Queue(_) | ApiError::Host(_) | ApiError::ChainUnsynced(_)
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves

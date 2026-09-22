@@ -166,12 +166,16 @@ pub enum StoreError {
 }
 
 impl ReturnStore {
-    pub fn insert_or_get(&self, record: ReturnRecord) -> (ReturnRecord, bool) {
+    pub fn insert_or_requeue(&self, record: ReturnRecord) -> (ReturnRecord, bool) {
         let mut guard = self.inner.write().expect("store poisoned");
-        if let Some(existing_id) = guard.by_nullifier.get(&record.nullifier) {
-            if let Some(existing) = guard.by_id.get(existing_id) {
-                return (existing.clone(), false);
-            }
+        let known = guard
+            .by_nullifier
+            .get(&record.nullifier)
+            .and_then(|id| guard.by_id.get(id))
+            .filter(|existing| !existing.failed_recoverably())
+            .cloned();
+        if let Some(existing) = known {
+            return (existing, false);
         }
         guard
             .by_nullifier
@@ -326,6 +330,16 @@ impl ReturnRecord {
             created_at_ms: now,
             updated_at_ms: now,
         }
+    }
+}
+
+impl ReturnRecord {
+    pub fn failed_recoverably(&self) -> bool {
+        self.status == ReturnStatus::Failed
+            && self
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.recoverable)
     }
 }
 
