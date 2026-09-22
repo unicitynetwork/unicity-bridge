@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod clock;
 pub mod config;
+pub mod domain;
 pub mod prover;
 pub mod queue;
 pub mod sequencer;

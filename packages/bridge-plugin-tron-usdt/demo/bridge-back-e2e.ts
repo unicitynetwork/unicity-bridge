@@ -154,6 +154,8 @@ async function main(): Promise<void> {
 
   // Bridge plugin (minter self-trusts its lock: confirmations 0) + mock Nile RPC
   // returning a Lock event that matches this exact token + recipient + amount.
+  // The mock Lock event must carry the plugin's normalized EVM-form lock
+  // address, so resolve the config first and build the log from it.
   const pluginConfig = {
     chainId: TRON_NILE_CHAIN_ID,
     lockContract: LOCK_TRON,

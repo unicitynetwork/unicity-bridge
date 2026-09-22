@@ -147,6 +147,7 @@ async fn create_return(
         report.public_values_digest,
         report.public_values,
         wire_input,
+        crate::store::now_ms(),
     );
     let (record, inserted) = state.store.insert_or_requeue(record);
     if inserted {

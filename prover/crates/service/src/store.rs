@@ -141,6 +141,12 @@ pub struct ReturnRecord {
     pub public_values: PublicValuesHex,
     #[serde(skip)]
     pub wire_input: Vec<u8>,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default)]
+    pub not_before_ms: Option<u128>,
+    #[serde(default)]
+    pub queue_position: Option<usize>,
     pub created_at_ms: u128,
     pub updated_at_ms: u128,
 }
@@ -270,19 +276,11 @@ impl ReturnStore {
             .by_id
             .get_mut(id)
             .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        record.status = status;
         if batch_id.is_some() {
             record.batch_id = batch_id;
         }
         record.failure = failure;
-        apply_status_defaults(record);
-        record.updated_at_ms = now_ms();
-        record.events.push(ReturnEvent {
-            at_ms: record.updated_at_ms,
-            status: record.status.clone(),
-            code: event_code(&record.status).to_string(),
-            message: record.message.clone(),
-        });
+        record.transition(status, now_ms());
         Ok(record.clone())
     }
 }
@@ -294,8 +292,8 @@ impl ReturnRecord {
         public_values_digest: [u8; 32],
         public_values: PublicValues,
         wire_input: Vec<u8>,
+        now: u128,
     ) -> Self {
-        let now = now_ms();
         Self {
             return_id,
             nullifier: hex32(&nullifier),
@@ -327,6 +325,9 @@ impl ReturnRecord {
             public_values_digest: hex32(&public_values_digest),
             public_values: PublicValuesHex::from(public_values),
             wire_input,
+            attempts: 0,
+            not_before_ms: None,
+            queue_position: None,
             created_at_ms: now,
             updated_at_ms: now,
         }
@@ -334,6 +335,26 @@ impl ReturnRecord {
 }
 
 impl ReturnRecord {
+    pub(crate) fn transition(&mut self, status: ReturnStatus, at_ms: u128) {
+        self.status = status;
+        apply_status_defaults(self);
+        self.updated_at_ms = at_ms;
+        self.events.push(ReturnEvent {
+            at_ms,
+            status: self.status.clone(),
+            code: event_code(&self.status).to_string(),
+            message: self.message.clone(),
+        });
+    }
+
+    pub(crate) fn transition_with(&mut self, status: ReturnStatus, at_ms: u128, message: &str) {
+        self.transition(status, at_ms);
+        self.message = message.to_string();
+        if let Some(event) = self.events.last_mut() {
+            event.message = message.to_string();
+        }
+    }
+
     pub fn failed_recoverably(&self) -> bool {
         self.status == ReturnStatus::Failed
             && self
@@ -349,6 +370,14 @@ impl ReturnFailure {
             kind,
             message: message.into(),
             recoverable: true,
+        }
+    }
+
+    pub fn terminal(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            recoverable: false,
         }
     }
 }
@@ -369,7 +398,7 @@ impl From<PublicValues> for PublicValuesHex {
     }
 }
 
-fn hex32(value: &[u8; 32]) -> String {
+pub(crate) fn hex32(value: &[u8; 32]) -> String {
     format!("0x{}", hex::encode(value))
 }
 
@@ -436,7 +465,7 @@ fn event_code(status: &ReturnStatus) -> &'static str {
     }
 }
 
-fn now_ms() -> u128 {
+pub(crate) fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
