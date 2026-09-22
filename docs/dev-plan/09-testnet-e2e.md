@@ -1,8 +1,7 @@
 # 09 — Testnet end-to-end plan: real USDT, current Unicity testnet, local Sphere
 
 Status: plan, 2026-09-18. Nothing here has been started. Companion to
-[`../../BRIDGING_ANALYSIS.md`](../../BRIDGING_ANALYSIS.md) (what the bridge is)
-and [`07-return-service.md`](./07-return-service.md) (the service design).
+[`07-return-service.md`](./07-return-service.md) (the service design).
 
 ## Goal
 
@@ -277,9 +276,8 @@ works in dev mode; it changes packaging, not behaviour.
 Branch: `feat/sdk3-port`, continued.
 
 1. Port the prover workspace to Rust SDK `v3.0.1`; adopt the new
-   inclusion-proof wire format. Fix the empty-burns early return
-   (`BRIDGING_ANALYSIS.md` section 9) in the same change, since the vkey
-   changes anyway. Regenerate vectors, `cargo test`, SP1 execute on the Phase 1
+   inclusion-proof wire format. Fix the guest's empty-burns early return in
+   the same change, since the vkey changes anyway. Regenerate vectors, `cargo test`, SP1 execute on the Phase 1
    blob.
    **Step 1 status (2026-09-21): done, `2b66e9a` on `feat/sphere-plugin`** (the
    tip of the sdk3-port stack). Decisions taken with it:
