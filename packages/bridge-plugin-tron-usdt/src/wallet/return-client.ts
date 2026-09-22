@@ -45,6 +45,11 @@ export interface ReturnRecord {
   readonly settleTxid?: string;
   /** Typed failure detail for `failed`. */
   readonly failure?: ReturnFailure;
+  readonly attempts?: number;
+  readonly notBeforeMs?: number | null;
+  readonly queuePosition?: number | null;
+  readonly createdAtMs?: number;
+  readonly updatedAtMs?: number;
   /** True only on the `POST /returns` response when the nullifier was already known. */
   readonly duplicate?: boolean;
 }
@@ -58,6 +63,7 @@ export interface ReturnServiceHealth {
   readonly activeBatchSize: number;
   readonly provingSinceMs?: number | null;
   readonly lastProofMs?: number | null;
+  readonly averageProofMs?: number | null;
   readonly maxBatchSize: number;
   readonly idleWaitMs: number;
   /** `PrecheckOnly` | `Sp1Groth16`. */
