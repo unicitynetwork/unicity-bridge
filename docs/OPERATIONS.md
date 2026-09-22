@@ -237,6 +237,11 @@ deployment file before starting it against a live vault.
 ## 10. Known gaps before real value
 
 - The admin key has no time-lock (§3).
+- The SP1 Groth16 verification does not finish within Tron's 80 ms
+  per-transaction CPU limit. Mainnet and Shasta run 80 ms, and Nile matched
+  them on 2026-09-08 (it was 160 ms when the July settlement succeeded).
+  Until the verification is made faster or the limit raised, no batch settles
+  on Tron; every attempt is charged the fee limit.
 - The journal is one file on one volume, with no backup and no pruning: done
   returns keep their inputs in it until a pruning step exists.
 - Transfer pre-simulation (`relayer.js simulate`) has not been checked against
