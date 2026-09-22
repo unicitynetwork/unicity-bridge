@@ -102,7 +102,10 @@ curl localhost:8787/health
 
 Start in `precheck_only`. In that mode every burn is fully verified against
 the trust base and the deployment, queued and batched, and nothing is proven.
-Switch to `sp1_groth16` once the pipeline is confirmed. The first proof
+Switch to `sp1_groth16` once the pipeline is confirmed, and empty
+`BRIDGE_RETURN_STATE_DIR` when you do: batches proven in precheck mode carry
+no proof and would otherwise sit at `proven` for good (the wallets re-post
+their burns on the resulting 404). The first proof
 downloads the Groth16 circuit and proving key, about 5.9 GB, into the
 `sp1-artifacts` volume; keep the volume across restarts or every restart pays
 the download. Never set `SP1_CIRCUIT_MODE=dev`: it selects a private artifact

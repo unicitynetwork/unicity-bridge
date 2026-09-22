@@ -118,11 +118,12 @@ impl Ledger {
             .filter(|b| b.spent_root_old.as_deref() == Some(spent_root_old))
             .filter(|b| {
                 b.bundle.as_ref().is_some_and(|bundle| {
-                    bundle
-                        .leaves
-                        .iter()
-                        .map(|l| l.nullifier.to_lowercase())
-                        .eq(wanted.iter().cloned())
+                    bundle.has_proof()
+                        && bundle
+                            .leaves
+                            .iter()
+                            .map(|l| l.nullifier.to_lowercase())
+                            .eq(wanted.iter().cloned())
                 })
             })
             .max_by_key(|b| b.proven_at_ms)
@@ -882,6 +883,27 @@ mod tests {
             &retry(),
         );
         assert!(ledger.proof_for(&wanted, &hex32(&[0; 32])).is_none());
+    }
+
+    #[test]
+    fn proof_for_ignores_a_bundle_without_proof_bytes() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        let batch_id = formed(&mut ledger, &["a"], 300);
+        let mut precheck = bundle(&batch_id, &[[0xA; 32]]);
+        precheck.proof_bytes = "0x".to_string();
+        ledger.apply(
+            Event::BatchProven {
+                id: batch_id.clone(),
+                bundle: precheck,
+                spent_root_old: hex32(&[0; 32]),
+                at_ms: 400,
+            },
+            &retry(),
+        );
+        failed(&mut ledger, &batch_id, 500);
+        assert!(ledger
+            .proof_for(&[hex32(&[0xA; 32])], &hex32(&[0; 32]))
+            .is_none());
     }
 
     #[test]

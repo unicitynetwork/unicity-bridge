@@ -303,6 +303,10 @@ impl Inner {
 }
 
 impl BatchBundle {
+    pub fn has_proof(&self) -> bool {
+        self.proof_bytes != "0x"
+    }
+
     pub fn proven(
         batch_id: String,
         proof: &ProofBundle,
