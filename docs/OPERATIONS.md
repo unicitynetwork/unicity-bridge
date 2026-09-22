@@ -24,10 +24,14 @@ prover is untrusted: anyone may run one, and a wrong proof fails on chain.
 
 ## 2. What to provision
 
-- **Service host.** Proving is single-worker and needs about 16 GB of memory
-  for the duration of one proof (about an hour of CPU on a 12-core machine;
-  see `docs/dev-plan/04-deployment.md` for the measured runs). Precheck alone
-  needs a fraction of that. 8 GB of disk for the artifacts and bundles.
+- **Service host.** Proving is single-worker and its memory grows with the
+  burn's execution length. The 921k-cycle fixture peaked at about 14 GB
+  (`docs/dev-plan/04-deployment.md`); a live 10 USDT burn measured at
+  3,393,715 cycles (`bridge-return-host sp1-execute`) exceeded 14.6 GB of RAM
+  plus 4 GB of swap inside Docker on a 16 GB Mac and was killed every time.
+  Plan 32 GB or more for live tokens, and expect a proof to take longer than
+  the fixture's hour. Precheck alone needs a fraction of that. 8 GB of disk
+  for the artifacts and bundles.
 - **Network.** Outbound HTTPS to the Tron node, the Unicity gateway and the
   artifact bucket. Inbound HTTPS from wallets on the service port (8787 in the
   container). The service speaks plain HTTP; put TLS in front of it.
