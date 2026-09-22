@@ -1,3 +1,4 @@
+pub mod assembler;
 pub mod batch;
 pub mod burn;
 pub mod policy;
