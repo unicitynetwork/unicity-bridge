@@ -22,6 +22,7 @@ function payments(overrides: Partial<BridgePayments> = {}): BridgePayments & { l
       log.push(`burn:${tokenId}`);
       return { success: true, burnId: 'burn-1', tokenId, burnedToken: new Uint8Array([9, 9, 9]) };
     },
+    tokenJustification: async () => null,
     pendingBurns: async () => [],
     acknowledgeBurn: async (id) => {
       log.push(`ack:${id}`);

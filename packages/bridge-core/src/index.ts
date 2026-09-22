@@ -212,6 +212,7 @@ export interface BridgePayments {
     readonly mintJustificationVerifiers?: readonly IMintJustificationVerifier[];
   }): Promise<WalletMintResult>;
   burn(request: { readonly tokenId: string; readonly reasonBytes: Uint8Array }): Promise<WalletBurnResult>;
+  tokenJustification(tokenId: string): Promise<Uint8Array | null>;
   pendingBurns(): Promise<readonly WalletPendingBurn[]>;
   acknowledgeBurn(burnId: string): Promise<void>;
 }

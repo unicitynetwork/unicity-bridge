@@ -5,8 +5,15 @@ import { mintBridgedToken, type BridgePayments } from '@unicitylabs/bridge-core'
 import { VerificationStatus } from '@unicitylabs/state-transition-sdk/lib/verification/VerificationStatus.js';
 
 import { MockTronRpc } from '../src/cli/scenario.js';
-import { createTronUsdtBridgePlugin, decodeBridgePaymentData, toHex, TRON_USDT_LOCK_JUSTIFICATION_TAG } from '../src/index.js';
-import { bridgeTokenPlugin, createTronSourceAdapter, loadBridges, NILE_USDT_BRIDGE } from '../src/wallet/index.js';
+import {
+  createTronUsdtBridgePlugin,
+  decodeBridgePaymentData,
+  toHex,
+  TRON_NILE_CHAIN_ID,
+  TRON_USDT_LOCK_JUSTIFICATION_TAG,
+  TronUsdtLockJustification,
+} from '../src/index.js';
+import { bridgeTokenPlugin, createTronSourceAdapter, loadBridges, mintedAgainst, NILE_USDT_BRIDGE } from '../src/wallet/index.js';
 import { buildScenario, CONFIG } from './helpers.js';
 
 const deps = () => ({ rpc: new MockTronRpc(null, 0n) });
@@ -74,6 +81,7 @@ test('mintBridgedToken maps the adapter request onto the wallet custom mint 1:1'
     burn: async () => {
       throw new Error('not used');
     },
+    tokenJustification: async () => null,
     pendingBurns: async () => [],
     acknowledgeBurn: async () => {},
   };
@@ -91,4 +99,25 @@ test('mintBridgedToken maps the adapter request onto the wallet custom mint 1:1'
       mintJustificationVerifiers: req.mintJustificationVerifiers,
     },
   ]);
+});
+
+test('mintedAgainst: only a token whose lock names this vault is returnable here', () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  const cfg = loaded!.plugin.resolvedConfig;
+  const lockedBy = (lockContractHex: string, chainId = cfg.chainId): Uint8Array =>
+    new TronUsdtLockJustification({
+      chainId,
+      lockContract: Buffer.from(lockContractHex, 'hex'),
+      assetContract: Buffer.from(cfg.assetContractHex, 'hex'),
+      txid: new Uint8Array(32),
+      logIndex: 0,
+      amount: 1_000_000n,
+      nonce: 1n,
+    }).toCBOR();
+
+  assert.equal(mintedAgainst(loaded!, lockedBy(cfg.lockContractHex)), true);
+  assert.equal(mintedAgainst(loaded!, lockedBy('ab'.repeat(20))), false, 'a superseded vault');
+  assert.equal(mintedAgainst(loaded!, lockedBy(cfg.lockContractHex, TRON_NILE_CHAIN_ID + 1)), false, 'another chain');
+  assert.equal(mintedAgainst(loaded!, new Uint8Array([1, 2, 3])), false, 'not a lock justification at all');
+  assert.equal(mintedAgainst(loaded!, null), false, 'minted without a reason');
 });
