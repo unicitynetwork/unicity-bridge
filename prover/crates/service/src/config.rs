@@ -86,7 +86,9 @@ impl ServiceConfig {
             }
         }
         if let Some(v) = env_opt("BRIDGE_CONFIG_HASH") {
-            cfg.config_hash = Some(hex32(&v).ok_or(ConfigError::Invalid("BRIDGE_CONFIG_HASH"))?);
+            cfg.config_hash = Some(
+                crate::store::parse_hex32(&v).ok_or(ConfigError::Invalid("BRIDGE_CONFIG_HASH"))?,
+            );
         }
         if env_opt("BRIDGE_RETURN_PROVE_MODE").as_deref() == Some("sp1_groth16") {
             cfg.prove_mode = ProveMode::Sp1Groth16;
@@ -103,10 +105,4 @@ pub enum ConfigError {
 
 fn env_opt(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.is_empty())
-}
-
-fn hex32(input: &str) -> Option<[u8; 32]> {
-    let raw = input.strip_prefix("0x").unwrap_or(input);
-    let bytes = hex::decode(raw).ok()?;
-    bytes.try_into().ok()
 }

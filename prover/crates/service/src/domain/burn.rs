@@ -58,7 +58,7 @@ impl Return {
     }
 
     pub fn is_due(&self, now_ms: u128) -> bool {
-        self.record.not_before_ms.is_none_or(|t| now_ms >= t)
+        self.record.not_before_ms.map_or(true, |t| now_ms >= t)
     }
 
     pub fn in_batch(&self, batch_id: &str) -> bool {

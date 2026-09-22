@@ -402,6 +402,11 @@ pub(crate) fn hex32(value: &[u8; 32]) -> String {
     format!("0x{}", hex::encode(value))
 }
 
+pub(crate) fn parse_hex32(input: &str) -> Option<[u8; 32]> {
+    let raw = input.strip_prefix("0x").unwrap_or(input);
+    hex::decode(raw).ok()?.try_into().ok()
+}
+
 fn apply_status_defaults(record: &mut ReturnRecord) {
     match record.status {
         ReturnStatus::Queued => {
