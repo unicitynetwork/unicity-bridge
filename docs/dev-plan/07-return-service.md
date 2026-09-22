@@ -25,10 +25,16 @@ the depth-256 SMT accumulator, the certified-mode guest relation, `relayer-lib.j
 service/                       # the bridge-return-service binary (new)
   src/main.rs                  # config, axum router, spawn workers
   src/api.rs                   # POST /returns, GET /returns/:id, /accumulator, /health, /batches/:id
-  src/queue.rs                 # the single-flight batch queue + max-wait window (decision #5)
+  src/orchestrator.rs          # single-flight loop: form → assemble → prove → settle, rebase, retry
+  src/domain/policy.rs         # which pending burns form the next batch (decision #5, revised)
+  src/domain/assembler.rs      # N stored single-burn inputs → one GuestInput on the live root
+  src/domain/ledger.rs         # returns, batches and the pending order as a fold over events
+  src/domain/{burn,batch,retry,event}.rs
+  src/journal.rs               # append-only json lines with snapshot compaction
+  src/ports.rs                 # ProofBackend, Settler, ChainLog traits; fakes live in tests/support
   src/sequencer.rs             # scan → s2::rebuild (SYNCED gate) → s2::next_batch
   src/prover.rs               # wraps sp1::real_groth16 + export (sequential)
-  src/store.rs                 # status store (public-only, rebuildable)
+  src/store.rs                 # ledger handle (journal-backed) + the wallet-facing record types
 tron/                          # all-Rust Tron submitter (new; retires relayer.js)
   src/client.rs                # TronGrid HTTP: trigger*contract, broadcast, events, receipts
   src/tx.rs                    # build + k256-sign fulfillBatch; dry-run pre-simulation
@@ -43,7 +49,7 @@ host/     (extend)             # multi-burn certified GuestInput; best-effort an
 ### R0 — Service skeleton
 
 - `service` crate: config (gateway/TronGrid URLs, vault, `configHash`, trust-base
-  path, `max_wait`, `batch_target`, gas key), `axum` router, `tokio` workers, an
+  path, `idle_wait`, `max_batch_size`, gas key), `axum` router, `tokio` workers, an
   in-memory `store` (status by `returnId`/`nullifier`).
 - `GET /health`, `GET /accumulator` (calls the scan+rebuild path), `POST /returns`
   (precheck-stub → enqueue), `GET /returns/:id`.
