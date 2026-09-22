@@ -260,8 +260,25 @@ async fn submit_batch(
             tracing::info!(return_id = %id, batch_id = %batch_id, txid = %txid, "batch settled on-chain");
             store.set_batch_settle_txid(batch_id, txid.clone());
             store.set_return_settle_txid(id, txid);
-            let _ = store.update_status(id, ReturnStatus::Submitted, Some(batch_id.to_string()), None);
-            let _ = store.update_status(id, ReturnStatus::Settled, Some(batch_id.to_string()), None);
+            let _ = store.update_status(
+                id,
+                ReturnStatus::Submitted,
+                Some(batch_id.to_string()),
+                None,
+            );
+            let _ =
+                store.update_status(id, ReturnStatus::Settled, Some(batch_id.to_string()), None);
+        }
+        SubmitOutcome::StaleRoot => {
+            let _ = store.update_status(
+                id,
+                ReturnStatus::Failed,
+                Some(batch_id.to_string()),
+                Some(ReturnFailure::recoverable(
+                    ErrorKind::SubmissionFailed,
+                    "vault: stale root",
+                )),
+            );
         }
         SubmitOutcome::Failed { message } => {
             tracing::error!(
@@ -274,7 +291,10 @@ async fn submit_batch(
                 id,
                 ReturnStatus::Failed,
                 Some(batch_id.to_string()),
-                Some(ReturnFailure::recoverable(ErrorKind::SubmissionFailed, message)),
+                Some(ReturnFailure::recoverable(
+                    ErrorKind::SubmissionFailed,
+                    message,
+                )),
             );
         }
     }

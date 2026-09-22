@@ -5,6 +5,7 @@ pub mod clock;
 pub mod config;
 pub mod domain;
 pub mod journal;
+pub mod ports;
 pub mod prover;
 pub mod queue;
 pub mod sequencer;
