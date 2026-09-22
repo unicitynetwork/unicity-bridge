@@ -124,7 +124,7 @@ relayers) and rejects the wallet `{tokenCbor, reasonBytes}` envelope with
 | `GET` | `/returns?nullifier=` | Lookup by nullifier (wallet idempotency); `null` if unknown. |
 | `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `settleTxid`) — anyone can self-submit it. |
 | `GET` | `/accumulator` | Rebuilt `spentRoot` + SYNCED flag. |
-| `GET` | `/health` | `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
+| `GET` | `/health` | `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
 
 All responses are **camelCase JSON**.
 

@@ -155,7 +155,7 @@ the batch.
 ## 7. Monitoring
 
 `GET /health` returns `status`, `queueDepth`, `activeBatch`, `activeBatchSize`,
-`provingSinceMs`, `lastProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`,
+`provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`,
 `chainSync`. `GET /accumulator` returns `synced`, `spentRoot`, `spentCount`.
 Logs are structured (`RUST_LOG`, default info). The journal itself is readable:
 `jq -c 'keys[0]' /data/state/journal.jsonl` lists the event types.

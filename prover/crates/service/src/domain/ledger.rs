@@ -28,6 +28,7 @@ pub struct Health {
     pub active_batch_size: usize,
     pub proving_since_ms: Option<u128>,
     pub last_proof_ms: Option<u128>,
+    pub average_proof_ms: Option<u128>,
 }
 
 impl Ledger {
@@ -146,6 +147,11 @@ impl Ledger {
 
     pub fn health(&self) -> Health {
         let active = self.active_batch();
+        let durations: Vec<u128> = self
+            .batches
+            .values()
+            .filter_map(Batch::proof_duration_ms)
+            .collect();
         Health {
             queue_depth: self.pending().len(),
             active_batch: active.map(|b| b.id.clone()),
@@ -157,6 +163,8 @@ impl Ledger {
                 .filter(|b| b.proven_at_ms.is_some())
                 .max_by_key(|b| b.proven_at_ms)
                 .and_then(Batch::proof_duration_ms),
+            average_proof_ms: (!durations.is_empty())
+                .then(|| durations.iter().sum::<u128>() / durations.len() as u128),
         }
     }
 
@@ -835,23 +843,28 @@ mod tests {
     }
 
     #[test]
-    fn health_reports_depth_active_batch_and_last_proof() {
+    fn health_reports_depth_active_batch_and_proof_times() {
         let mut ledger = ledger_with(vec![
             accepted("a", 0xA, 1, 100),
             accepted("b", 0xB, 2, 200),
             accepted("c", 0xC, 3, 300),
+            accepted("d", 0xD, 4, 400),
         ]);
+        assert_eq!(ledger.health().average_proof_ms, None);
         let first = formed(&mut ledger, &["a"], 300);
-        proven(&mut ledger, &first, &[[0xA; 32]], 5_300);
-        let second = formed(&mut ledger, &["b"], 6_000);
+        proven(&mut ledger, &first, &[[0xA; 32]], 3_300);
+        let second = formed(&mut ledger, &["b"], 4_000);
+        proven(&mut ledger, &second, &[[0xB; 32]], 9_000);
+        let third = formed(&mut ledger, &["c"], 10_000);
         assert_eq!(
             ledger.health(),
             Health {
                 queue_depth: 1,
-                active_batch: Some(second),
+                active_batch: Some(third),
                 active_batch_size: 1,
-                proving_since_ms: Some(6_000),
+                proving_since_ms: Some(10_000),
                 last_proof_ms: Some(5_000),
+                average_proof_ms: Some(4_000),
             }
         );
     }
