@@ -4,10 +4,10 @@ Bridge-owned monorepo for the Unicity external-asset bridge.
 
 ```text
 protocol/                 normative byte contract + conformance vectors
-contracts/tron/            Tron/TVM source-chain contracts and tests
+contracts/tron/            the vault (Solidity, one source for Tron and Ethereum), tests,
+                           deploy and relayer scripts per chain family
 packages/bridge-core/      chain-neutral TypeScript bridge interfaces
-packages/bridge-plugin/
-                           Tron USDT verifier, wallet adapter, CLI/demo
+packages/bridge-plugin/    lock verifier, wallet adapter and CLI/demo; tron and eip155 families
 prover/                    Rust/SP1 return prover workspace
 bft-trustbase.testnet2.json Unicity testnet2 trust base
 deployments/               frozen deployment metadata

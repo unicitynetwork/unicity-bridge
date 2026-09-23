@@ -89,6 +89,12 @@ never assume validity.
 
 - Same chain, same family (e.g. Tron USDC): new config (its own `cborTag`,
   `tokenTypeHex`, `assetContract`), reuse `bridge-plugin` code.
-- New chain (e.g. an EVM L2): new plugin package implementing
-  `IMintJustificationVerifier` with that chain's RPC + event decoding, its own
-  tag, and a `lock`-style contract committing to `{tokenId, recipientCommitment}`.
+- New chain of an existing family (an Ethereum L2, Tron mainnet): a manifest
+  with that chain's id and RPC, and a chain-name entry in the wallet's asset
+  folder; the same vault ABI, lock justification and verifier.
+- New chain family: a `ChainFamilyAdapter` in `packages/bridge-plugin/src/<family>/`
+  (chain reference, address normalization, `SourceChainRpc` + `ConstantCaller`
+  over its node, presentation), a `SourceSigner` for its wallets, a manifest
+  variant in the `BridgeManifest` union, and an asset folder in the wallet. The
+  lock justification, verifier, source adapter and manifest loader stay as they
+  are; the vault is the same Solidity as long as the family runs the EVM.
