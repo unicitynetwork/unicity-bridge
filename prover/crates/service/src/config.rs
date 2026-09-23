@@ -11,14 +11,13 @@ use crate::domain::{
 pub struct ServiceConfig {
     pub bind: SocketAddr,
     pub gateway_url: Option<String>,
-    pub tron_grid_url: Option<String>,
     pub vault: Option<String>,
     pub config_hash: Option<[u8; 32]>,
     pub trust_base_path: Option<PathBuf>,
     /// Frozen deployment config JSON (e.g. `deployments/nile/nile-usdt.json`).
     /// Required (with `trust_base_path`) to accept the wallet `{tokenCbor,reasonBytes}` envelope.
     pub deployment_config_path: Option<PathBuf>,
-    /// Source-chain lock-justification CBOR tag (Tron USDT = 1330002).
+    /// Source-chain lock-justification CBOR tag (bridge lock = 1330002 on every family).
     pub justification_tag: u64,
     pub idle_wait: Duration,
     pub max_batch_size: usize,
@@ -42,7 +41,6 @@ impl Default for ServiceConfig {
         Self {
             bind: "127.0.0.1:8787".parse().expect("default bind addr"),
             gateway_url: None,
-            tron_grid_url: None,
             vault: None,
             config_hash: None,
             trust_base_path: None,
@@ -69,7 +67,6 @@ impl ServiceConfig {
                 .map_err(|_| ConfigError::Invalid("BRIDGE_RETURN_BIND"))?;
         }
         cfg.gateway_url = env_opt("UNICITY_GATEWAY");
-        cfg.tron_grid_url = env_opt("TRON_GRID_URL");
         cfg.vault = env_opt("BRIDGE_VAULT");
         cfg.trust_base_path = env_opt("TRUST_BASE_PATH").map(PathBuf::from);
         cfg.deployment_config_path = env_opt("BRIDGE_DEPLOYMENT_CONFIG").map(PathBuf::from);

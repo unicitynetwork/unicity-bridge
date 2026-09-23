@@ -127,6 +127,32 @@ addresses. `bridge-core` and the wallet's bridge module were built for a second
 chain family; the manifest union gets an `eip155` variant and the wallet gets a
 second asset folder.
 
+## The return service on an Ethereum-family chain
+
+The service reaches its chain through three shell commands (events, submit,
+simulate). `contracts/tron/scripts/relayer-eth.js` implements them with
+ethers, reading `ETH_RPC_URL`, `ETH_SK`, `ETH_VAULT` and
+`ETH_VAULT_DEPLOY_BLOCK` from `.env`, next to the Tron `relayer.js`; the
+container and `run-return-service.sh` pick one by `BRIDGE_RELAYER`.
+`events` scans `BatchFulfilled` and `Released` from the deploy block in
+10,000-block windows and prints the S2 log with the live `spentRoot`; `scan`
+rebuilds the accumulator with the host binary and compares; `settle --stdin`
+submits `fulfillBatch` and prints the txid, with a `require` string or the
+verifier's custom error name on stderr so the service's `stale root` rebase
+keys on the same text as on Tron; `simulate --stdin` static-calls each leaf's
+transfer from the vault.
+
+`test/relayer-eth.test.js` runs the relayer against the vault bytecode on the
+in-process network: a mocked-proof batch settles, the log reproduces it, a
+second batch on the consumed root is refused with `vault: stale root`, and the
+simulation names a leaf whose payout exceeds the balance. Against the live
+vault on 2026-09-23, `events` reported no batches and root zero, `scan`
+reported synced, and `simulate` rejected an oversize leaf with USDC's
+`ERC20: transfer amount exceeds balance`.
+
+`docker-compose.yml` defaults to the Sepolia deployment and `relayer-eth.js`;
+the Tron variables stay for the disabled Nile deployment.
+
 ## The wallet meanwhile
 
 The Nile manifest carries a `disabledReason` (a new optional field on
@@ -135,6 +161,16 @@ reason on the asset row, and refuses to start a lock or a burn for it: a burn
 of a Tron-backed token could not settle and would strand the funds. Tokens
 already held keep their verifier and stay visible. The row becomes active
 again by removing the field from the manifest.
+
+The plugin is `@unicitylabs/bridge-plugin` since 2026-09-23 (it was
+`bridge-plugin-tron-usdt`): one package, a `tron` and an `eip155` family
+behind five neutral seams (`SourceChainRpc`, `ConstantCaller`, `SourceSigner`,
+the `BridgeManifest` union, `ChainFamilyAdapter`), one lock justification, one
+verifier, one source adapter and one manifest loader. The Ethereum family adds
+a JSON-RPC client, an EIP-1193 (MetaMask) signer that switches the wallet to
+the bridge's chain, Etherscan links and `0x` address validation. The wallet
+lists the Sepolia USDC asset from `assets/evm-usdc` next to the disabled Tron
+one, both through the shared assets-out side in `assets/out.ts`.
 
 ## Live deployment (2026-09-23, v2)
 

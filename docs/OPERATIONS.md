@@ -130,16 +130,21 @@ root. `/accumulator` reports `synced: true` when they agree. A proof built on a
 stale root is rejected by the vault with `vault: stale root`; the service then
 rebases and proves again (§8).
 
-Settlement goes through `BRIDGE_RETURN_SUBMIT_CMD` with the bundle on stdin.
-The default is `contracts/tron/scripts/relayer.js settle --stdin`, which needs
-the settlement key and the vault address. The all-Rust submitter the plan
-calls for is not built; until it is, the container carries Node for this.
+Settlement goes through `BRIDGE_RETURN_SUBMIT_CMD` with the bundle on stdin,
+and the chain log through `BRIDGE_RETURN_EVENTS_CMD`. Both default to the
+relayer of the deployment's chain family, chosen by `BRIDGE_RELAYER`:
+`relayer-eth.js` (Ethereum-family, ethers over `ETH_RPC_URL`, key `ETH_SK`,
+vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
+(Tron, TronWeb over `TRON_RPC_URL`). Both live in `contracts/tron/scripts`. The
+all-Rust submitter the plan calls for is not built; until it is, the container
+carries Node for this.
 
-Set `BRIDGE_RETURN_SIMULATE_CMD` to
-`node /app/contracts/tron/scripts/relayer.js simulate --stdin` once its reading
-of the node's constant-call response has been checked against the deployment
-(§8); the service then drops a leaf whose transfer would revert before proving
-the batch.
+`BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
+leaf whose transfer would revert before proving the batch; the reason is the
+token's own revert string (USDC: `ERC20: transfer amount exceeds balance`). It
+matters in push-payment mode; the Sepolia vault settles in pull mode, where a
+payout never reverts. The Tron relayer's reading of the constant-call response
+was never checked against Nile (§8).
 
 ## 6. Where the money-critical state lives
 
@@ -248,12 +253,13 @@ deployment file before starting it against a live vault.
   deploys there unchanged (`docs/dev-plan/09-ethereum-sepolia.md`).
 - The journal is one file on one volume, with no backup and no pruning: done
   returns keep their inputs in it until a pruning step exists.
-- Transfer pre-simulation (`relayer.js simulate`) has not been checked against
-  Nile and is off by default.
+- Transfer pre-simulation is checked for `relayer-eth.js` against the vault
+  bytecode and Sepolia; the Tron relayer's was never checked against Nile. Off
+  by default.
 - The API is open: CORS is permissive and there is no rate limiting. Every
   route is permissionless by design, and a submitted burn costs the submitter
   their own token, but precheck is CPU that anyone can spend.
-- Settlement runs through a Node script, not the planned Rust submitter.
+- Settlement runs through a Node relayer per chain family, not the planned Rust submitter.
 - Milestone 2 has not run: no burn has been proven with the current program
   and settled on the v2 vault. The three prover tests that use a live sample
   are ignored until one exists.

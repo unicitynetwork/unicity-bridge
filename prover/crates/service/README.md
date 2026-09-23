@@ -104,7 +104,7 @@ cargo run -p bridge-return-service --features sp1 --release
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | Collection window before the first proof when the service is idle. |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | Retry backoff (doubling from the base), attempts before a return is parked, rebases before a batch fails. |
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
-| `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer.js events`). Unset assumes a pristine vault. |
+| `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer-eth.js events` or `relayer.js events`). Unset assumes a pristine vault. |
 | `BRIDGE_RETURN_SIMULATE_CMD` | — | Transfer pre-simulation command (see below). Unset = no simulation. |
 | `RUST_LOG` | — | e.g. `bridge_return_service=info`. |
 
@@ -162,7 +162,7 @@ queued again by a resubmit (`duplicate: false`) without shortening its schedule.
 
 ## S4 submitter
 
-Pluggable so the proven relayer (or a future in-process Tron client) drops in
+Pluggable so the relayer of any chain family (or a future in-process client) drops in
 without touching the queue:
 
 - **`none`** (default): the return stays `proven`; the published bundle is
@@ -173,11 +173,11 @@ without touching the queue:
   (exit 0). A non-zero exit whose stderr contains `stale root` makes the service
   re-prove the batch on the new root; any other failure schedules a retry that
   reuses the proof. This is the seam for the existing
-  `contracts/tron/scripts/relayer.js settle` and for the all-Rust submitter (07 §B7).
+  `contracts/tron/scripts/relayer-eth.js settle` (Ethereum family), `relayer.js settle` (Tron) and for the all-Rust submitter (07 §B7).
 
 Example (wrapping the proven relayer):
 ```bash
-BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer.js settle --stdin'
+BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer-eth.js settle --stdin'
 ```
 
 ### Transfer pre-simulation
@@ -188,7 +188,7 @@ program that receives `{"leaves": [...]}` (the bundle's leaf objects) on
 **stdin** and prints `{"rejected": [{"nullifier", "reason"}]}` on stdout (exit 0;
 exit 1 when the node is unreachable). The service runs it before every proof
 and sets rejected burns aside as recoverable failures. Unset, nothing is
-simulated. `contracts/tron/scripts/relayer.js simulate --stdin` implements it
+simulated. `contracts/tron/scripts/relayer-eth.js simulate --stdin` (and `relayer.js` for Tron) implements it
 with a constant call of the asset's `transfer` from the vault.
 
 ---
