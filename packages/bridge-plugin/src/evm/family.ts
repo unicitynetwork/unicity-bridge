@@ -12,6 +12,7 @@ export const evmFamily: ChainFamilyAdapter = {
   family: 'eip155',
   chainName: 'Ethereum',
   defaultConfirmations: EVM_DEFAULT_CONFIRMATIONS,
+  blockSeconds: 12,
   chainRef: evmChainRef,
   normalizeAddress: toEvmAddressHex,
   createRpc: ({ rpcUrl }) => {

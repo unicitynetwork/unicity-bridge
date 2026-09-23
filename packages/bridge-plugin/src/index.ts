@@ -45,6 +45,7 @@ export interface BridgePlugin {
   readonly resolvedConfig: ResolvedBridgeConfig;
   /** Register this into a MintJustificationVerifierService. */
   readonly verifier: LockMintJustificationVerifier;
+  readonly rpc: SourceChainRpc;
 }
 
 /**
@@ -77,5 +78,6 @@ export function createBridgePlugin(config: BridgeAssetConfig, deps: CreateBridge
     decimals: config.decimals ?? DEFAULT_DECIMALS,
     resolvedConfig,
     verifier,
+    rpc,
   };
 }

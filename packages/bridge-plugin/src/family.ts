@@ -11,6 +11,7 @@ export interface ChainFamilyAdapter {
   readonly family: ChainFamily;
   readonly chainName: string;
   readonly defaultConfirmations: number;
+  readonly blockSeconds: number;
   chainRef(chainId: number): string;
   normalizeAddress(address: string): string;
   createRpc(options: RpcOptions): SourceChainRpc & ConstantCaller;

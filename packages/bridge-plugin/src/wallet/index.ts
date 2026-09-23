@@ -21,3 +21,4 @@ export * from './return-client.js';
 export * from './self-mint-verifier.js';
 export * from './token-plugin.js';
 export * from './backing.js';
+export * from './finality.js';

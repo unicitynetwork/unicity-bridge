@@ -13,6 +13,7 @@ export const tronFamily: ChainFamilyAdapter = {
   family: 'tron',
   chainName: 'Tron',
   defaultConfirmations: TRON_DEFAULT_CONFIRMATIONS,
+  blockSeconds: 3,
   chainRef: tronChainRef,
   normalizeAddress: toEvmAddressHex,
   createRpc: ({ rpcUrl, apiKey }) => new TronHttpRpcClient({ baseUrl: rpcUrl ?? 'https://api.trongrid.io', apiKey }),

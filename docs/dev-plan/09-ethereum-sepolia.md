@@ -178,6 +178,18 @@ reads the justification's chain and vault and hands the check to the bridge
 that owns them. Registering them separately made the token engine fail to
 build, which surfaced in the wallet as "payments requires the v2 token engine".
 
+A bridged token is only as good as its lock's finality: any receiver
+re-verifies the lock and rejects a token short of the manifest's
+confirmations, and a rejected delivery is never retried. The first Sepolia
+bridge-in was sent on to another wallet minutes after the lock and hit this.
+Two changes: the Sepolia manifest asks for 12 confirmations (about two and a
+half minutes) instead of two epochs, since nothing of value rides on the
+testnet; and the wallet holds a settling token back. The plugin reports the
+lock's finality (`lockFinality`, from the family's block time), the wallet
+module places a hold with the minutes left, the token row shows "Settling" in
+place of Send, and an amount send of a coin with a held token is refused.
+A source chain that cannot be read holds the token as well.
+
 ## Live deployment (2026-09-23, v2)
 
 Deployed from `0x2B00d708fc777F174A248B9bE01c8E8379d69Caf` after it received
