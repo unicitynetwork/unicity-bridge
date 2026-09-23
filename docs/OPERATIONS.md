@@ -267,6 +267,6 @@ deployment file before starting it against a live vault.
 - The wallet's service URL is a build-time setting.
 - The three wallet packages are linked by path, not published (see
   `sphere/docs/WALLET-MODULES.md`).
-- The wallet's development-key signer is compiled out of production builds;
-  the demo account's key sits in the repository's `.env` and must not reach a
-  production host.
+- The repository's `.env` holds throwaway testnet keys for the scripts
+  (`TRON_SK`, `ETH_SK`); they must not reach a production host. The wallet
+  signs only through browser wallets.
