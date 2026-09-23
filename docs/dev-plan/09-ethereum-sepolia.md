@@ -172,6 +172,12 @@ prover the third attempt proved in about ten minutes.
 | settlement | `0xc5a9665b2079393df56dd18360a956f3323e060997ae6b154f532873c542f7ba`, block 11765333, 324,439 gas |
 | payout | credited to the destination (pull mode); `withdraw` collected it, `deploy-eth.js withdraw` |
 
+Since then the wallet collects such a credit itself: a settled return on a
+pull-payment vault shows "Collect n USDC" with what the vault owes the
+destination (`owedTo` in the plugin), and MetaMask signs the `withdraw`
+(`withdrawCall`) from the destination's account; the row then links the
+collecting transaction.
+
 The whole return took 25 minutes from burn to settlement, 12 of them lost to
 the killed first attempt.
 
