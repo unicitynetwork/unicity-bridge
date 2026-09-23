@@ -208,7 +208,7 @@ with a constant call of the asset's `transfer` from the vault.
    `queued→proving→…→settled` and shows the settle txid.
 
 The wallet derives the **same** nullifier/leaf the service does — the live e2e
-backstop is `packages/bridge-plugin-tron-usdt/demo/bridge-back-e2e.ts` (asserts wallet ==
+backstop is `packages/bridge-plugin/demo/bridge-back-e2e.ts` (asserts wallet ==
 Rust agreement on the burned token).
 
 ---

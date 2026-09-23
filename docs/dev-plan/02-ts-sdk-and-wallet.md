@@ -1,7 +1,7 @@
 # 02 — TS SDK & wallet integration
 
 **Stack:** TypeScript (Node ≥ 22 + browser), `@unicitylabs/state-transition-sdk`,
-`@noble/hashes`, `fetch`-only (no `tronweb`). Lives in `bridge-plugin-tron-usdt/`
+`@noble/hashes`, `fetch`-only (no `tronweb`). Lives in `bridge-plugin/`
 (extend), `state-transition-sdk-js/` (burn flow, if missing), and
 `sphere-sdk/token-engine/` (wiring).
 
@@ -22,7 +22,7 @@ side never proves and never settles; it constructs and verifies.
 
 ## Current state
 
-`bridge-plugin-tron-usdt/` is a complete `IMintJustificationVerifier`:
+`bridge-plugin/` is a complete `IMintJustificationVerifier`:
 
 - `createTronUsdtBridgePlugin(config)` → `{cborTag, tokenTypeHex, coinIdHex,
   decimals, verifier}` (`src/index.ts`).
@@ -121,7 +121,7 @@ produces is consumed by the circuit, so it is conformance-critical.
 Factor the **chain-agnostic** derivations (config/reason/nullifier/leaf encoders,
 `recipientCommitment`, `tokenType/coinId` derivation, `configHash`) into a small
 `@unicitylabs/bridge-core` TS package, depended on by both
-`bridge-plugin-tron-usdt` and any future per-chain plugin. The Tron-specific RPC +
+`bridge-plugin` and any future per-chain plugin. The Tron-specific RPC +
 event decoding stays in the per-chain plugin. This mirrors
 `PLUGIN_ARCHITECTURE.md` "logic vs configuration" and keeps the conformance
 surface in one place.

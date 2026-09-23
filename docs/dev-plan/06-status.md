@@ -5,7 +5,7 @@ Tracks the implementation of [`06-wallet-bridge-integration.md`](./06-wallet-bri
 ## Done (tested / typechecked)
 
 ### W0 — Plugin façade + manifest + sphere-sdk passthrough ✅
-- **Plugin** `bridge-plugin-tron-usdt/src/wallet/` (subpath `lib/wallet/…`):
+- **Plugin** `bridge-plugin/src/wallet/` (subpath `lib/wallet/…`):
   - `manifest.ts` — `BridgeManifest` type + `loadBridges()` with the **configHash
     integrity-pin** (rejects a manifest that doesn't describe the deployed vault).
   - `facade.ts` — `buildBridgeInPlan` (derivation + unsigned Tron `approve`/`lock`
@@ -40,7 +40,7 @@ Tracks the implementation of [`06-wallet-bridge-integration.md`](./06-wallet-bri
 ## How to run the demo
 1. **Link local packages** (the app pins published `sphere-sdk@0.10.7`; the bridge
    work lives in this workspace's sphere-sdk + the plugin):
-   - build the plugin: `cd bridge-plugin-tron-usdt && npm run build`
+   - build the plugin: `cd bridge-plugin && npm run build`
    - link the local sphere-sdk into `sphere/` (npm/yarn link or a `file:` override),
    - `cd sphere && npm install` (picks up the `file:` plugin dep + linked sphere-sdk).
 2. Optional: `VITE_BRIDGE_RETURN_SERVICE_URL=…` for bridge-out.

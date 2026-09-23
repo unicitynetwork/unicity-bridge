@@ -24,7 +24,7 @@ as the SDK's own `SplitMintJustificationVerifier`.
 
 **Logic (code, per asset family):** one `IMintJustificationVerifier`
 implementation. For Tron TRC20 it lives in the standalone package
-`bridge-plugin-tron-usdt/`. It is pure validation logic: decode justification →
+`bridge-plugin/`. It is pure validation logic: decode justification →
 RPC checks → binding checks. It depends only on `@unicitylabs/state-transition-sdk`
 (types) and `fetch` (Tron HTTP API is plain JSON — no `tronweb`), so it runs in
 browser and Node ≥ 22 alike and stays out of the core SDK.
@@ -68,7 +68,7 @@ never assume validity.
 
 ## Where it is wired
 
-- **Standalone plugin:** `bridge-plugin-tron-usdt/` exports
+- **Standalone plugin:** `bridge-plugin/` exports
   `createTronUsdtBridgePlugin(config)` → `{ tokenTypeHex, coinIdHex, cborTag, verifier }`.
 - **sphere-sdk (generic seams, no bridge code):** `TokenPlugin`
   `{ id, mintJustificationVerifiers }` registered via `Sphere.init({ plugins })`
@@ -88,7 +88,7 @@ never assume validity.
 ## Adding another bridged asset later
 
 - Same chain, same family (e.g. Tron USDC): new config (its own `cborTag`,
-  `tokenTypeHex`, `assetContract`), reuse `bridge-plugin-tron-usdt` code.
+  `tokenTypeHex`, `assetContract`), reuse `bridge-plugin` code.
 - New chain (e.g. an EVM L2): new plugin package implementing
   `IMintJustificationVerifier` with that chain's RPC + event decoding, its own
   tag, and a `lock`-style contract committing to `{tokenId, recipientCommitment}`.

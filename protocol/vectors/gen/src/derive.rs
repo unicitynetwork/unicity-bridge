@@ -27,7 +27,7 @@ pub struct Config {
 }
 
 /// `tokenType = SHA256("unicity-bridge:<family>:<chainId>:<assetEvmHex>")`
-/// (packages/bridge-plugin-tron-usdt/src/identifiers.ts, frozen in interop §2).
+/// (packages/bridge-plugin/src/identifiers.ts, frozen in interop §2).
 /// The family is the CAIP-2 namespace: `tron`, `eip155`.
 pub fn token_type(chain_family: &str, chain_id_str: &str, asset_evm_hex: &str) -> [u8; 32] {
     sha256(format!("unicity-bridge:{chain_family}:{chain_id_str}:{asset_evm_hex}").as_bytes())

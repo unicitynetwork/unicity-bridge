@@ -1,6 +1,6 @@
 # 06 — Wallet bridge integration (Sphere) development plan
 
-**Stack:** TypeScript — `bridge-plugin-tron-usdt/` (owns *all* bridge logic),
+**Stack:** TypeScript — `bridge-plugin/` (owns *all* bridge logic),
 `sphere-sdk/` (provider passthrough), `sphere/` (UI + wiring). React 19 +
 TanStack Query + Vitest.
 
@@ -38,7 +38,7 @@ Phases are tagged to the cross-cutting milestones in
 
 ### W0 — Plugin façade + manifest + provider passthrough (foundation)
 
-**Plugin package (`bridge-plugin-tron-usdt/src/`):**
+**Plugin package (`bridge-plugin/src/`):**
 - `wallet/facade.ts` — the only surface Sphere calls:
   - `loadBridges(manifest, deps) → BridgePlugin[]` (wraps `createTronUsdtBridgePlugin`).
   - `buildBridgeInPlan({plugin, amount, owner}) → { tokenId, recipientCommitment, salt, approveTx, lockTx }` (derives the target token + the unsigned Tron txs).

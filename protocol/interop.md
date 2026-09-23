@@ -68,7 +68,7 @@ configHash = K(abi.encode(
   `configHash` publicly.
 - The **TS SDK** derives the same `configHash` to label tokens and to build the
   manifest. Note `tokenType`/`coinId` are themselves derived today by
-  `packages/bridge-plugin-tron-usdt/src/identifiers.ts`:
+  `packages/bridge-plugin/src/identifiers.ts`:
   `tokenType = SHA256("unicity-bridge:<family>:<chainId>:<assetEvmHex>")`,
   `coinId = SHA256("unicity-bridge-coin:<family>:<chainId>:<assetEvmHex>")`,
   where `<family>` is the source chain's CAIP-2 namespace (`tron`, `eip155`;
@@ -91,7 +91,7 @@ for bridge mints. The amount the bridge checks (mint-time value == locked
 amount; return-time burned value == locked amount) is the collection's entry for
 `config.coinId`.
 
-- **TS plugin:** `packages/bridge-plugin-tron-usdt/src/value.ts` encodes and
+- **TS plugin:** `packages/bridge-plugin/src/value.ts` encodes and
   decodes it (pinned byte-for-byte against sphere-sdk's encoder in
   `test/value.test.ts`). Bare `PaymentAssetCollection` bytes, the v1 dialect,
   now decode as "no value".
@@ -137,7 +137,7 @@ lockDigest[nonce] = K(abi.encode(
 - **Circuit** reconstructs `LockRecord` from the certified genesis + `config`,
   recomputes `lockDigest`, and exports `(nonce, digest)` as a public lock ref.
 - **`recipientCommitment`** is `SHA256(recipientCbor)` — already implemented in
-  `packages/bridge-plugin-tron-usdt/src/identifiers.ts::recipientCommitment`. The circuit
+  `packages/bridge-plugin/src/identifiers.ts::recipientCommitment`. The circuit
   and vault use the same definition.
 
 ---
