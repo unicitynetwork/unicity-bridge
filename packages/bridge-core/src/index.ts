@@ -171,6 +171,7 @@ export interface BridgeManifestBase {
   readonly tokenTypeHex?: string;
   /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
   readonly coinIdHex?: string;
+  readonly disabledReason?: string;
 }
 
 // ── Wallet-side contract ────────────────────────────────────────────────────

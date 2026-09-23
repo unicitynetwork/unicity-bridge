@@ -140,3 +140,9 @@ test('buildBridgeInPlan honors a one-time max approve', async () => {
   assert.equal(plan.approve.parameters[1].value, MAX_UINT256.toString());
   assert.equal(plan.lock.parameters[0].value, '1');
 });
+
+test('the Nile manifest is disabled: Tron cannot settle a return under its 80 ms limit', () => {
+  assert.match(NILE_USDT_BRIDGE.disabledReason ?? '', /80 ms/);
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  assert.equal(loaded.manifest.disabledReason, NILE_USDT_BRIDGE.disabledReason);
+});

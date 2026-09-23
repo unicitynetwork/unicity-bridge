@@ -19,6 +19,11 @@ import type { BridgeManifest } from './manifest.js';
  * pin. tokenType/coinId are asset-derived (stable across vault redeploys).
  *
  * `returnServiceUrl` defaults to a local Part-B service; override per environment.
+ *
+ * Disabled since 2026-09-22: Tron bounds a transaction to 80 ms of CPU and the
+ * Groth16 verification needs more, so no return can settle on any Tron network
+ * (docs/OPERATIONS.md §10). The entry stays listed so the wallet keeps showing
+ * the deployment and its tokens; it refuses new locks and burns.
  */
 export const NILE_USDT_BRIDGE: BridgeManifest = {
   family: 'tron',
@@ -39,6 +44,7 @@ export const NILE_USDT_BRIDGE: BridgeManifest = {
   configHash: 'fa77a13a6fb24658fa75377b0eef7cf3e92f8caede9ea127afe21be7a036cb1b',
   tokenTypeHex: '6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74',
   coinIdHex: 'f1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb',
+  disabledReason: 'Tron limits a transaction to 80 ms of CPU, less than the proof verification needs, so returns cannot settle. Bridging on Tron is paused.',
 } as const;
 
 export const NILE_USDT_BRIDGE_V1: BridgeManifest = {
