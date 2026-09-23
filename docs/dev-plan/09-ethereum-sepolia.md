@@ -12,7 +12,7 @@ third-party deployments. Circle issues USDC on Sepolia at
 decimals, FiatToken version 2 with the blocklist, read on chain 2026-09-23),
 and its faucet at faucet.circle.com pays 20 USDC per address every two hours.
 Because the blocklist can make a recipient's transfer revert, the vault is
-deployed in pull-payment mode (`SEPOLIA_PULL_PAYMENTS=1`); recipients claim
+deployed in pull-payment mode (`ETH_PULL_PAYMENTS=1`); recipients claim
 with `withdraw()`. The mainnet asset is a separate decision: Ethereum has both
 Tether's USDT and Circle's USDC natively, and the vault takes either.
 
@@ -34,7 +34,7 @@ as its `IProofVerifier`.
 
 ## Check 1 — the published proof verifies on Sepolia (2026-09-23)
 
-`node scripts/verify-onchain-sepolia.js` (from `contracts/tron`) calls
+`node scripts/verify-onchain-eth.js` (from `contracts/tron`) calls
 `verifyProof(vkey, publicValues, proofBytes)` with
 `protocol/vectors/proof/b1-groth16.json` as a free `eth_call`:
 
@@ -55,7 +55,7 @@ the vendored v6.1.0 contract, takes the same route.
 
 ## Check 2 — full procedure rehearsed on a local Hardhat node (2026-09-23)
 
-`scripts/deploy-sepolia.js` was run against `npx hardhat node` with the
+`scripts/deploy-eth.js` was run against `npx hardhat node` with the
 vendored verifier standing in for the gateway (chain 31337, Hardhat account 0):
 
 | Step | Gas | Note |
@@ -82,24 +82,24 @@ stopped it, as it must for a bundle proven for another vault.
 ## Procedure
 
 From `contracts/tron`, after `npm run build`. The repo-root `.env` holds the
-`SEPOLIA_*` variables listed in `.env.example`; `process.env` overrides it.
+`ETH_*` variables listed in `.env.example`; `process.env` overrides it.
 
-1. `node scripts/verify-onchain-sepolia.js` must print two `VERIFIED` lines.
-2. Request 20 USDC for the deployer at faucet.circle.com (`SEPOLIA_USDC` is
+1. `node scripts/verify-onchain-eth.js` must print two `VERIFIED` lines.
+2. Request 20 USDC for the deployer at faucet.circle.com (`ETH_ASSET` is
    Circle's contract).
-3. `node scripts/deploy-sepolia.js vault $SEPOLIA_USDC <vkey>` with the vkey
+3. `node scripts/deploy-eth.js vault $ETH_ASSET <vkey>` with the vkey
    from `sp1-vkey.json` (the key of the guest the service proves with; the
-   same key the Nile v2 vault carries). Put the address in `SEPOLIA_VAULT`.
-4. `node scripts/deploy-sepolia.js allow-trust-base <vault> $(bridge-return-host emit-trust-base-hash bft-trustbase.testnet2.json)`.
-5. `node scripts/deploy-sepolia.js lock-smoke <vault> $SEPOLIA_USDC` for one
+   same key the Nile v2 vault carries). Put the address in `ETH_VAULT`.
+4. `node scripts/deploy-eth.js allow-trust-base <vault> $(bridge-return-host emit-trust-base-hash bft-trustbase.testnet2.json)`.
+5. `node scripts/deploy-eth.js lock-smoke <vault> $ETH_ASSET` for one
    Lock event and a stored `lockDigest`; it approves and locks 1 USDC the
    deployer already holds.
-6. `node scripts/deploy-sepolia.js freeze <vault> > deployments/sepolia/sepolia-usdc.json`,
+6. `node scripts/deploy-eth.js freeze <vault> > deployments/sepolia/sepolia-usdc.json`,
    then feed its `config` fields to `bridge-return-host emit-config` and check
    `config_hash` matches the on-chain `CONFIG_HASH`.
 
 The deployer key was generated on 2026-09-23 into the gitignored `.env`
-(`SEPOLIA_SK`); its address is `0x2B00d708fc777F174A248B9bE01c8E8379d69Caf`.
+(`ETH_SK`); its address is `0x2B00d708fc777F174A248B9bE01c8E8379d69Caf`.
 It is the vault admin. The steps above need roughly 1.8M gas, so 0.05 Sepolia
 ETH covers them with room for a settlement.
 
@@ -110,12 +110,13 @@ and its key, the trust base, the protocol vectors. The token transfer helpers
 already require only no-revert, which covers Ethereum USDT's void return; the
 explicit gas stipend on the transfer call is harmless on the EVM.
 
-Kept as is for now, to be renamed when the EVM plugin lands: the token type and
-coin id derivations hash the strings `unicity-bridge:tron:<chainId>:<asset>` and
-`unicity-bridge-coin:tron:…` in `bridge-return-core`, the plugin and the vector
-generator, and the plugin package is named for Tron and USDT. The guest reads both values from the config as opaque bytes, so
-changing the label is a host and plugin change with no new key; but it changes
-the identity of every asset derived after it, so it is done once, deliberately.
+The token type and coin id derivations now take the chain family, the CAIP-2
+namespace (`unicity-bridge:<family>:<chainId>:<asset>`, interop §2): `tron`
+for the Nile deployments, whose values are unchanged, and `eip155` here. The
+guest reads both values from the config as opaque bytes, so the label is a
+host, plugin and script matter with no new key. The first Sepolia vault
+(`0x5153EE37…`) was deployed under the inherited `tron` label and is written
+off with the 1 USDC it holds; the deployment records carry `chain_family`.
 
 Still Tron-only and needed before a Sepolia burn can settle end to end:
 `relayer.js` (TronWeb transport, TronGrid events, fee limit), the service's
@@ -135,23 +136,25 @@ of a Tron-backed token could not settle and would strand the funds. Tokens
 already held keep their verifier and stay visible. The row becomes active
 again by removing the field from the manifest.
 
-## Live deployment (2026-09-23)
+## Live deployment (2026-09-23, v2)
 
 Deployed from `0x2B00d708fc777F174A248B9bE01c8E8379d69Caf` after it received
-0.05 Sepolia ETH. The record is `deployments/sepolia/sepolia-usdc.json`.
+0.05 Sepolia ETH. The record is `deployments/sepolia/sepolia-usdc.json`. A
+first vault the same day (`0x5153EE37…`, tx `0xfa154a7a…`, block 11764606)
+used the `tron` derivation label and was superseded within the hour.
 
 | Item | Sepolia |
 |---|---|
-| `UnicityBridgeVault` | `0x5153EE37c673C9E77af01EC3Bc168faee7c68E24` |
-| deploy tx, block | `0xfa154a7aec81976096040e3968cbc1935fbfe7b1d37a4d2a1c7a6fe71a6b3cad`, 11764606 |
+| `UnicityBridgeVault` | `0x9C2BF4Ed5b85130fFD14BE8FA65c60F299Fc9a2E` |
+| deploy tx, block | `0x32567ca425a698218de02907096f8f699ac39ad9ed36a4e882bcc238b93a12f2`, 11764672 |
 | deploy gas | 1,470,460 |
 | verifier | SP1 gateway `0x397A5f7f3dBd538f23DE225B51f532c34448dA9B` (v6.1.0 behind it: `0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2`) |
 | asset | Circle USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`, pull payments |
 | vkey | `0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5` |
-| `CONFIG_HASH` | `0x8d5defb0711b18c345ecda6ffc2f91902b243b276191de43040dc7126882c304` |
-| token type | `0xb83ec3908eb1416e218ba3312c0f58a7596bc0d6e8888daf1d41f01e8523bf55` |
-| coin id | `0xb9a77c845550ca8e457827bd5992edb49cf950a41f7d78d31e29fae93d486b30` |
-| trust base allowed | `0x72a67260…` in tx `0xcf70154c7064e0226520cb57a3a48a5dd7f8f5f8344510bb10dabbb51523b481`, 47,825 gas |
+| `CONFIG_HASH` | `0x4058e87dff330d9c6925af755e0732dbc80be85643fdce46c8315eae51c9f7e8` |
+| token type | `0x2ccbf3157add2b9a2dcc10e772abf5cf328e2723f9f290a9d2b6c4a42a132d6c` |
+| coin id | `0xeae954053183b9d1836d6b5c892867014bcc1571fcc6813f5b56b16a78d0497f` |
+| trust base allowed | `0x72a67260…` in tx `0x533f90406fb1015764d3edaddfafe91e2956455f3d0e344f929f3fffc27f794c`, 47,825 gas |
 | admin | the deployer |
 
 `bridge-return-host emit-config` reproduces the on-chain `CONFIG_HASH`, token
@@ -167,10 +170,10 @@ Lock smoke with 1 USDC from the Circle faucet:
 
 | Step | Tx | Gas |
 |---|---|---:|
-| approve | `0x984dfe0f20ec8f26292f11b8da4e28e1baa414c448384a7402c48ce45d0aa6e8` | 55,437 |
-| lock, nonce 0 | `0xddeb7d388b95534b1d145cd5315af9ab69726b3416ea959ee982d3a2f5c1939e` | 139,668 |
+| approve | `0xb0a9b66cc225ab9a1868f10e500b96e2c1f44aace40c3e3f4c8eee698ae8893a` | 55,437 |
+| lock, nonce 0 | `0x9dd8fd6344b15ecc0161279923dcbc57933f1ea549eef995d7bbd08b5504982c` | 139,668 |
 
-`lockDigest[0]` is `0x70982a35f0baea750fd33bec3529a973f4dfb73ec979689529a53f83ea3a3cb6`
+`lockDigest[0]` is `0xfcce28c867c8ff4ba609c8c858fbf4115c4d1384cc1ffb8d6cd00bc377afe1ad`
 and the vault holds 1 USDC. USDC's `transferFrom` costs more than the mock's,
 hence the higher lock gas than in the rehearsal. The deployer keeps about
-0.048 Sepolia ETH and 19 USDC.
+0.046 Sepolia ETH and 18 USDC.

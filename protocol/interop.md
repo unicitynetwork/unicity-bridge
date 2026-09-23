@@ -69,9 +69,11 @@ configHash = K(abi.encode(
 - The **TS SDK** derives the same `configHash` to label tokens and to build the
   manifest. Note `tokenType`/`coinId` are themselves derived today by
   `packages/bridge-plugin-tron-usdt/src/identifiers.ts`:
-  `tokenType = SHA256("unicity-bridge:tron:<chainId>:<assetEvmHex>")`,
-  `coinId = SHA256("unicity-bridge-coin:tron:<chainId>:<assetEvmHex>")`. Those
-  derivations are frozen here too (they feed `config`).
+  `tokenType = SHA256("unicity-bridge:<family>:<chainId>:<assetEvmHex>")`,
+  `coinId = SHA256("unicity-bridge-coin:<family>:<chainId>:<assetEvmHex>")`,
+  where `<family>` is the source chain's CAIP-2 namespace (`tron`, `eip155`;
+  since 2026-09-23, Tron values unchanged). Those derivations are frozen here
+  too (they feed `config`).
 
 ### 2.1 The bridged token's value payload (CHANGED 2026-09-18; `BRIDGE_PROTO_VERSION = 2` since 2026-09-21)
 

@@ -7,18 +7,18 @@ const ABI = ["function verifyProof(bytes32 programVKey, bytes publicValues, byte
 
 async function main() {
   const env = loadEnv();
-  const rpc = env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
-  const provider = new ethers.JsonRpcProvider(rpc, 11155111, { staticNetwork: true });
+  const rpc = env.ETH_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  const provider = new ethers.JsonRpcProvider(rpc, Number(env.ETH_CHAIN_ID || 11155111), { staticNetwork: true });
   const bundlePath = process.argv[2] || path.join(__dirname, "..", "..", "..", "protocol/vectors/proof/b1-groth16.json");
   const b = JSON.parse(fs.readFileSync(bundlePath, "utf8"));
   const targets = {
-    gateway: env.SEPOLIA_SP1_GATEWAY || "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B",
-    "v6.1.0 verifier": env.SEPOLIA_SP1_VERIFIER_V610 || "0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2",
+    gateway: env.ETH_SP1_GATEWAY || "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B",
+    "v6.1.0 verifier": env.ETH_SP1_VERIFIER_V610 || "0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2",
   };
   console.log("bundle:", bundlePath);
   console.log("vkey:", b.vkey, "(circuit", b.circuit_version + ", sp1", b.sp1_version + ")");
   const block = await provider.getBlock("latest");
-  console.log(`sepolia block ${block.number}, gas limit ${block.gasLimit}, base fee ${ethers.formatUnits(block.baseFeePerGas ?? 0n, "gwei")} gwei`);
+  console.log(`chain ${env.ETH_CHAIN_ID || 11155111} block ${block.number}, gas limit ${block.gasLimit}, base fee ${ethers.formatUnits(block.baseFeePerGas ?? 0n, "gwei")} gwei`);
 
   async function call(address, publicValues, proofBytes) {
     const c = new ethers.Contract(address, ABI, provider);

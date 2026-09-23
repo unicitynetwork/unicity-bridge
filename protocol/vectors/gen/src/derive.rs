@@ -26,15 +26,16 @@ pub struct Config {
     pub nullifier_domain: [u8; 32],
 }
 
-/// `tokenType = SHA256("unicity-bridge:tron:<chainId>:<assetEvmHex>")`
+/// `tokenType = SHA256("unicity-bridge:<family>:<chainId>:<assetEvmHex>")`
 /// (packages/bridge-plugin-tron-usdt/src/identifiers.ts, frozen in interop §2).
-pub fn token_type(chain_id_str: &str, asset_evm_hex: &str) -> [u8; 32] {
-    sha256(format!("unicity-bridge:tron:{chain_id_str}:{asset_evm_hex}").as_bytes())
+/// The family is the CAIP-2 namespace: `tron`, `eip155`.
+pub fn token_type(chain_family: &str, chain_id_str: &str, asset_evm_hex: &str) -> [u8; 32] {
+    sha256(format!("unicity-bridge:{chain_family}:{chain_id_str}:{asset_evm_hex}").as_bytes())
 }
 
-/// `coinId = SHA256("unicity-bridge-coin:tron:<chainId>:<assetEvmHex>")`.
-pub fn coin_id(chain_id_str: &str, asset_evm_hex: &str) -> [u8; 32] {
-    sha256(format!("unicity-bridge-coin:tron:{chain_id_str}:{asset_evm_hex}").as_bytes())
+/// `coinId = SHA256("unicity-bridge-coin:<family>:<chainId>:<assetEvmHex>")`.
+pub fn coin_id(chain_family: &str, chain_id_str: &str, asset_evm_hex: &str) -> [u8; 32] {
+    sha256(format!("unicity-bridge-coin:{chain_family}:{chain_id_str}:{asset_evm_hex}").as_bytes())
 }
 
 /// `recipientCommitment = SHA256(recipient predicate CBOR)` (00 §3).

@@ -53,8 +53,9 @@ export function createTronUsdtBridgePlugin(
   config: TronUsdtBridgeConfig,
   deps: CreateTronUsdtBridgePluginDeps = {},
 ): TronUsdtBridgePlugin {
-  const tokenType = deriveTokenType(config.chainId, config.assetContract);
-  const coinId = deriveCoinId(config.chainId, config.assetContract);
+  const family = config.family ?? 'tron';
+  const tokenType = deriveTokenType(family, config.chainId, config.assetContract);
+  const coinId = deriveCoinId(family, config.chainId, config.assetContract);
 
   const resolvedConfig: ResolvedTronUsdtConfig = {
     chainId: config.chainId,

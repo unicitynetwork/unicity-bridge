@@ -1,20 +1,22 @@
 import { sha256 } from '@noble/hashes/sha2.js';
+import type { ChainFamily } from '@unicitylabs/bridge-core';
 
 import { toEvmAddressHex } from './tron-address.js';
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
 /**
- * Deterministic 32-byte Unicity TokenType for a Tron-bridged asset.
- * `TRON_USDT_TYPE = SHA256("unicity-bridge:tron:<chainId>:<assetEvmHex>")`.
+ * Deterministic 32-byte Unicity TokenType for a bridged asset, from its source
+ * chain family (CAIP-2 namespace), chain id and asset contract:
+ * `SHA256("unicity-bridge:<family>:<chainId>:<assetEvmHex>")` (interop §2).
  */
-export function deriveTokenType(chainId: number, assetContract: string): Uint8Array {
-  return sha256(utf8(`unicity-bridge:tron:${chainId}:${toEvmAddressHex(assetContract)}`));
+export function deriveTokenType(family: ChainFamily, chainId: number, assetContract: string): Uint8Array {
+  return sha256(utf8(`unicity-bridge:${family}:${chainId}:${toEvmAddressHex(assetContract)}`));
 }
 
-/** Deterministic 32-byte Sphere coinId for a Tron-bridged asset. */
-export function deriveCoinId(chainId: number, assetContract: string): Uint8Array {
-  return sha256(utf8(`unicity-bridge-coin:tron:${chainId}:${toEvmAddressHex(assetContract)}`));
+/** Deterministic 32-byte Sphere coinId for a bridged asset, same inputs as {deriveTokenType}. */
+export function deriveCoinId(family: ChainFamily, chainId: number, assetContract: string): Uint8Array {
+  return sha256(utf8(`unicity-bridge-coin:${family}:${chainId}:${toEvmAddressHex(assetContract)}`));
 }
 
 /**

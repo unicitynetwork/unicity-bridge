@@ -11,11 +11,12 @@ const REASON_TAG = 39048;
 function sha256Hex(s) {
   return "0x" + crypto.createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
 }
+const CHAIN_FAMILY = "eip155";
 function deriveTokenType(chainIdStr, assetEvmHex) {
-  return sha256Hex(`unicity-bridge:tron:${chainIdStr}:${assetEvmHex}`);
+  return sha256Hex(`unicity-bridge:${CHAIN_FAMILY}:${chainIdStr}:${assetEvmHex}`);
 }
 function deriveCoinId(chainIdStr, assetEvmHex) {
-  return sha256Hex(`unicity-bridge-coin:tron:${chainIdStr}:${assetEvmHex}`);
+  return sha256Hex(`unicity-bridge-coin:${CHAIN_FAMILY}:${chainIdStr}:${assetEvmHex}`);
 }
 
 function artifact(file) {
@@ -31,11 +32,11 @@ const SP1_VERIFIER = artifact("verifier/v6.1.0/SP1VerifierGroth16.sol/SP1Verifie
 
 function context() {
   const env = loadEnv();
-  const rpc = env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
-  const chainId = Number(env.SEPOLIA_CHAIN_ID || 11155111);
-  if (!env.SEPOLIA_SK) throw new Error("SEPOLIA_SK not set in .env");
+  const rpc = env.ETH_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  const chainId = Number(env.ETH_CHAIN_ID || 11155111);
+  if (!env.ETH_SK) throw new Error("ETH_SK not set in .env");
   const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });
-  const wallet = new ethers.Wallet(env.SEPOLIA_SK, provider);
+  const wallet = new ethers.Wallet(env.ETH_SK, provider);
   const signer = new ethers.NonceManager(wallet);
   return { env, rpc, chainId, provider, signer, address: wallet.address };
 }
@@ -76,9 +77,9 @@ async function deployVerifier({ signer }) {
 }
 
 async function deployVault({ env, chainId, signer, address: admin }, asset, vkey) {
-  const verifier = env.SEPOLIA_SP1_GATEWAY;
-  if (!verifier) throw new Error("SEPOLIA_SP1_GATEWAY not set in .env");
-  const pullPayments = env.SEPOLIA_PULL_PAYMENTS === "1";
+  const verifier = env.ETH_SP1_GATEWAY;
+  if (!verifier) throw new Error("ETH_SP1_GATEWAY not set in .env");
+  const pullPayments = env.ETH_PULL_PAYMENTS === "1";
   const cfg = bridgeConfig(chainId, asset, admin);
   console.log(`Deploying UnicityBridgeVault (asset ${asset}, verifier ${verifier}, vkey ${vkey.slice(0, 12)}…, ${pullPayments ? "PULL" : "push"}-payment) ...`);
   const factory = new ethers.ContractFactory(VAULT.abi, VAULT.bytecode, signer);
@@ -136,7 +137,8 @@ async function freeze({ env, chainId, provider }, vaultAddr) {
   const asset = await vault.ASSET();
   const cfg = bridgeConfig(chainId, asset.toLowerCase(), vaultAddr.toLowerCase());
   const record = {
-    network: "ethereum-sepolia",
+    network: env.ETH_NETWORK || `eip155-${chainId}`,
+    chain_family: CHAIN_FAMILY,
     chain_id_str: String(chainId),
     asset_evm_hex: asset.slice(2).toLowerCase(),
     config: {
@@ -154,7 +156,7 @@ async function freeze({ env, chainId, provider }, vaultAddr) {
     deployment: {
       vault: vaultAddr,
       verifier_sp1: await vault.verifier(),
-      verifier_sp1_impl: env.SEPOLIA_SP1_VERIFIER_V610 || null,
+      verifier_sp1_impl: env.ETH_SP1_VERIFIER_V610 || null,
       asset,
       vkey: await vault.VKEY(),
       pull_payments: await vault.PULL_PAYMENTS(),

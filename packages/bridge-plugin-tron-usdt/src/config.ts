@@ -1,3 +1,5 @@
+import type { ChainFamily } from '@unicitylabs/bridge-core';
+
 /** Tron network ids (TronWeb genesis-derived chain ids). */
 export const TRON_MAINNET_CHAIN_ID = 728126428; // 0x2b6653dc
 export const TRON_NILE_CHAIN_ID = 3448148188; // 0xcd8690dc
@@ -13,6 +15,7 @@ export const TRON_NILE_USDT = 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf';
  * trust anchors: the verifier rejects any lock proof that does not match them.
  */
 export interface TronUsdtBridgeConfig {
+  readonly family?: ChainFamily;
   /** Tron network id (see constants above). */
   readonly chainId: number;
   /** Canonical UnicityLock contract (base58 `T…`, `41…` hex, or 20-byte hex). */
