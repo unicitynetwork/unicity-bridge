@@ -22,6 +22,7 @@ This README is the map. The detail lives in four sibling documents:
 | [`integration.md`](./integration.md) | Design: wallet bridge UX (Sphere) + the return sequencing/proving service; the resolved cross-cutting decisions | design |
 | [`06-wallet-bridge-integration.md`](./06-wallet-bridge-integration.md) | Dev plan: surface bridge in/out in the real Sphere UI (TronLink-first, plugin-owned logic) | TypeScript / React |
 | [`07-return-service.md`](./07-return-service.md) | Dev plan: the off-chain S1–S4 pipeline as one all-Rust, self-hosted, disposable service | Rust + SP1 |
+| [`09-ethereum-sepolia.md`](./09-ethereum-sepolia.md) | Ethereum Sepolia deployment: why Tron cannot settle, the verifier check, the rehearsal and the runbook | ethers / Hardhat |
 
 ## What the bridge does
 
