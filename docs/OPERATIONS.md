@@ -260,9 +260,10 @@ deployment file before starting it against a live vault.
   route is permissionless by design, and a submitted burn costs the submitter
   their own token, but precheck is CPU that anyone can spend.
 - Settlement runs through a Node relayer per chain family, not the planned Rust submitter.
-- Milestone 2 has not run: no burn has been proven with the current program
-  and settled on the v2 vault. The three prover tests that use a live sample
-  are ignored until one exists.
+- Milestone 2 ran on Ethereum Sepolia on 2026-09-23 (a wallet burn proven
+  with the current program and settled on the Sepolia v2 vault,
+  `docs/dev-plan/09-ethereum-sepolia.md`); it never ran on the Tron v2 vault.
+  The three prover tests that use a live sample are still ignored.
 - The wallet's service URL is a build-time setting.
 - The three wallet packages are linked by path, not published (see
   `sphere/docs/WALLET-MODULES.md`).

@@ -153,6 +153,28 @@ reported synced, and `simulate` rejected an oversize leaf with USDC's
 `docker-compose.yml` defaults to the Sepolia deployment and `relayer-eth.js`;
 the Tron variables stay for the disabled Nile deployment.
 
+## First real settlement on Ethereum (2026-09-23)
+
+A token bridged in from the wallet with MetaMask (lock nonce 2) was burned in
+the wallet, proven on the 32 GB PC and settled on Sepolia by the Ethereum
+relayer, all from the service's normal loop. The first proof attempt died at
+the Groth16 wrap: the kernel inside the PC's Docker machine killed the service
+at 23 GB resident in a 24 GB machine (the return reads "Proof interrupted by
+a service restart"; `docker events` shows `die:137`; the machine's `dmesg` the
+`oom-kill`). With `GOMEMLIMIT=14GiB` and `GOGC=50` for the in-process Go
+prover the third attempt proved in about ten minutes.
+
+| Item | Value |
+|---|---|
+| return | `0x20b73cba…`, nullifier `0xd1659f62…`, 1 USDC |
+| batch | one burn, root `0x0` to `0xb3303c16…` |
+| proof | attempt 3, started 13:50:56 UTC, proven 14:01:13 UTC |
+| settlement | `0xc5a9665b2079393df56dd18360a956f3323e060997ae6b154f532873c542f7ba`, block 11765333, 324,439 gas |
+| payout | credited to the destination (pull mode); `withdraw` collected it, `deploy-eth.js withdraw` |
+
+The whole return took 25 minutes from burn to settlement, 12 of them lost to
+the killed first attempt.
+
 ## The wallet meanwhile
 
 The Nile manifest carries a `disabledReason` (a new optional field on

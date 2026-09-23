@@ -132,6 +132,16 @@ async function fulfillProbe({ signer, address }, vaultAddr, bundlePath) {
   }
 }
 
+async function withdraw({ signer, address }, vaultAddr) {
+  const vault = new ethers.Contract(vaultAddr, VAULT.abi, signer);
+  const owed = await vault.owed(address);
+  console.log(`  owed to ${address}: ${owed}`);
+  if (owed === 0n) return;
+  const tx = await vault.withdraw();
+  const r = await tx.wait();
+  console.log(`  withdraw tx ${tx.hash} gas ${r.gasUsed}; owed now ${await vault.owed(address)}`);
+}
+
 async function freeze({ env, chainId, provider }, vaultAddr) {
   const vault = new ethers.Contract(vaultAddr, VAULT.abi, provider);
   const asset = await vault.ASSET();
@@ -195,6 +205,10 @@ async function main() {
     case "freeze": {
       if (a.length < 1) throw new Error("usage: freeze <vault>");
       return freeze(ctx, a[0]);
+    }
+    case "withdraw": {
+      if (a.length < 1) throw new Error("usage: withdraw <vault>");
+      return withdraw(ctx, a[0]);
     }
     default:
       throw new Error(`unknown command: ${cmd}`);
