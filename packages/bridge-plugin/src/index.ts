@@ -10,6 +10,7 @@ import type { BridgedAmountExtractor } from './value.js';
 export * from './address.js';
 export * from './bridge-back/index.js';
 export * from './BridgeLockJustification.js';
+export * from './BridgeMintJustificationVerifier.js';
 export * from './config.js';
 export * from './contract-call.js';
 export * from './evm/config.js';

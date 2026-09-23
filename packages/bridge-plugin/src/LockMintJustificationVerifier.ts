@@ -8,7 +8,7 @@ import type { ChainFamily } from '@unicitylabs/bridge-core';
 import { bytesEqual, toHex } from './hex.js';
 import { recipientCommitment } from './identifiers.js';
 import { decodeLockEvent } from './lock-event.js';
-import { BridgeLockJustification, BRIDGE_LOCK_JUSTIFICATION_TAG } from './BridgeLockJustification.js';
+import { BridgeLockJustification, BRIDGE_LOCK_JUSTIFICATION_TAG, type BridgeLockJustificationData } from './BridgeLockJustification.js';
 import type { SourceChainRpc } from './source-chain.js';
 import { decodeBridgePaymentData, type BridgedAmountExtractor } from './value.js';
 
@@ -58,6 +58,10 @@ export class LockMintJustificationVerifier implements IMintJustificationVerifier
 
   public get tag(): bigint {
     return BRIDGE_LOCK_JUSTIFICATION_TAG;
+  }
+
+  public accepts(j: BridgeLockJustificationData): boolean {
+    return j.chainId === this.config.chainId && toHex(j.lockContract).toLowerCase() === this.config.lockContractHex;
   }
 
   public async verify(

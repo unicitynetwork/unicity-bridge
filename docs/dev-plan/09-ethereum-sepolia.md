@@ -170,7 +170,13 @@ verifier, one source adapter and one manifest loader. The Ethereum family adds
 a JSON-RPC client, an EIP-1193 (MetaMask) signer that switches the wallet to
 the bridge's chain, Etherscan links and `0x` address validation. The wallet
 lists the Sepolia USDC asset from `assets/evm-usdc` next to the disabled Tron
-one, both through the shared assets-out side in `assets/out.ts`.
+one, both through the shared assets-out side in `assets/out.ts`. Every bridged
+asset shares the lock tag, and the SDK registers one mint-justification
+verifier per tag, so the wallet's bridge module registers the assets' plugins
+merged (`mergeBridgeTokenPlugins`): one `BridgeMintJustificationVerifier` that
+reads the justification's chain and vault and hands the check to the bridge
+that owns them. Registering them separately made the token engine fail to
+build, which surfaced in the wallet as "payments requires the v2 token engine".
 
 ## Live deployment (2026-09-23, v2)
 
