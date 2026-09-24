@@ -28,8 +28,13 @@ jobs:
     permissions:
       contents: write # push the release tag
       id-token: write # npm trusted publishing and provenance
+    # The dispatcher controls the version input and the branch name, and a branch name may
+    # contain shell syntax such as $(...). An expression is pasted into the script text
+    # before bash parses it, so the run: steps read these as variables instead.
     env:
       VERSION: ${{ inputs.version }}
+      REF_NAME: ${{ github.ref_name }}
+      REF_TYPE: ${{ github.ref_type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,13 +52,13 @@ jobs:
             echo "Invalid semver: $VERSION"
             exit 1
           fi
-          if [ "${{ github.ref_type }}" != "branch" ]; then
-            echo "Dispatch from a branch, not a ${{ github.ref_type }} (${{ github.ref_name }})"
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "Dispatch from a branch, not a $REF_TYPE ($REF_NAME)"
             exit 1
           fi
           # npm never lets a version be published twice, so a stable version taken by a
           # branch build could not be released from main afterwards.
-          if [ "${{ github.ref_name }}" != "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+          if [ "$REF_NAME" != "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
             echo "A branch publishes prerelease versions only (e.g. $VERSION-dev.1); $VERSION is for main"
             exit 1
           fi
@@ -117,7 +122,7 @@ jobs:
       - name: Determine npm dist-tag
         id: dist-tag
         run: |
-          if [ "${{ github.ref_name }}" = "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+          if [ "$REF_NAME" = "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           else
             echo "tag=dev" >> "$GITHUB_OUTPUT"
