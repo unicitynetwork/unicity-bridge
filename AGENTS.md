@@ -104,3 +104,15 @@ The following are related but intentionally not owned here:
 Bridge changes in `sphere` and `sphere-sdk` should stay on branches in those
 repositories and consume this repo's packages through npm/git pins or local
 development links.
+
+## Authoritative CBOR tags
+
+  "MintReasonSplit": 39044,
+  "TransferTx": 39045,
+  "SplitManifest": 39046,
+  "BridgeMintReason": 39048,
+  "TronUsdtLockJustification": 1330002,
+  "SpherePaymentData": 39050,
+  "SphereTokenBlob": 39051,
+
+Specifically, 39050 is used for wallet-to-wallet fungible token transactions within the Sphere ecosystem. 39048 marks the bridge mint justification.
