@@ -1,0 +1,141 @@
+name: Publish to npm
+run-name: Publish bridge packages v${{ inputs.version }}
+
+# Publishes every non-private package under packages/ to npm under its own
+# @unicitylabs name, all at one version. The set is read from packages/*/package.json
+# rather than listed here, so the same workflow publishes whatever a branch ships.
+#
+# A stable version (0.3.0) is published from main only, under the `latest` dist-tag.
+# Any other branch publishes prerelease versions only (0.3.0-dev.1), under `dev`,
+# which is how sphere and sphere-sdk pin a bridge build before it merges. A prerelease
+# from main also goes under `dev`: `latest` is only ever a stable version.
+#
+# npm authenticates through trusted publishing (OIDC), so there is no token secret.
+# Each package's trusted publisher on npmjs.com must name this repository and this
+# file (publish.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for every bridge package (e.g. 0.3.0 from main, 0.3.0-dev.1 from a branch)"
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release tag
+      id-token: write # npm trusted publishing and provenance
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 24 bundles an npm that supports OIDC trusted publishing.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Validate inputs
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Invalid semver: $VERSION"
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" != "branch" ]; then
+            echo "Dispatch from a branch, not a ${{ github.ref_type }} (${{ github.ref_name }})"
+            exit 1
+          fi
+          # npm never lets a version be published twice, so a stable version taken by a
+          # branch build could not be released from main afterwards.
+          if [ "${{ github.ref_name }}" != "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+            echo "A branch publishes prerelease versions only (e.g. $VERSION-dev.1); $VERSION is for main"
+            exit 1
+          fi
+
+      - name: Find the packages to publish
+        run: |
+          # Sorted by directory, which puts bridge-core before the plugin that depends on it.
+          node <<'EOF'
+          const fs = require('node:fs');
+          const names = fs.readdirSync('packages').sort()
+            .map((dir) => `packages/${dir}/package.json`)
+            .filter((file) => fs.existsSync(file))
+            .map((file) => JSON.parse(fs.readFileSync(file, 'utf8')))
+            .filter((pkg) => !pkg.private)
+            .map((pkg) => pkg.name);
+          if (names.length === 0) throw new Error('no publishable package under packages/');
+          console.log(names.join('\n'));
+          fs.appendFileSync(process.env.GITHUB_ENV, `PACKAGES=${names.join(' ')}\n`);
+          EOF
+
+      - name: Install dependencies
+        run: npm install --workspaces --include=optional --ignore-scripts
+
+      # Only the published packages: the contracts and the prover are not in the tarballs.
+      - name: Build
+        run: for p in $PACKAGES; do npm run build --workspace "$p" --if-present; done
+
+      - name: Test
+        run: for p in $PACKAGES; do npm test --workspace "$p" --if-present; done
+
+      # The version lives only in the published tarballs and the tag, never in a commit, so
+      # a dev build from someone's branch adds nothing to that branch. A package that depends
+      # on another one published here is pinned to the same version. publishConfig is dropped
+      # in case a branch still points the packages at GitHub Packages.
+      - name: Set package versions
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+          const version = process.env.VERSION;
+          const names = new Set(process.env.PACKAGES.split(' '));
+          for (const dir of fs.readdirSync('packages')) {
+            const file = `packages/${dir}/package.json`;
+            if (!fs.existsSync(file)) continue;
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (!names.has(pkg.name)) continue;
+            pkg.version = version;
+            for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+              for (const dep of Object.keys(pkg[field] ?? {})) {
+                if (names.has(dep)) pkg[field][dep] = version;
+              }
+            }
+            delete pkg.publishConfig;
+            fs.writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+            console.log(`${pkg.name}@${version}`);
+          }
+          EOF
+
+      - name: Verify package contents
+        run: for p in $PACKAGES; do npm pack --workspace "$p" --dry-run; done
+
+      - name: Determine npm dist-tag
+        id: dist-tag
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A package that already has this version is skipped, so re-running after a failure
+      # part-way through publishes only what is missing.
+      - name: Publish to npm
+        run: |
+          for p in $PACKAGES; do
+            if [ -n "$(npm view "$p@$VERSION" version 2>/dev/null)" ]; then
+              echo "$p@$VERSION is already on npm, skipping"
+              continue
+            fi
+            npm publish --workspace "$p" --access public --tag "${{ steps.dist-tag.outputs.tag }}"
+          done
+
+      - name: Tag the published source
+        run: |
+          git tag "bridge-v$VERSION"
+          git push origin "bridge-v$VERSION"
