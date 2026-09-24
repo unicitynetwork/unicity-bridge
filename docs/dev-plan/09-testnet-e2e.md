@@ -149,7 +149,7 @@ genesis is a VERSION 2 mint transaction (Rust port must parse it), and SDK 3's
 
 **[3] redefined (2026-09-18): plugin architecture instead of cherry-picks.**
 Decision: bridge code is isolated in its own packages and pulled in only when a
-bridge is configured; sphere-sdk gets generic seams that any token plugin can
+bridge is configured; sphere-sdk gets a generic interface that any token plugin can
 use. Two stacked pieces:
 
 - *Piece 1, sphere-sdk `feat/token-plugins` (done, `5beaca67`):* `TokenPlugin`
