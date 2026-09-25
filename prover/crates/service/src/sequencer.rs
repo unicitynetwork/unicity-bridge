@@ -17,7 +17,9 @@
 //!    spent_root_new }], "spent_root": <live vault spentRoot> }` — exactly what
 //!    `relayer.js events` emits.
 
-use bridge_return_host::s2::{parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog};
+use bridge_return_host::s2::{
+    parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog,
+};
 
 /// Chain-sync backend for the accumulator.
 #[derive(Clone)]

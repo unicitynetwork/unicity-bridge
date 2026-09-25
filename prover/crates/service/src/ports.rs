@@ -51,7 +51,10 @@ impl Settler for Submitter {
 }
 
 impl ChainLog for ChainEvents {
-    async fn synced_accumulator(&self, known: Vec<SettledBatch>) -> Result<RebuiltAccumulator, ChainSyncError> {
+    async fn synced_accumulator(
+        &self,
+        known: Vec<SettledBatch>,
+    ) -> Result<RebuiltAccumulator, ChainSyncError> {
         ChainEvents::synced_accumulator(self, known).await
     }
 }

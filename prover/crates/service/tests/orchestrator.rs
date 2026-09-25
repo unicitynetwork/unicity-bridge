@@ -383,7 +383,11 @@ async fn history_nobody_holds_cannot_be_rebuilt() {
     h.reach("a", ReturnStatus::Failed).await;
     let failure = h.record("a").failure.unwrap();
     assert_eq!(failure.kind, ErrorKind::ChainRejected);
-    assert!(failure.message.contains("diverged from chain"), "{}", failure.message);
+    assert!(
+        failure.message.contains("diverged from chain"),
+        "{}",
+        failure.message
+    );
     assert_eq!(h.prover.calls(), 0);
 }
 
