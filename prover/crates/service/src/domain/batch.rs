@@ -1,5 +1,4 @@
-use bridge_return_core::PublicValues;
-use bridge_return_host::s2::SettledBatch;
+use bridge_return_host::{public_values::public_values_from_abi, s2::SettledBatch};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
@@ -66,7 +65,7 @@ impl Batch {
 
     pub fn settled_batch(&self) -> Option<SettledBatch> {
         let bundle = self.bundle.as_ref()?;
-        let public_values = PublicValues::from_abi(&hex_bytes(&bundle.public_values)?)?;
+        let public_values = public_values_from_abi(&hex_bytes(&bundle.public_values)?)?;
         Some(SettledBatch {
             nullifiers: self.nullifiers(),
             spent_root_old: public_values.spent_root_old,
