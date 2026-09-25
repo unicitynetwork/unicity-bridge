@@ -139,6 +139,16 @@ vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
 all-Rust submitter the plan calls for is not built; until it is, the container
 carries Node for this.
 
+The Ethereum RPC must serve logs and receipts back to the vault's deploy
+block: the wallet reads old lock transactions to verify tokens, and a fresh
+service rebuilds the spent-nullifier accumulator from every settlement since
+the deployment. publicnode keeps only about the last 10,000 blocks (some 33
+hours) and answers with empty results beyond that, which stalled the Sepolia
+service on 2026-09-25 once the first settlement aged out. The default is now
+Tenderly's public gateway, which serves the full history. A running service
+also fills gaps in the log from the batches it settled itself, so it survives a
+short-history RPC as long as every settlement went through it.
+
 `BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
 leaf whose transfer would revert before proving the batch; the reason is the
 token's own revert string (USDC: `ERC20: transfer amount exceeds balance`). It

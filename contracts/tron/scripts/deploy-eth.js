@@ -32,7 +32,7 @@ const SP1_VERIFIER = artifact("verifier/v6.1.0/SP1VerifierGroth16.sol/SP1Verifie
 
 function context() {
   const env = loadEnv();
-  const rpc = env.ETH_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  const rpc = env.ETH_RPC_URL || "https://sepolia.gateway.tenderly.co";
   const chainId = Number(env.ETH_CHAIN_ID || 11155111);
   if (!env.ETH_SK) throw new Error("ETH_SK not set in .env");
   const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });

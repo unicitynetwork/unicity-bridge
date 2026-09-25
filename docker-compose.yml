@@ -30,7 +30,7 @@ services:
       ETH_SK: ${ETH_SK:-}
       ETH_VAULT: ${ETH_VAULT:-}
       ETH_VAULT_DEPLOY_BLOCK: ${ETH_VAULT_DEPLOY_BLOCK:-}
-      ETH_RPC_URL: ${ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      ETH_RPC_URL: ${ETH_RPC_URL:-https://sepolia.gateway.tenderly.co}
       ETH_CHAIN_ID: ${ETH_CHAIN_ID:-11155111}
       TRON_SK: ${TRON_SK:-}
       TRON_VAULT: ${TRON_VAULT:-}

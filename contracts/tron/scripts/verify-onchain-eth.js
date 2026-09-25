@@ -7,7 +7,7 @@ const ABI = ["function verifyProof(bytes32 programVKey, bytes publicValues, byte
 
 async function main() {
   const env = loadEnv();
-  const rpc = env.ETH_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  const rpc = env.ETH_RPC_URL || "https://sepolia.gateway.tenderly.co";
   const provider = new ethers.JsonRpcProvider(rpc, Number(env.ETH_CHAIN_ID || 11155111), { staticNetwork: true });
   const bundlePath = process.argv[2] || path.join(__dirname, "..", "..", "..", "protocol/vectors/proof/b1-groth16.json");
   const b = JSON.parse(fs.readFileSync(bundlePath, "utf8"));

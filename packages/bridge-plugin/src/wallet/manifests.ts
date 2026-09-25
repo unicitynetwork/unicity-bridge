@@ -64,7 +64,7 @@ export const SEPOLIA_USDC_BRIDGE: EvmBridgeManifest = {
   asset: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
   confirmations: 12,
   decimals: 6,
-  rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+  rpcUrl: 'https://sepolia.gateway.tenderly.co',
   returnServiceUrl: 'http://localhost:8787',
   reasonTag: 39048,
   lockDomain: '158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932',
