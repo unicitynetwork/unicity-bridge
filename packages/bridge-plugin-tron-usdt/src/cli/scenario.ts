@@ -121,14 +121,12 @@ export async function buildDemo(
   const valueData = encodeBridgePaymentData(plugin.resolvedConfig.coinId, overrides.tokenValueAmount ?? amount);
   const tokenType = new TokenType(plugin.resolvedConfig.tokenType);
 
-  const mint = await MintTransaction.create(
-    DEMO_NETWORK,
-    recipient,
-    valueData,
+  const mint = await MintTransaction.create(DEMO_NETWORK, recipient, {
+    data: valueData,
     tokenType,
     salt,
-    new TronUsdtLockJustification(jData).toCBOR(),
-  );
+    justification: new TronUsdtLockJustification(jData).toCBOR(),
+  });
 
   return {
     plugin,

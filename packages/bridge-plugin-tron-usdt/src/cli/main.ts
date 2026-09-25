@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { CertifiedMintTransaction } from '@unicitylabs/state-transition-sdk/lib/transaction/CertifiedMintTransaction.js';
-import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
 import { VerificationStatus } from '@unicitylabs/state-transition-sdk/lib/verification/VerificationStatus.js';
 
 import {
@@ -24,7 +23,7 @@ const DEMO_CONFIG: TronUsdtBridgeConfig = {
   decimals: 6,
 };
 
-const service = () => new MintJustificationVerifierService();
+const noNestedTokens = (): void => {};
 
 interface Check {
   name: string;
@@ -33,7 +32,7 @@ interface Check {
 }
 
 async function run(build: Awaited<ReturnType<typeof buildDemo>>): Promise<{ status: VerificationStatus; message: string }> {
-  const r = await build.plugin.verifier.verify(build.certifiedTx, service());
+  const r = await build.plugin.verifier.verify(build.certifiedTx, noNestedTokens);
   return { status: r.status, message: r.message };
 }
 
@@ -141,7 +140,7 @@ async function verifyOnChain(args: Map<string, string>): Promise<number> {
   // internal SpherePaymentData(39050) envelope is not accepted for bridge tokens.
   const plugin = createTronUsdtBridgePlugin(config);
   const tx = await CertifiedMintTransaction.fromCBOR(hexToBytes(tokenHex));
-  const result = await plugin.verifier.verify(tx, service());
+  const result = await plugin.verifier.verify(tx, noNestedTokens);
   console.log(`Token type expected for this asset: ${plugin.tokenTypeHex}`);
   console.log(`Verification: ${result.status}${result.message ? ` — ${result.message}` : ''}`);
   return result.status === VerificationStatus.OK ? 0 : 1;

@@ -13,6 +13,7 @@
  */
 import { BurnPredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/BurnPredicate.js';
 import type { IPredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/IPredicate.js';
+import { StateMask } from '@unicitylabs/state-transition-sdk/lib/transaction/StateMask.js';
 import type { Token } from '@unicitylabs/state-transition-sdk/lib/transaction/Token.js';
 import { TransferTransaction } from '@unicitylabs/state-transition-sdk/lib/transaction/TransferTransaction.js';
 
@@ -73,8 +74,8 @@ export async function createBridgeBackBurnTransfer(
   const transfer = await TransferTransaction.create(
     token,
     reason.burnPredicate as unknown as IPredicate,
-    stateMask,
-    reason.reasonBytes,
+    StateMask.fromBytes(stateMask),
+    { data: reason.reasonBytes },
   );
   return { transfer, reason };
 }

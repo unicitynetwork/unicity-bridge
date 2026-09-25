@@ -7,10 +7,7 @@ import { MintJustificationVerifierService } from '@unicitylabs/state-transition-
 import { AMOUNT, buildScenario, CONFIRMATIONS, hexToBytes, makeLockLog, NONCE } from './helpers.js';
 
 async function verify(scenario: Awaited<ReturnType<typeof buildScenario>>) {
-  return scenario.plugin.verifier.verify(
-    scenario.certifiedTx,
-    undefined as unknown as MintJustificationVerifierService,
-  );
+  return scenario.plugin.verifier.verify(scenario.certifiedTx, () => {});
 }
 
 test('valid bridged mint verifies OK', async () => {

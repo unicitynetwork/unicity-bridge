@@ -60,7 +60,7 @@
   "dependencies": {
     "@noble/hashes": "2.2.0",
     "@unicitylabs/bridge-core": "0.1.0-bridge.2",
-    "@unicitylabs/state-transition-sdk": "https://registry.npmjs.org/@unicitylabs/state-transition-sdk/-/state-transition-sdk-2.0.0-rc.68bc1e5.tgz"
+    "@unicitylabs/state-transition-sdk": "3.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
