@@ -26,7 +26,7 @@ const HOST_BIN =
 
 function context() {
   const env = loadEnv();
-  const rpc = env.ETH_RPC_URL || "https://sepolia.gateway.tenderly.co";
+  const rpc = env.ETH_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
   const chainId = Number(env.ETH_CHAIN_ID || 11155111);
   if (!env.ETH_VAULT) throw new Error("ETH_VAULT not set in .env");
   const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });
