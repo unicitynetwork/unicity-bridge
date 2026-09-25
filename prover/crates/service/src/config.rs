@@ -22,6 +22,7 @@ pub struct ServiceConfig {
     pub idle_wait: Duration,
     pub max_batch_size: usize,
     pub max_batch_bytes: usize,
+    pub command_timeout: Duration,
     pub state_dir: Option<PathBuf>,
     pub retry: RetryPolicy,
     pub elf_path: Option<PathBuf>,
@@ -49,6 +50,7 @@ impl Default for ServiceConfig {
             idle_wait: Duration::ZERO,
             max_batch_size: 8,
             max_batch_bytes: 8 << 20,
+            command_timeout: Duration::from_secs(600),
             state_dir: None,
             retry: RetryPolicy::default(),
             elf_path: None,
@@ -84,6 +86,10 @@ impl ServiceConfig {
         }
         if let Some(size) = env_parsed("BRIDGE_RETURN_MAX_BATCH_SIZE")? {
             cfg.max_batch_size = positive(size, "BRIDGE_RETURN_MAX_BATCH_SIZE")?;
+        }
+        if let Some(secs) = env_parsed("BRIDGE_RETURN_COMMAND_TIMEOUT_SECS")? {
+            cfg.command_timeout =
+                Duration::from_secs(positive(secs, "BRIDGE_RETURN_COMMAND_TIMEOUT_SECS")? as u64);
         }
         if let Some(bytes) = env_parsed("BRIDGE_RETURN_MAX_BATCH_BYTES")? {
             cfg.max_batch_bytes = positive(bytes, "BRIDGE_RETURN_MAX_BATCH_BYTES")?;

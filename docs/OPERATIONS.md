@@ -88,6 +88,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_STATE_DIR` | `/data/state` | the journal, on the `return-data` volume |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE`, `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8`, `8388608` | most burns, and most summed input bytes, in one proof |
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
+| `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
@@ -144,10 +145,15 @@ block: the wallet reads old lock transactions to verify tokens, and a fresh
 service rebuilds the spent-nullifier accumulator from every settlement since
 the deployment. publicnode keeps only about the last 10,000 blocks (some 33
 hours) and answers with empty results beyond that, which stalled the Sepolia
-service on 2026-09-25 once the first settlement aged out. The default is now
-Tenderly's public gateway, which serves the full history. A running service
-also fills gaps in the log from the batches it settled itself, so it survives a
-short-history RPC as long as every settlement went through it.
+service on 2026-09-25 once the first settlement aged out. A running service
+fills gaps in the log from the batches it settled itself, so it survives a
+short-history RPC as long as every settlement went through it; a fresh service
+on an older vault needs a provider with full history. Tenderly's public gateway
+(`https://sepolia.gateway.tenderly.co`) has the history and is what the wallet
+manifest reads from, but it throttles bursts with HTTP 429, which left a
+settlement broadcast retrying for half an hour, so it is not the service's
+default. Commands the service runs against the chain are cut off after
+`BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` (default 600) and count as a failed attempt.
 
 `BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
 leaf whose transfer would revert before proving the batch; the reason is the

@@ -20,11 +20,13 @@
 use bridge_return_host::s2::{
     parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog,
 };
+use std::time::Duration;
 
 /// Chain-sync backend for the accumulator.
 #[derive(Clone)]
 pub struct ChainEvents {
     backend: Backend,
+    timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -39,17 +41,21 @@ impl ChainEvents {
         match std::env::var("BRIDGE_RETURN_EVENTS_CMD") {
             Ok(cmd) if !cmd.trim().is_empty() => Self {
                 backend: Backend::Command(cmd),
+                timeout: Duration::from_secs(600),
             },
-            _ => Self {
-                backend: Backend::None,
-            },
+            _ => Self::none(),
         }
     }
 
     pub fn none() -> Self {
         Self {
             backend: Backend::None,
+            timeout: Duration::from_secs(600),
         }
+    }
+
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
     }
 
     /// Whether a live watcher is configured — `false` means the vault is assumed
@@ -84,7 +90,7 @@ impl ChainEvents {
             // No watcher: pristine vault. `rebuild_verified` over an empty log
             // yields `spent_root = 0` with no on-chain assertion.
             Backend::None => Ok(SettledLog::default()),
-            Backend::Command(cmd) => run_events_command(cmd).await,
+            Backend::Command(cmd) => run_events_command(cmd, self.timeout).await,
         }
     }
 }
@@ -96,17 +102,25 @@ pub fn rebuild_accumulator(
     bridge_return_host::s2::rebuild(batches)
 }
 
-async fn run_events_command(cmd: &str) -> Result<SettledLog, ChainSyncError> {
+async fn run_events_command(cmd: &str, timeout: Duration) -> Result<SettledLog, ChainSyncError> {
     use std::process::Stdio;
 
-    let output = tokio::process::Command::new("sh")
+    let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(timeout, child)
         .await
+        .map_err(|_| {
+            ChainSyncError::Spawn(format!(
+                "events command timed out after {}s",
+                timeout.as_secs()
+            ))
+        })?
         .map_err(|e| ChainSyncError::Spawn(e.to_string()))?;
 
     if !output.status.success() {

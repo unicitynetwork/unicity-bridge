@@ -1,4 +1,4 @@
-use std::process::Stdio;
+use std::{process::Stdio, time::Duration};
 
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
@@ -12,6 +12,7 @@ use crate::{
 pub struct Submitter {
     submit_cmd: Option<String>,
     simulate_cmd: Option<String>,
+    timeout: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,7 +51,12 @@ impl Submitter {
         Self {
             submit_cmd,
             simulate_cmd,
+            timeout: Duration::from_secs(600),
         }
+    }
+
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
     }
 
     pub fn none() -> Self {
@@ -67,14 +73,14 @@ impl Submitter {
     pub async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
         match &self.submit_cmd {
             None => SubmitOutcome::Skipped,
-            Some(cmd) => run_submit_command(cmd, bundle).await,
+            Some(cmd) => run_submit_command(cmd, bundle, self.timeout).await,
         }
     }
 
     pub async fn simulate(&self, leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
         match &self.simulate_cmd {
             None => Ok(Vec::new()),
-            Some(cmd) => run_simulate_command(cmd, leaves).await,
+            Some(cmd) => run_simulate_command(cmd, leaves, self.timeout).await,
         }
     }
 }
@@ -83,7 +89,7 @@ fn env_command(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|cmd| !cmd.trim().is_empty())
 }
 
-async fn run_submit_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
+async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) -> SubmitOutcome {
     if bundle.proof_bytes == "0x" {
         return SubmitOutcome::Failed {
             message: "submit requested but the batch has no proof (prove_mode != sp1_groth16)"
@@ -92,7 +98,7 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
     }
     let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
     tracing::debug!(batch_id = %bundle.batch_id, cmd, "spawning S4 submit command");
-    let output = match run_with_stdin(cmd, payload.as_bytes()).await {
+    let output = match run_with_stdin(cmd, payload.as_bytes(), timeout).await {
         Ok(output) => output,
         Err(e) => return SubmitOutcome::Failed { message: e },
     };
@@ -117,9 +123,10 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
 async fn run_simulate_command(
     cmd: &str,
     leaves: &[LeafHex],
+    timeout: Duration,
 ) -> Result<Vec<Rejected>, SimulateError> {
     let payload = serde_json::json!({ "leaves": leaves }).to_string();
-    let output = run_with_stdin(cmd, payload.as_bytes())
+    let output = run_with_stdin(cmd, payload.as_bytes(), timeout)
         .await
         .map_err(SimulateError::Spawn)?;
     if !output.status.success() {
@@ -134,13 +141,18 @@ async fn run_simulate_command(
         .map_err(|e| SimulateError::Decode(format!("{e}; got: {}", snippet(stdout.trim()))))
 }
 
-async fn run_with_stdin(cmd: &str, payload: &[u8]) -> Result<std::process::Output, String> {
+async fn run_with_stdin(
+    cmd: &str,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     let mut child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("spawn command failed: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -149,10 +161,10 @@ async fn run_with_stdin(cmd: &str, payload: &[u8]) -> Result<std::process::Outpu
             .await
             .map_err(|e| format!("write to command failed: {e}"))?;
     }
-    child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("command wait failed: {e}"))
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(output) => output.map_err(|e| format!("command wait failed: {e}")),
+        Err(_) => Err(format!("command timed out after {}s", timeout.as_secs())),
+    }
 }
 
 fn snippet(s: &str) -> String {
@@ -186,6 +198,18 @@ mod tests {
 
     fn simulator(simulate: &str) -> Submitter {
         Submitter::with_commands(None, Some(simulate.to_string()))
+    }
+
+    #[tokio::test]
+    async fn run_command_is_cut_off_after_the_timeout() {
+        let outcome = submitter("sleep 5")
+            .with_timeout(Duration::from_millis(200))
+            .submit(&bundle())
+            .await;
+        assert!(
+            matches!(&outcome, SubmitOutcome::Failed { message } if message.contains("timed out")),
+            "{outcome:?}"
+        );
     }
 
     #[tokio::test]

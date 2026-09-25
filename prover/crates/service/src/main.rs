@@ -41,9 +41,9 @@ async fn main() {
             ReturnStore::memory(config.retry)
         }
     };
-    let submitter = Submitter::from_env();
+    let submitter = Submitter::from_env().with_timeout(config.command_timeout);
     tracing::info!("S4 submitter: {}", submitter.label());
-    let chain_events = ChainEvents::from_env();
+    let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
     if !chain_events.is_live() {
         tracing::warn!(
