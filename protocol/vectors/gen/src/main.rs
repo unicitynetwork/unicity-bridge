@@ -1,5 +1,5 @@
 //! Reference generator for the Unicity bridge cross-stack conformance vectors.
-//! `BRIDGE_PROTO_VERSION = 1`. See ../../interop.md.
+//! `BRIDGE_PROTO_VERSION = 2`. See ../../interop.md.
 //!
 //! Implemented (unambiguous hash / ABI / CBOR derivations): `config`, `lock`,
 //! `reason`, `nullifier`, `public`. Stubbed (need the SDK SMT / token relation):

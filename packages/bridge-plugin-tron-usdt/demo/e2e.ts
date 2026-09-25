@@ -324,7 +324,7 @@ async function mint(state: DemoState): Promise<void> {
   const amount = BigInt(intent.amount);
 
   // Bridge token value data (the value the verifier cross-checks against the lock):
-  // bare SDK PaymentAssetCollection CBOR, not SpherePaymentData(39050).
+  // the wallet's value format (SpherePaymentData, tag 39050); see src/value.ts.
   const valueData = encodeBridgePaymentData(plugin.resolvedConfig.coinId, amount);
   const tokenType = new TokenType(plugin.resolvedConfig.tokenType);
 

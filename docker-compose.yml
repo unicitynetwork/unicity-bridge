@@ -1,0 +1,24 @@
+services:
+  return-service:
+    build:
+      context: .
+      dockerfile: prover/Dockerfile
+    image: bridge-return-service
+    container_name: bridge-return-service
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      BRIDGE_RETURN_PROVE_MODE: ${BRIDGE_RETURN_PROVE_MODE:-precheck_only}
+      BRIDGE_DEPLOYMENT_CONFIG: /app/deployments/nile/${BRIDGE_DEPLOYMENT:-nile-usdt-v2.json}
+      UNICITY_GATEWAY: ${UNICITY_GATEWAY:-https://gateway.testnet2.unicity.network}
+      TRON_SK: ${TRON_SK:-}
+      TRON_VAULT: ${TRON_VAULT:-}
+      TRON_RPC_URL: ${TRON_RPC_URL:-https://nile.trongrid.io}
+      TRON_GRID_URL: ${TRON_RPC_URL:-https://nile.trongrid.io}
+    volumes:
+      - sp1-artifacts:/root/.sp1
+      - return-data:/data
+volumes:
+  sp1-artifacts:
+  return-data:

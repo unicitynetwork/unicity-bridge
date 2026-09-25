@@ -8,8 +8,8 @@ use bridge_return_sdk_ext::accumulator::{
     ordered_insert_witnesses, NonMembershipTerminal, NonMembershipWitness, NullifierTree,
 };
 use bridge_return_sdk_ext::bridge::{
-    bridge_lock_obligation, decode_bridged_payment_data, BridgeConfig as SdkBridgeConfig,
-    TRON_USDT_LOCK_JUSTIFICATION_TAG,
+    bridge_lock_obligation, decode_bridged_payment_data, encode_bridged_payment_data,
+    BridgeConfig as SdkBridgeConfig, TRON_USDT_LOCK_JUSTIFICATION_TAG,
 };
 use bridge_return_sdk_ext::trust::canonical_hash;
 use num_bigint::BigUint;
@@ -18,17 +18,23 @@ use unicity_token::api::bft::{
     InputRecord, RootTrustBase, RootTrustBaseNodeInfo, ShardId, ShardTreeCertificate,
     UnicityCertificate, UnicitySeal, UnicityTreeCertificate,
 };
-use unicity_token::api::{CertificationData, InclusionCertificate, InclusionProof, NetworkId};
+use unicity_token::api::{
+    calculate_leaf_value, CertificationData, InclusionCertificate, InclusionProof, NetworkId,
+};
+
+const FIXTURE_REFERENCE_TIME: u64 = 1_755_000_000;
 use unicity_token::cbor::{encode_array, encode_byte_string, encode_tag, encode_uint};
 use unicity_token::crypto::hash::{sha256, DataHash};
 use unicity_token::crypto::signer::{Secp256k1Signer, Signer};
 use unicity_token::payment::{
-    Asset, AssetId, PaymentAssetCollection, SplitMintJustification, SplitTokenRequest, TokenSplit,
+    split_output_commitment, Asset, AssetId, PaymentAssetCollection, Split, SplitBurn,
+    SplitManifest, SplitMintJustification, SplitToken,
 };
+use unicity_token::rsmst::build::Rsmst;
 use unicity_token::predicate::builtin::{BurnPredicate, SignaturePredicate};
 use unicity_token::predicate::unlock::sign_signature_unlock;
 use unicity_token::predicate::EncodedPredicate;
-use unicity_token::transaction::ids::{TokenSalt, TokenType};
+use unicity_token::transaction::ids::{TokenId, TokenSalt, TokenType};
 use unicity_token::transaction::{
     CertifiedMintTransaction, CertifiedTransferTransaction, MintTransaction, Minter, Transaction,
     TransferTransaction,
@@ -759,8 +765,9 @@ fn leaf_and_lock_ref(
 /// is the multi-leaf generalization of [`one_sibling_path`]: it lets every
 /// transition in a batch share a single anchor `UC*`, instead of one 2-leaf tree
 /// (and one anchor) per token. Leaf/branch hashing matches the SDK's
-/// `InclusionCertificate::verify` convention (LSB-first key bits; depth 255 is
-/// nearest the leaf, depth 0 nearest the root).
+/// `InclusionCertificate::verify` convention (MSB-first key bits, a branch hash
+/// that commits to the shared key prefix; depth 255 is nearest the leaf, depth 0
+/// nearest the root).
 fn multi_leaf_paths(leaves: &[([u8; 32], DataHash)]) -> ([u8; 32], Vec<InclusionCertificate>) {
     let entries: Vec<([u8; 32], [u8; 32])> = leaves
         .iter()
@@ -817,14 +824,14 @@ fn build_subtree(
     let zero_hash = build_subtree(&zeros, entries, d + 1, paths);
     let one_hash = build_subtree(&ones, entries, d + 1, paths);
     for &i in &zeros {
-        paths[i].0[d / 8] |= 1 << (d % 8);
+        set_bit(&mut paths[i].0, d);
         paths[i].1.push(one_hash);
     }
     for &i in &ones {
-        paths[i].0[d / 8] |= 1 << (d % 8);
+        set_bit(&mut paths[i].0, d);
         paths[i].1.push(zero_hash);
     }
-    node_hash(d as u8, &zero_hash, &one_hash)
+    node_hash(d as u8, &entries[indices[0]].0, &zero_hash, &one_hash)
 }
 
 pub fn build_split_bridge_fixture() -> SplitFixture {
@@ -850,26 +857,14 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
         BigUint::from(source_amount - output_amount),
     )])
     .unwrap();
-    let split = TokenSplit::split_unchecked(
+    let split = wallet_split(
         &source_token_for_split,
-        decode_bridged_payment_data,
         vec![
-            SplitTokenRequest::create(
-                signature_lock(&output_owner),
-                output_assets,
-                TokenType::new(config.token_type.to_vec()),
-                TokenSalt::from_bytes([0x51; 32]),
-            ),
-            SplitTokenRequest::create(
-                signature_lock(&change_owner),
-                change_assets,
-                TokenType::new(config.token_type.to_vec()),
-                TokenSalt::from_bytes([0x52; 32]),
-            ),
+            (signature_lock(&output_owner), output_assets, TokenSalt::from_bytes([0x51; 32])),
+            (signature_lock(&change_owner), change_assets, TokenSalt::from_bytes([0x52; 32])),
         ],
-        Some([0x55; 32]),
-    )
-    .unwrap();
+        [0x55; 32],
+    );
     let split_output = &split.tokens[0];
 
     let source_mint_state_id = unicity_token::api::StateId::derive(
@@ -919,8 +914,9 @@ pub fn build_split_bridge_fixture() -> SplitFixture {
         split_output.recipient.clone(),
         split_output.token_type.clone(),
         split_output.salt.clone(),
-        Some(split_output.assets.to_cbor()),
+        Some(encode_bridged_payment_data(&split_output.assets)),
         Some(split_justification.to_cbor()),
+        None,
     )
     .unwrap();
     let reason = BridgeBackReason {
@@ -1219,8 +1215,9 @@ fn bridge_mint_with_salt(
         signature_lock(owner),
         TokenType::new(config.token_type.to_vec()),
         TokenSalt::from_bytes(salt),
-        Some(assets.to_cbor()),
+        Some(encode_bridged_payment_data(&assets)),
         Some(lock_justification(config, amount, nonce)),
+        None,
     )
     .unwrap()
 }
@@ -1247,6 +1244,94 @@ fn token_with_single_mint(
     )
 }
 
+fn wallet_split(
+    token: &unicity_token::transaction::Token,
+    requests: Vec<(EncodedPredicate, PaymentAssetCollection, TokenSalt)>,
+    burn_state_mask: [u8; 32],
+) -> Split {
+    let network_id = token.genesis().transaction().network_id();
+    let token_type = token.token_type().clone();
+    let source_assets =
+        decode_bridged_payment_data(token.genesis().transaction().data().unwrap()).unwrap();
+
+    let entries: Vec<_> = requests
+        .into_iter()
+        .map(|(recipient, assets, salt)| {
+            let token_id = TokenId::derive(network_id, &salt);
+            let commitment = split_output_commitment(
+                token.id(),
+                network_id,
+                &recipient,
+                &salt,
+                &token_id,
+                &token_type,
+                &encode_bridged_payment_data(&assets),
+            );
+            (recipient, assets, salt, token_id, commitment)
+        })
+        .collect();
+
+    let mut roots = Vec::new();
+    let mut trees = Vec::new();
+    for source_asset in source_assets.as_slice() {
+        let mut tree = Rsmst::new();
+        for (_, assets, _, token_id, commitment) in &entries {
+            if let Some(output) = assets.get(source_asset.id()) {
+                tree.insert(*token_id.bytes(), *commitment, output.value().clone())
+                    .unwrap();
+            }
+        }
+        let built = tree.build().unwrap();
+        assert_eq!(built.root_sum(), source_asset.value(), "split must conserve value");
+        roots.push(built.root_hash());
+        trees.push((source_asset.id().clone(), built));
+    }
+
+    let manifest = SplitManifest::create(roots).unwrap();
+    let manifest_bytes = manifest.to_cbor();
+    let burn_predicate = BurnPredicate::new(manifest.reason_hash().to_vec());
+    let (source_state_hash, lock_script) = token.latest_state();
+    let transaction = TransferTransaction::new(
+        source_state_hash,
+        lock_script,
+        burn_predicate.to_encoded(),
+        burn_state_mask.to_vec(),
+        Some(manifest_bytes.clone()),
+        None,
+    );
+
+    let tokens = entries
+        .into_iter()
+        .map(|(recipient, assets, salt, token_id, _)| {
+            let proofs = assets
+                .as_slice()
+                .iter()
+                .map(|asset| {
+                    let (_, built) = trees.iter().find(|(id, _)| id == asset.id()).unwrap();
+                    built.proof(token_id.bytes()).unwrap()
+                })
+                .collect();
+            SplitToken {
+                network_id,
+                recipient,
+                token_type: token_type.clone(),
+                salt,
+                assets,
+                proofs,
+            }
+        })
+        .collect();
+
+    Split {
+        burn: SplitBurn {
+            owner_predicate: burn_predicate,
+            transaction,
+            manifest: manifest_bytes,
+        },
+        tokens,
+    }
+}
+
 fn bridge_burn(mint: &MintTransaction, reason_bytes: Vec<u8>) -> TransferTransaction {
     TransferTransaction::new(
         mint.calculate_state_hash(),
@@ -1254,21 +1339,39 @@ fn bridge_burn(mint: &MintTransaction, reason_bytes: Vec<u8>) -> TransferTransac
         BurnPredicate::new(sha256(&reason_bytes).data().to_vec()).to_encoded(),
         vec![0x99; 32],
         Some(reason_bytes),
+        None,
     )
 }
 
 fn leaf_hash(state_id: &[u8; 32], tx_hash: &DataHash) -> [u8; 32] {
+    let leaf_value = calculate_leaf_value(tx_hash, FIXTURE_REFERENCE_TIME);
     let mut preimage = vec![0x00];
     preimage.extend_from_slice(state_id);
-    preimage.extend_from_slice(tx_hash.data());
+    preimage.extend_from_slice(leaf_value.data());
     digest(&preimage)
 }
 
-fn node_hash(depth: u8, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+fn node_hash(depth: u8, key: &[u8; 32], left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut preimage = vec![0x01, depth];
+    preimage.extend_from_slice(&prefix_region(key, depth as usize));
     preimage.extend_from_slice(left);
     preimage.extend_from_slice(right);
     digest(&preimage)
+}
+
+fn prefix_region(key: &[u8; 32], depth: usize) -> [u8; 32] {
+    let mut region = [0u8; 32];
+    let full_bytes = depth / 8;
+    let prefix_bits = depth % 8;
+    region[..full_bytes].copy_from_slice(&key[..full_bytes]);
+    if prefix_bits != 0 {
+        region[full_bytes] = key[full_bytes] & (0xffu8 << (8 - prefix_bits));
+    }
+    region
+}
+
+fn set_bit(bitmap: &mut [u8], depth: usize) {
+    bitmap[depth / 8] |= 0x80 >> (depth % 8);
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -1276,7 +1379,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn bit_at(key: &[u8; 32], depth: usize) -> bool {
-    (key[depth / 8] >> (depth % 8)) & 1 == 1
+    key[depth / 8] & (0x80 >> (depth % 8)) != 0
 }
 
 fn one_sibling_path(
@@ -1286,18 +1389,17 @@ fn one_sibling_path(
     sibling_tx_hash: &DataHash,
 ) -> (InclusionCertificate, [u8; 32]) {
     let depth = (0..=255)
-        .rev()
         .find(|depth| bit_at(state_id, *depth) != bit_at(sibling_state_id, *depth))
         .unwrap();
     let leaf = leaf_hash(state_id, tx_hash);
     let sibling = leaf_hash(sibling_state_id, sibling_tx_hash);
     let root = if bit_at(state_id, depth) {
-        node_hash(depth as u8, &sibling, &leaf)
+        node_hash(depth as u8, state_id, &sibling, &leaf)
     } else {
-        node_hash(depth as u8, &leaf, &sibling)
+        node_hash(depth as u8, state_id, &leaf, &sibling)
     };
     let mut raw = vec![0u8; 32];
-    raw[depth / 8] |= 1 << (depth % 8);
+    set_bit(&mut raw, depth);
     raw.extend_from_slice(&sibling);
     (InclusionCertificate::decode(&raw).unwrap(), root)
 }
@@ -1362,13 +1464,15 @@ fn proof(
     let tx_hash = transaction.calculate_transaction_hash();
     let unlock = sign_signature_unlock(owner, transaction.source_state_hash(), &tx_hash);
     InclusionProof {
-        certification_data: Some(CertificationData::new(
+        certification_data: CertificationData::new(
             transaction.lock_script().clone(),
             transaction.source_state_hash().clone(),
             tx_hash,
             unlock,
-        )),
-        inclusion_certificate: Some(certificate),
+            transaction.expires_at(),
+        ),
+        reference_time: FIXTURE_REFERENCE_TIME,
+        inclusion_certificate: certificate,
         unicity_certificate: uc,
     }
 }

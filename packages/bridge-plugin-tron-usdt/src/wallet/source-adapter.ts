@@ -21,7 +21,7 @@ import { encodeBridgePaymentData } from '../value.js';
 import { queryAllowance } from './allowance.js';
 import { buildBridgeInPlan, type TronCall } from './facade.js';
 import type { LoadedBridge } from './manifest.js';
-import { buildSelfMintVerifierService } from './self-mint-verifier.js';
+import { selfMintVerifier } from './self-mint-verifier.js';
 
 // The chain-neutral adapter contract + its DTOs now live in @unicitylabs/bridge-core
 // (08 Phase 4 item 1). Re-exported here so importers of the wallet surface keep
@@ -150,7 +150,7 @@ export function createTronSourceAdapter(
         tokenType: cfg.tokenType,
         salt: fromHex(saltHex),
         genesisReason,
-        mintJustificationVerifierOverride: buildSelfMintVerifierService(bridge, deps),
+        mintJustificationVerifiers: [selfMintVerifier(bridge, deps)],
       };
     },
   };

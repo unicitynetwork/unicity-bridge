@@ -136,8 +136,7 @@ async function verifyOnChain(args: Map<string, string>): Promise<number> {
     rpcUrl,
     apiKey: args.get('api-key'),
   };
-  // Bridge tokens carry value as bare SDK PaymentAssetCollection CBOR. Sphere's
-  // internal SpherePaymentData(39050) envelope is not accepted for bridge tokens.
+  // Bridge tokens carry value in the wallet's format (SpherePaymentData, tag 39050); see src/value.ts.
   const plugin = createTronUsdtBridgePlugin(config);
   const tx = await CertifiedMintTransaction.fromCBOR(hexToBytes(tokenHex));
   const result = await plugin.verifier.verify(tx, noNestedTokens);

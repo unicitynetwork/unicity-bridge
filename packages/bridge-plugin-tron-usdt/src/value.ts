@@ -6,40 +6,51 @@ import { PaymentAssetCollection } from '@unicitylabs/state-transition-sdk/lib/pa
 
 import { bytesEqual } from './hex.js';
 
+export const WALLET_VALUE_TAG = 39050n;
+export const WALLET_VALUE_VERSION = 1n;
+
 /**
  * Reads the bridged-coin amount declared in a token's `data`, or null if the
  * token declares no value for `coinId`. Injected into the verifier so the
  * mint-reason check can confirm the token's declared value equals the locked
  * amount.
- *
- * Production bridge tokens use bare SDK `PaymentAssetCollection` CBOR in
- * `MintTransaction.data`. Sphere's internal `SpherePaymentData` envelope
- * (CBOR tag 39050) is wallet-to-wallet only and must not appear on bridged
- * tokens.
  */
 export type BridgedAmountExtractor = (data: Uint8Array | null, coinId: Uint8Array) => bigint | null;
 
-/** Production bridge value data: bare SDK `PaymentAssetCollection` CBOR. */
+/** Encode a single-asset value payload in the wallet format, no memo. */
 export function encodeBridgePaymentData(coinId: Uint8Array, amount: bigint): Uint8Array {
-  return PaymentAssetCollection.create(new Asset(new AssetId(coinId), amount)).toCBOR();
+  const assets = PaymentAssetCollection.create(new Asset(new AssetId(coinId), amount));
+  return CborSerializer.encodeTag(
+    WALLET_VALUE_TAG,
+    CborSerializer.encodeArray(
+      CborSerializer.encodeUnsignedInteger(WALLET_VALUE_VERSION),
+      assets.toCBOR(),
+      CborSerializer.encodeNullable(null, CborSerializer.encodeByteString),
+    ),
+  );
 }
 
-/** Decode production bridge value data; returns null for SpherePaymentData(39050) or other non-bridge formats. */
+/**
+ * Decode the wallet-format payload and return the amount it declares for
+ * `coinId`; null when the bytes are not that format, the version is unknown, or
+ * the coin is absent.
+ */
 export function decodeBridgePaymentData(data: Uint8Array | null, coinId: Uint8Array): bigint | null {
   if (!data) return null;
   try {
-    return PaymentAssetCollection.fromCBOR(data).get(new AssetId(coinId))?.value ?? null;
+    const tag = CborDeserializer.decodeTag(data);
+    if (tag.tag !== WALLET_VALUE_TAG) return null;
+    const fields = CborDeserializer.decodeArray(tag.data, 3);
+    if (CborDeserializer.decodeUnsignedInteger(fields[0]) !== WALLET_VALUE_VERSION) return null;
+    return PaymentAssetCollection.fromCBOR(fields[1]).get(new AssetId(coinId))?.value ?? null;
   } catch {
     return null;
   }
 }
 
 /**
- * Minimal self-contained value envelope used by the CLI/tests:
- * `CBOR [ coinId: bstr, amount: uint ]`.
- *
- * @deprecated Use {@link encodeBridgePaymentData}; this simple envelope is not
- * the production bridge token format.
+ * Minimal self-contained value envelope used by the CLI/tests only:
+ * `CBOR [ coinId: bstr, amount: uint ]`. Never appears on a real bridged token.
  */
 export function encodeBridgedValue(coinId: Uint8Array, amount: bigint): Uint8Array {
   return CborSerializer.encodeArray(

@@ -72,3 +72,32 @@ too expensive for routine local validation: the B=1 token fixture stayed
 CPU-active for more than 15 minutes and was interrupted. Use the normal Rust
 `check-vectors` path for fast conformance until there is a smaller SP1 smoke
 fixture or a cheaper relation.
+
+## Docker
+
+`prover/Dockerfile` builds everything from the repository root (its build
+context; `/.dockerignore` keeps the sibling checkouts and build output out):
+
+```sh
+# from the repository root
+docker build -f prover/Dockerfile -t bridge-return-service .
+docker build -f prover/Dockerfile --target vkey -o prover/target/docker .   # ELF + vkey only
+docker compose up return-service                                           # port 8787
+```
+
+Stages: `guest` builds the SP1 guest ELF inside Succinct's own image for the
+pinned SP1 release, which is the reproducible build a vault's verifying key
+must match; `host` builds the host and service binaries with the SP1 host SDK
+(needs `protoc` and Go 1.24 for the native Groth16 library) and derives the
+vkey from the ELF (`vkey.json` / `vkey.txt`, no proving involved), then runs
+`check-vectors`; `contracts` compiles the vault artifact the Node relayer
+reads; `runtime` carries the service, the relayer and the frozen deployment
+files. The `vkey` stage is the ELF and key alone, for `--output`.
+
+The container starts in `precheck_only`. For real proofs set
+`BRIDGE_RETURN_PROVE_MODE=sp1_groth16`; the first proof downloads the Groth16
+circuit and proving key (about 6 GB) into the `sp1-artifacts` volume, and the
+container needs about 16 GB of memory. Settlement runs through
+`contracts/tron/scripts/relayer.js` until the all-Rust submitter lands; it
+takes `TRON_SK`, `TRON_VAULT` and `TRON_RPC_URL` from the container
+environment (the entrypoint writes them to the `.env` file the script reads).

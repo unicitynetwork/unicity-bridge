@@ -11,6 +11,7 @@ use bridge_return_guest::wire;
 use bridge_return_host::s1;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use tower_http::cors::CorsLayer;
 
 use crate::{
     store::{ReturnRecord, ReturnStatus},
@@ -24,6 +25,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/returns", post(create_return).get(get_return_by_nullifier))
         .route("/returns/:id", get(get_return))
         .route("/batches/:id", get(get_batch))
+        .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
@@ -146,7 +148,7 @@ async fn create_return(
         report.public_values,
         wire_input,
     );
-    let (record, inserted) = state.store.insert_or_get(record);
+    let (record, inserted) = state.store.insert_or_requeue(record);
     if inserted {
         state.queue.enqueue(record.return_id.clone()).await?;
         tracing::info!(
@@ -230,10 +232,7 @@ impl IntoResponse for ApiError {
         };
         let recoverable = matches!(
             &self,
-            ApiError::PrecheckRejected(_)
-                | ApiError::Queue(_)
-                | ApiError::Host(_)
-                | ApiError::ChainUnsynced(_)
+            ApiError::Queue(_) | ApiError::Host(_) | ApiError::ChainUnsynced(_)
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves
