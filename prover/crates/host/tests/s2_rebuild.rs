@@ -83,10 +83,55 @@ fn rebuild_rejects_a_tampered_root() {
 }
 
 #[test]
-fn rebuild_rejects_an_out_of_order_log() {
+fn rebuild_links_batches_by_root_regardless_of_log_order() {
+    let ordered = settled_log(&[vec![key(1)], vec![key(2)], vec![key(3)]]);
+    let mut shuffled = ordered.clone();
+    shuffled.swap(0, 2);
+    let acc = rebuild(&shuffled).expect("rebuild");
+    assert_eq!(acc.spent_root, rebuild(&ordered).unwrap().spent_root);
+    assert_eq!(acc.spent_count, 3);
+}
+
+#[test]
+fn rebuild_takes_a_batch_the_chain_log_lacks_from_another_source() {
+    let all = settled_log(&[vec![key(1), key(2)], vec![key(3)]]);
+    let chain_log_missing_the_first = vec![all[1].clone()];
+    assert!(rebuild(&chain_log_missing_the_first).is_err());
+
+    let mut union = chain_log_missing_the_first;
+    union.push(all[0].clone());
+    let acc = rebuild(&union).expect("rebuild");
+    assert_eq!(acc.spent_root, all[1].spent_root_new);
+    assert_eq!(acc.spent_count, 3);
+}
+
+#[test]
+fn rebuild_applies_an_identical_duplicate_once() {
+    let all = settled_log(&[vec![key(1)], vec![key(2)]]);
+    let with_duplicate = vec![all[0].clone(), all[1].clone(), all[1].clone()];
+    let acc = rebuild(&with_duplicate).expect("rebuild");
+    assert_eq!(acc.spent_count, 2);
+    assert_eq!(acc.spent_root, all[1].spent_root_new);
+}
+
+#[test]
+fn rebuild_rejects_a_batch_no_root_reaches() {
     let mut log = settled_log(&[vec![key(1)], vec![key(2)]]);
-    log.swap(0, 1); // second batch no longer chains from EMPTY_TREE_ROOT
-    assert!(rebuild(&log).is_err());
+    let mut orphan = log[1].clone();
+    orphan.spent_root_old = key(99);
+    log.push(orphan);
+    let err = rebuild(&log).unwrap_err().to_string();
+    assert!(err.contains("does not chain"), "{err}");
+}
+
+#[test]
+fn rebuild_rejects_two_different_batches_from_one_root() {
+    let mut log = settled_log(&[vec![key(1)], vec![key(2)]]);
+    let mut rival = log[1].clone();
+    rival.nullifiers = vec![key(3)];
+    log.push(rival);
+    let err = rebuild(&log).unwrap_err().to_string();
+    assert!(err.contains("both continue root"), "{err}");
 }
 
 #[test]

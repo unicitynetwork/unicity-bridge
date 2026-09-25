@@ -95,7 +95,11 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
 
     async fn prove_stage(&self, batch: &Batch) -> Stage {
         tracing::info!(batch_id = %batch.id, members = batch.members.len(), "batch proving started");
-        let acc = match self.chain.synced_accumulator().await {
+        let acc = match self
+            .chain
+            .synced_accumulator(self.store.read(|ledger| ledger.settled_batches()))
+            .await
+        {
             Ok(acc) => acc,
             Err(e) => {
                 return self.fail(
@@ -186,7 +190,11 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
     }
 
     async fn settle_stage(&self, batch: &Batch) -> Stage {
-        let acc = match self.chain.synced_accumulator().await {
+        let acc = match self
+            .chain
+            .synced_accumulator(self.store.read(|ledger| ledger.settled_batches()))
+            .await
+        {
             Ok(acc) => acc,
             Err(e) => {
                 return self.fail(

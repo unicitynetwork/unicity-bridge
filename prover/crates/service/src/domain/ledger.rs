@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bridge_return_host::s2::SettledBatch;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -97,6 +98,14 @@ impl Ledger {
         self.batches
             .values()
             .find(|b| b.status == BatchStatus::Proving)
+    }
+
+    pub fn settled_batches(&self) -> Vec<SettledBatch> {
+        self.batches
+            .values()
+            .filter(|b| b.status == BatchStatus::Settled)
+            .filter_map(Batch::settled_batch)
+            .collect()
     }
 
     pub fn unsettled_proofs(&self) -> Vec<Batch> {
@@ -410,6 +419,8 @@ fn schedule_retry(
 mod tests {
     use std::time::Duration;
 
+    use bridge_return_core::public_values_abi;
+
     use bridge_return_core::PublicValues;
 
     use super::*;
@@ -519,6 +530,51 @@ mod tests {
 
     fn status(ledger: &Ledger, id: &str) -> ReturnStatus {
         ledger.get(id).unwrap().record.status.clone()
+    }
+
+    #[test]
+    fn settled_batches_carry_the_roots_of_their_public_values() {
+        let public_values = PublicValues {
+            domain_tag: [0xd; 32],
+            config_hash: [0xc; 32],
+            trust_base_hash: [1; 32],
+            spent_root_old: [0; 32],
+            spent_root_new: [7; 32],
+            return_root: [2; 32],
+            lock_ref_root: [3; 32],
+            batch_size: 1,
+            total_amount: [0; 32],
+        };
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100), accepted("b", 0xB, 2, 200)]);
+        let first = formed(&mut ledger, &["a"], 300);
+        let mut settled_bundle = bundle(&first, &[[0xA; 32]]);
+        settled_bundle.public_values =
+            format!("0x{}", hex::encode(public_values_abi(&public_values)));
+        ledger.apply(
+            Event::BatchProven {
+                id: first.clone(),
+                bundle: settled_bundle,
+                spent_root_old: hex32(&[0; 32]),
+                at_ms: 400,
+            },
+            &retry(),
+        );
+        ledger.apply(
+            Event::BatchSettled {
+                id: first,
+                txid: Some("0xfeed".to_string()),
+                at_ms: 500,
+            },
+            &retry(),
+        );
+        let second = formed(&mut ledger, &["b"], 600);
+        proven(&mut ledger, &second, &[[0xB; 32]], 700);
+
+        let settled = ledger.settled_batches();
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].nullifiers, vec![[0xA; 32]]);
+        assert_eq!(settled[0].spent_root_old, [0; 32]);
+        assert_eq!(settled[0].spent_root_new, [7; 32]);
     }
 
     #[test]

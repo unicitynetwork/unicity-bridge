@@ -1,7 +1,9 @@
+use bridge_return_core::PublicValues;
+use bridge_return_host::s2::SettledBatch;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::store::{hex32, parse_hex32, BatchBundle};
+use crate::store::{hex32, hex_bytes, parse_hex32, BatchBundle};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +62,16 @@ impl Batch {
             .flat_map(|b| b.leaves.iter())
             .filter_map(|l| parse_hex32(&l.nullifier))
             .collect()
+    }
+
+    pub fn settled_batch(&self) -> Option<SettledBatch> {
+        let bundle = self.bundle.as_ref()?;
+        let public_values = PublicValues::from_abi(&hex_bytes(&bundle.public_values)?)?;
+        Some(SettledBatch {
+            nullifiers: self.nullifiers(),
+            spent_root_old: public_values.spent_root_old,
+            spent_root_new: public_values.spent_root_new,
+        })
     }
 
     pub fn is_unsettled_proof(&self) -> bool {

@@ -27,7 +27,7 @@ use crate::{HostError, Result};
 /// One settled batch, as read from the vault's events. `nullifiers` are the
 /// per-leaf `Released.nullifier` values **in the batch's leaf order**; the roots
 /// are the matching `BatchFulfilled` fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettledBatch {
     pub nullifiers: Vec<[u8; 32]>,
     pub spent_root_old: [u8; 32],
@@ -97,28 +97,24 @@ pub struct RebuiltAccumulator {
     pub spent_count: usize,
 }
 
-/// Replay `batches` (in chain order) into the accumulator, checking that each
-/// batch's `spentRootOld` chains from the previous root and its `spentRootNew`
-/// matches the root the accumulator computes. A mismatch means the event log is
-/// out of order, incomplete, or tampered — the relayer must not settle on top of
-/// an unverified state.
+/// Replay `batches` into the accumulator by following the root links from the
+/// empty tree: each step takes the batch whose `spentRootOld` is the current
+/// root and checks that its `spentRootNew` is what the accumulator computes.
+/// The input may come from more than one source and in any order; an identical
+/// duplicate is applied once. A batch no reached root continues, or two
+/// different batches continuing the same root, mean the log is incomplete or
+/// tampered — the relayer must not settle on top of an unverified state.
 pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
     let mut tree = NullifierTree::new();
     let mut root = EMPTY_TREE_ROOT;
     let mut spent_count = 0usize;
+    let mut used = vec![false; batches.len()];
 
-    for (i, batch) in batches.iter().enumerate() {
-        if batch.spent_root_old != root {
-            return Err(HostError::Check(format!(
-                "S2 batch {i}: spentRootOld 0x{} does not chain from current root 0x{}",
-                hex::encode(batch.spent_root_old),
-                hex::encode(root),
-            )));
-        }
+    while let Some(i) = next_link(batches, &used, &root)? {
+        let batch = &batches[i];
         if batch.nullifiers.is_empty() {
             return Err(HostError::Check(format!("S2 batch {i}: empty batch")));
         }
-        // Recompute the transition the same way the circuit did.
         let (_, new_root) = ordered_insert_witnesses(&tree, &batch.nullifiers)
             .map_err(|e| HostError::Check(format!("S2 batch {i}: insert failed: {e:?}")))?;
         if new_root != batch.spent_root_new {
@@ -133,8 +129,21 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
                 HostError::Check(format!("S2 batch {i}: duplicate nullifier replayed: {e:?}"))
             })?;
         }
+        for (j, other) in batches.iter().enumerate() {
+            if other == batch {
+                used[j] = true;
+            }
+        }
         root = new_root;
         spent_count += batch.nullifiers.len();
+    }
+
+    if let Some(i) = used.iter().position(|u| !u) {
+        return Err(HostError::Check(format!(
+            "S2 batch {i}: spentRootOld 0x{} does not chain from any settled root (rebuild stopped at 0x{})",
+            hex::encode(batches[i].spent_root_old),
+            hex::encode(root),
+        )));
     }
 
     Ok(RebuiltAccumulator {
@@ -142,6 +151,26 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         spent_root: root,
         spent_count,
     })
+}
+
+fn next_link(batches: &[SettledBatch], used: &[bool], root: &[u8; 32]) -> Result<Option<usize>> {
+    let mut found: Option<usize> = None;
+    for (i, batch) in batches.iter().enumerate() {
+        if used[i] || batch.spent_root_old != *root {
+            continue;
+        }
+        match found {
+            None => found = Some(i),
+            Some(f) if batches[f] == *batch => {}
+            Some(f) => {
+                return Err(HostError::Check(format!(
+                    "S2 batches {f} and {i} both continue root 0x{} with different contents",
+                    hex::encode(root),
+                )))
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Rebuild from a [`SettledLog`] and, when the watcher reported the vault's live

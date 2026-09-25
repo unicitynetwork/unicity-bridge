@@ -346,6 +346,48 @@ async fn root_moved_during_proof_rebases_once_and_proves_again() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn history_the_chain_no_longer_serves_comes_from_the_journal() {
+    let chain = FakeChainLog::new();
+    let h = Harness::start(
+        ReturnStore::default(),
+        &config(0, RetryPolicy::default()),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+        chain.clone(),
+    );
+    let first = h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Settled).await;
+    chain.settle_externally(&[first]);
+    let root_after_first = chain.spent_root();
+    chain.forget_history();
+
+    h.accept("b", 12, 0x62);
+    h.reach("b", ReturnStatus::Settled).await;
+    assert!(h.batch_of("b").chains_onto(&root_after_first));
+    assert_eq!(h.settler.submitted().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn history_nobody_holds_cannot_be_rebuilt() {
+    let chain = FakeChainLog::new();
+    chain.settle_externally(&[nullifier_of(&member(99, 0x70))]);
+    chain.forget_history();
+    let h = Harness::start(
+        ReturnStore::memory(retry(1, 0)),
+        &config(0, retry(1, 0)),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+        chain,
+    );
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Failed).await;
+    let failure = h.record("a").failure.unwrap();
+    assert_eq!(failure.kind, ErrorKind::ChainRejected);
+    assert!(failure.message.contains("diverged from chain"), "{}", failure.message);
+    assert_eq!(h.prover.calls(), 0);
+}
+
+#[tokio::test(start_paused = true)]
 async fn stale_root_from_settler_rebases() {
     let chain = FakeChainLog::new();
     let moved = chain.clone();

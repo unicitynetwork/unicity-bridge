@@ -17,7 +17,7 @@
 //!    spent_root_new }], "spent_root": <live vault spentRoot> }` — exactly what
 //!    `relayer.js events` emits.
 
-use bridge_return_host::s2::{parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledLog};
+use bridge_return_host::s2::{parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog};
 
 /// Chain-sync backend for the accumulator.
 #[derive(Clone)]
@@ -68,8 +68,12 @@ impl ChainEvents {
     /// reconstructed root against the vault's live `spentRoot` when the watcher
     /// reports it. The returned accumulator's `spent_root` equals the value the
     /// vault will check `spent_root_old` against in `fulfillBatch`.
-    pub async fn synced_accumulator(&self) -> Result<RebuiltAccumulator, ChainSyncError> {
-        let log = self.fetch_log().await?;
+    pub async fn synced_accumulator(
+        &self,
+        known: Vec<SettledBatch>,
+    ) -> Result<RebuiltAccumulator, ChainSyncError> {
+        let mut log = self.fetch_log().await?;
+        log.batches.extend(known);
         rebuild_verified(&log).map_err(|e| ChainSyncError::Rebuild(e.to_string()))
     }
 

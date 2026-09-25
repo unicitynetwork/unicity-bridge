@@ -79,7 +79,7 @@ async fn accumulator(
     // no watcher this rebuilds the empty log (`spent_root = 0`, pristine vault).
     let acc = state
         .chain_events
-        .synced_accumulator()
+        .synced_accumulator(state.store.read(|ledger| ledger.settled_batches()))
         .await
         .map_err(|e| ApiError::ChainUnsynced(e.to_string()))?;
     Ok(Json(AccumulatorResponse {

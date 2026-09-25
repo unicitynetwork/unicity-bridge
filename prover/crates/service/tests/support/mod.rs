@@ -204,11 +204,19 @@ impl FakeChainLog {
             .unwrap()
             .spent_root
     }
+
+    pub fn forget_history(&self) {
+        self.log.lock().unwrap().batches.clear();
+    }
 }
 
 impl ChainLog for FakeChainLog {
-    async fn synced_accumulator(&self) -> Result<RebuiltAccumulator, ChainSyncError> {
-        let log = self.log.lock().unwrap().clone();
+    async fn synced_accumulator(
+        &self,
+        known: Vec<SettledBatch>,
+    ) -> Result<RebuiltAccumulator, ChainSyncError> {
+        let mut log = self.log.lock().unwrap().clone();
+        log.batches.extend(known);
         s2::rebuild_verified(&log).map_err(|e| ChainSyncError::Rebuild(e.to_string()))
     }
 }
