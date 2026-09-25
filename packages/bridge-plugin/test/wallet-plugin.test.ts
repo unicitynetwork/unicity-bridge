@@ -101,7 +101,7 @@ test('mintBridgedToken maps the adapter request onto the wallet custom mint 1:1'
   ]);
 });
 
-test('mintedAgainst: only a token whose lock names this vault is returnable here', () => {
+test('mintedAgainst: only a token whose lock names this vault is returnable here', async () => {
   const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
   const cfg = loaded!.plugin.resolvedConfig;
   const lockedBy = (lockContractHex: string, chainId = cfg.chainId): Uint8Array =>
@@ -115,9 +115,9 @@ test('mintedAgainst: only a token whose lock names this vault is returnable here
       nonce: 1n,
     }).toCBOR();
 
-  assert.equal(mintedAgainst(loaded!, lockedBy(cfg.lockContractHex)), true);
-  assert.equal(mintedAgainst(loaded!, lockedBy('ab'.repeat(20))), false, 'a superseded vault');
-  assert.equal(mintedAgainst(loaded!, lockedBy(cfg.lockContractHex, TRON_NILE_CHAIN_ID + 1)), false, 'another chain');
-  assert.equal(mintedAgainst(loaded!, new Uint8Array([1, 2, 3])), false, 'not a lock justification at all');
-  assert.equal(mintedAgainst(loaded!, null), false, 'minted without a reason');
+  assert.equal(await mintedAgainst(loaded!, lockedBy(cfg.lockContractHex)), true);
+  assert.equal(await mintedAgainst(loaded!, lockedBy('ab'.repeat(20))), false, 'a superseded vault');
+  assert.equal(await mintedAgainst(loaded!, lockedBy(cfg.lockContractHex, TRON_NILE_CHAIN_ID + 1)), false, 'another chain');
+  assert.equal(await mintedAgainst(loaded!, new Uint8Array([1, 2, 3])), false, 'not a lock justification at all');
+  assert.equal(await mintedAgainst(loaded!, null), false, 'minted without a reason');
 });

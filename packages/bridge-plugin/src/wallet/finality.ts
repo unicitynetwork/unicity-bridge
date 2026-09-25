@@ -1,4 +1,4 @@
-import { BridgeLockJustification } from '../BridgeLockJustification.js';
+import { lockBehind, splitSourceJustification, type SplitSourceReader } from './backing.js';
 import { chainFamily } from '../families.js';
 import { toHex } from '../hex.js';
 import type { LoadedBridge } from './manifest.js';
@@ -10,14 +10,13 @@ export interface LockFinality {
   readonly secondsLeft: number;
 }
 
-export async function lockFinality(bridge: LoadedBridge, justification: Uint8Array | null): Promise<LockFinality | null> {
-  if (!justification) return null;
-  let lock: BridgeLockJustification;
-  try {
-    lock = BridgeLockJustification.fromCBOR(justification);
-  } catch {
-    return null;
-  }
+export async function lockFinality(
+  bridge: LoadedBridge,
+  justification: Uint8Array | null,
+  readSplit: SplitSourceReader = splitSourceJustification,
+): Promise<LockFinality | null> {
+  const lock = await lockBehind(justification, readSplit);
+  if (!lock) return null;
   const cfg = bridge.plugin.resolvedConfig;
   if (lock.data.chainId !== cfg.chainId || toHex(lock.data.lockContract).toLowerCase() !== cfg.lockContractHex) return null;
 
