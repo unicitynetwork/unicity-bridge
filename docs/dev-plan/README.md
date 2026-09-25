@@ -22,6 +22,7 @@ This README is the map. The detail lives in four sibling documents:
 | [`integration.md`](./integration.md) | Design: wallet bridge UX (Sphere) + the return sequencing/proving service; the resolved cross-cutting decisions | design |
 | [`06-wallet-bridge-integration.md`](./06-wallet-bridge-integration.md) | Dev plan: surface bridge in/out in the real Sphere UI (TronLink-first, plugin-owned logic) | TypeScript / React |
 | [`07-return-service.md`](./07-return-service.md) | Dev plan: the off-chain S1–S4 pipeline as one all-Rust, self-hosted, disposable service | Rust + SP1 |
+| [`09-ethereum-sepolia.md`](./09-ethereum-sepolia.md) | Ethereum Sepolia deployment: why Tron cannot settle, the verifier check, the rehearsal and the runbook | ethers / Hardhat |
 
 ## What the bridge does
 
@@ -30,7 +31,7 @@ vault; the vault commits to the exact Unicity `tokenId` and recipient. A bridged
 token is minted on Unicity whose genesis *backing reason* points at that lock. A
 wallet receiving the token re-verifies the lock over a source-chain RPC before
 counting it as spendable. **Status: built** (`UnicityLock.sol`,
-`packages/bridge-plugin-tron-usdt/`); this plan hardens and freezes it.
+`packages/bridge-plugin/`); this plan hardens and freezes it.
 
 **Bridge-back / return (burn → release).** A holder burns the Unicity token to a
 `BurnPredicate(H(reasonBytes))` whose reason bytes — a canonical `BridgeBackReason`
@@ -95,7 +96,7 @@ they serve.
 | # | Goal | Contracts | TS | Prover | Exit criterion |
 |---|---|---|---|---|---|
 | **M0** | Freeze the contract | scaffold fresh ZK_BACK3 vault; measure Tron Groth16 energy + 80 ms dry-run | review reason/derivations | review SDK reuse + circuit shape | `protocol/interop.md` v1 + `protocol/vectors` v1 published; all repos pin `BRIDGE_PROTO_VERSION=1` |
-| **M1** | Bridge-in frozen | vault `lock()` stores `lockDigest`; audit | finalize `bridge-plugin-tron-usdt`, manifest plumbing | (n/a) | bridge-in vectors green in TS + Solidity; mint→receive e2e on Nile |
+| **M1** | Bridge-in frozen | vault `lock()` stores `lockDigest`; audit | finalize `bridge-plugin`, manifest plumbing | (n/a) | bridge-in vectors green in TS + Solidity; mint→receive e2e on Nile |
 | **M2** | Return path, B=1, *mocked* proof | `ReturnVault` with a mock verifier + accumulator root + settlement | burn construction + nullifier/leaf derivation lib | circuit relation for one burn, run in SP1 *execute* (no proof) | one burn settles end-to-end on a local devnet using a mock proof; all vectors green |
 | **M3** | Return path, B=1, *real* proof | real Groth16 verifier wired (EVM + Tron) | — | SP1 prove + Groth16 wrap; anchored inclusion + non-membership | a real proof settles one burn on testnet |
 | **M4** | Batching B>1 | unchanged vault interface | sequencer client helpers | ordered accumulator insertions; sequencer + accumulator-builder services | a batch of N burns settles in one tx on testnet |
@@ -108,7 +109,7 @@ they serve.
   one fresh vault implementing ZK_BACK3 (lock-in with `lockDigest` + accumulator
   return). Only its TRC20 safe-transfer (no-return USDT) and reentrancy-guard
   patterns are lifted — see `01-source-chain-contracts.md`.
-- **`packages/bridge-plugin-tron-usdt/`** — a complete TS `IMintJustificationVerifier`
+- **`packages/bridge-plugin/`** — a complete TS `IMintJustificationVerifier`
   (`TronUsdtMintJustificationVerifier`) plus config/identifier derivations and a
   Tron RPC client. This is the bridge-in verifier; the return path adds new TS.
 - **`state-transition-sdk-rust/`** — `no_std`/zkVM-ready. Has `Token::verify`,

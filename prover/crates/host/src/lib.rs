@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 pub mod fixture;
+pub mod public_values;
 pub mod s1;
 pub mod s2;
 #[cfg(feature = "sp1")]
@@ -89,6 +90,7 @@ fn check_config(v: &Value) -> Result<()> {
     eq_hex(
         "token_type",
         token_type(
+            input["chain_family"].as_str().unwrap_or("tron"),
             str_field(input, "chain_id_str")?,
             str_field(input, "asset_evm_hex")?,
         ),
@@ -98,6 +100,7 @@ fn check_config(v: &Value) -> Result<()> {
     eq_hex(
         "coin_id",
         coin_id(
+            input["chain_family"].as_str().unwrap_or("tron"),
             str_field(input, "chain_id_str")?,
             str_field(input, "asset_evm_hex")?,
         ),

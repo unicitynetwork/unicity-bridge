@@ -1,3 +1,5 @@
+mod support;
+
 use std::time::Duration;
 
 use axum::{
@@ -6,40 +8,60 @@ use axum::{
 };
 use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
 use bridge_return_service::{
+    clock::Clock,
     config::ServiceConfig,
+    domain::{event::Event, policy::BatchPolicy, retry::RetryPolicy},
+    orchestrator::Orchestrator,
     prover::Prover,
-    queue, router,
+    router,
     sequencer::ChainEvents,
-    store::{ErrorKind, ReturnFailure, ReturnStatus, ReturnStore},
-    submitter::Submitter,
+    store::{ErrorKind, ReturnStore},
     AppState,
 };
 use serde_json::Value;
+use support::{member, ScriptedSettler};
 use tower::ServiceExt;
 
-fn app(max_wait: Duration, batch_target: usize) -> axum::Router {
-    app_with_store(max_wait, batch_target).0
+fn app(idle_wait: Duration, max_batch_size: usize) -> axum::Router {
+    app_with(
+        idle_wait,
+        max_batch_size,
+        ScriptedSettler::skipping(),
+        RetryPolicy::default(),
+    )
+    .0
 }
 
-fn app_with_store(max_wait: Duration, batch_target: usize) -> (axum::Router, ReturnStore) {
+fn app_with(
+    idle_wait: Duration,
+    max_batch_size: usize,
+    settler: ScriptedSettler,
+    retry: RetryPolicy,
+) -> (axum::Router, ReturnStore) {
     let config = ServiceConfig {
-        max_wait,
-        batch_target,
+        idle_wait,
+        max_batch_size,
+        retry,
         ..ServiceConfig::default()
     };
-    let store = ReturnStore::default();
-    let queue = queue::spawn(
-        store.clone(),
-        Prover::new(config.clone()),
-        Submitter::none(),
-        ChainEvents::none(),
-        config.batch_target,
-        config.max_wait,
+    let store = ReturnStore::memory(retry);
+    let clock = Clock::default();
+    tokio::spawn(
+        Orchestrator::new(
+            store.clone(),
+            Prover::new(config.clone()),
+            settler,
+            ChainEvents::none(),
+            BatchPolicy::from(&config),
+            retry,
+            clock.clone(),
+        )
+        .run(),
     );
     let app = router(AppState {
         config,
         store: store.clone(),
-        queue,
+        clock,
         intake: None,
         chain_events: ChainEvents::none(),
     });
@@ -137,21 +159,30 @@ async fn rejects_truncated_wire() {
 
 #[tokio::test]
 async fn resubmitting_a_recoverably_failed_return_requeues_it() {
-    let (app, store) = app_with_store(Duration::from_millis(20), 1);
+    let immediate = RetryPolicy {
+        base: Duration::ZERO,
+        ..RetryPolicy::default()
+    };
+    let (app, store) = app_with(
+        Duration::from_millis(20),
+        1,
+        ScriptedSettler::skipping(),
+        immediate,
+    );
     let input = build_b1_direct_bridge_fixture().input;
     let id = post_wire(&app, input.clone()).await;
     wait_status(&app, &id, "proven").await;
-    store
-        .update_status(
-            &id,
-            ReturnStatus::Failed,
-            None,
-            Some(ReturnFailure::recoverable(
-                ErrorKind::SubmissionFailed,
-                "out of gas",
-            )),
-        )
-        .unwrap();
+    let batch_id = store.get(&id).unwrap().batch_id.unwrap();
+    store.apply(Event::BatchFailed {
+        id: batch_id,
+        kind: ErrorKind::SubmissionFailed,
+        message: "out of gas".to_string(),
+        at_ms: 0,
+    });
+    let failed = get_record(&app, &id).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["failure"]["recoverable"], true);
+    assert_eq!(failed["attempts"], 1);
 
     let again = post_return(&app, input).await;
     assert_eq!(again["returnId"].as_str().unwrap(), id);
@@ -161,14 +192,57 @@ async fn resubmitting_a_recoverably_failed_return_requeues_it() {
 }
 
 #[tokio::test]
-async fn queue_closes_when_batch_target_is_reached() {
-    let app = app(Duration::from_secs(30), 2);
+async fn burns_sharing_a_lock_nonce_prove_in_separate_batches() {
+    let app = app(Duration::from_millis(100), 8);
     let first = post_wire(&app, build_b1_direct_bridge_fixture().input).await;
     let second = post_wire(&app, build_split_bridge_fixture().input).await;
 
-    tokio::time::sleep(Duration::from_millis(80)).await;
     wait_status(&app, first.as_str(), "proven").await;
     wait_status(&app, second.as_str(), "proven").await;
+    let first_batch = get_record(&app, &first).await["batchId"].clone();
+    let second_batch = get_record(&app, &second).await["batchId"].clone();
+    assert!(first_batch.is_string());
+    assert_ne!(first_batch, second_batch);
+}
+
+#[tokio::test]
+async fn two_posts_become_one_batch_and_settle() {
+    let (app, _) = app_with(
+        Duration::from_millis(100),
+        8,
+        ScriptedSettler::settling("0xfeed"),
+        RetryPolicy::default(),
+    );
+    let first = post_wire(&app, member(11, 0x61)).await;
+    let second = post_wire(&app, member(12, 0x62)).await;
+
+    wait_status(&app, &first, "settled").await;
+    wait_status(&app, &second, "settled").await;
+    let first_record = get_record(&app, &first).await;
+    let second_record = get_record(&app, &second).await;
+    let batch_id = first_record["batchId"].as_str().unwrap().to_string();
+    assert_eq!(second_record["batchId"], batch_id);
+    assert_eq!(first_record["settleTxid"], "0xfeed");
+    assert_eq!(second_record["settleTxid"], "0xfeed");
+    assert_eq!(first_record["success"], true);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/batches/{batch_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let bundle: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(bundle["leaves"].as_array().unwrap().len(), 2);
+    assert_eq!(bundle["lockRefs"].as_array().unwrap().len(), 2);
+    assert_eq!(bundle["settleTxid"], "0xfeed");
 }
 
 #[tokio::test]
@@ -250,7 +324,7 @@ async fn post_return(app: &axum::Router, input: bridge_return_guest::GuestInput)
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn assert_status(app: &axum::Router, id: &str, status: &str) {
+async fn get_record(app: &axum::Router, id: &str) -> Value {
     let response = app
         .clone()
         .oneshot(
@@ -264,33 +338,18 @@ async fn assert_status(app: &axum::Router, id: &str, status: &str) {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let record: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(record["status"], status);
-    assert_eq!(record["terminal"], false);
-    assert_eq!(record["progress"], 70);
-    assert!(record["events"].as_array().unwrap().len() >= 3);
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 async fn wait_status(app: &axum::Router, id: &str, status: &str) {
-    for _ in 0..20 {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::get(format!("/returns/{id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let record: Value = serde_json::from_slice(&bytes).unwrap();
+    let mut record = Value::Null;
+    for _ in 0..120 {
+        record = get_record(app, id).await;
         if record["status"] == status {
+            assert!(record["events"].as_array().unwrap().len() >= 3);
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    assert_status(app, id, status).await;
+    panic!("return {id} never reached {status}: {record}");
 }

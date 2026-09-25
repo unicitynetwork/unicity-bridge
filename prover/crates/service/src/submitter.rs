@@ -1,133 +1,298 @@
-//! S4 submitter — turns a proven batch bundle into an on-chain `fulfillBatch`
-//! settlement (07 §B7). Pluggable so the proven relayer (or, in production, an
-//! all-Rust Tron client) drops in without touching the queue:
-//!
-//! - `none` (default): do nothing — the return stays `proven`. The published
-//!   bundle (`/batches/:id`) is **self-settleable** by anyone, so the principal is
-//!   never stuck (06 §A1.2).
-//! - `command`: run an operator-provided program (`BRIDGE_RETURN_SUBMIT_CMD`) with
-//!   the bundle JSON on **stdin**; it submits `fulfillBatch` and prints the settle
-//!   **txid** on stdout (exit 0). This is the integration seam for the existing
-//!   `relayer.js settle` and for the future in-process Tron submitter.
+use std::{process::Stdio, time::Duration};
 
-use crate::store::BatchBundle;
+use serde::Deserialize;
+use tokio::io::AsyncWriteExt;
+
+use crate::{
+    domain::assembler::Rejected,
+    store::{BatchBundle, LeafHex},
+};
 
 #[derive(Clone)]
 pub struct Submitter {
-    backend: Backend,
+    submit_cmd: Option<String>,
+    simulate_cmd: Option<String>,
+    timeout: Duration,
 }
 
-#[derive(Clone)]
-enum Backend {
-    None,
-    Command(String),
-}
-
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmitOutcome {
-    /// No submitter configured — left at `proven` (self-settleable).
     Skipped,
     Submitted { txid: String },
+    StaleRoot,
     Failed { message: String },
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SimulateError {
+    #[error("spawn simulate command failed: {0}")]
+    Spawn(String),
+    #[error("simulate command exited {status}: {stderr}")]
+    Command { status: String, stderr: String },
+    #[error("simulate command output decode failed: {0}")]
+    Decode(String),
+}
+
+#[derive(Deserialize)]
+struct Simulation {
+    #[serde(default)]
+    rejected: Vec<Rejected>,
+}
+
 impl Submitter {
-    /// Build from `BRIDGE_RETURN_SUBMIT_CMD` (a shell command). Empty/unset = `none`.
     pub fn from_env() -> Self {
-        match std::env::var("BRIDGE_RETURN_SUBMIT_CMD") {
-            Ok(cmd) if !cmd.trim().is_empty() => Self {
-                backend: Backend::Command(cmd),
-            },
-            _ => Self {
-                backend: Backend::None,
-            },
+        Self::with_commands(
+            env_command("BRIDGE_RETURN_SUBMIT_CMD"),
+            env_command("BRIDGE_RETURN_SIMULATE_CMD"),
+        )
+    }
+
+    pub fn with_commands(submit_cmd: Option<String>, simulate_cmd: Option<String>) -> Self {
+        Self {
+            submit_cmd,
+            simulate_cmd,
+            timeout: Duration::from_secs(600),
         }
+    }
+
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
     }
 
     pub fn none() -> Self {
-        Self {
-            backend: Backend::None,
-        }
+        Self::with_commands(None, None)
     }
 
-    /// What this submitter does, for `/health`.
     pub fn label(&self) -> &'static str {
-        match self.backend {
-            Backend::None => "none",
-            Backend::Command(_) => "command",
+        match self.submit_cmd {
+            None => "none",
+            Some(_) => "command",
         }
     }
 
     pub async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
-        match &self.backend {
-            Backend::None => SubmitOutcome::Skipped,
-            Backend::Command(cmd) => run_command(cmd, bundle).await,
+        match &self.submit_cmd {
+            None => SubmitOutcome::Skipped,
+            Some(cmd) => run_submit_command(cmd, bundle, self.timeout).await,
+        }
+    }
+
+    pub async fn simulate(&self, leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
+        match &self.simulate_cmd {
+            None => Ok(Vec::new()),
+            Some(cmd) => run_simulate_command(cmd, leaves, self.timeout).await,
         }
     }
 }
 
-async fn run_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
-    use std::process::Stdio;
-    use tokio::io::AsyncWriteExt;
+fn env_command(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|cmd| !cmd.trim().is_empty())
+}
 
-    // A no-proof bundle (precheck-only mode) can't settle on-chain.
+async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) -> SubmitOutcome {
     if bundle.proof_bytes == "0x" {
         return SubmitOutcome::Failed {
             message: "submit requested but the batch has no proof (prove_mode != sp1_groth16)"
                 .to_string(),
         };
     }
-
-    // The whole published bundle — batchId, mode, vkey, publicValues, proofBytes,
-    // plus the leaves/lockRefs fulfillBatch calldata (§B4) — same shape as
-    // `GET /batches/:id`, so a self-settler and this command share one format.
     let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
-
     tracing::debug!(batch_id = %bundle.batch_id, cmd, "spawning S4 submit command");
+    let output = match run_with_stdin(cmd, payload.as_bytes(), timeout).await {
+        Ok(output) => output,
+        Err(e) => return SubmitOutcome::Failed { message: e },
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        if stderr.contains("stale root") {
+            return SubmitOutcome::StaleRoot;
+        }
+        return SubmitOutcome::Failed {
+            message: format!("submit command exited {}: {stderr}", output.status),
+        };
+    }
+    let txid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if txid.is_empty() {
+        return SubmitOutcome::Failed {
+            message: "submit command exited 0 but printed no txid".to_string(),
+        };
+    }
+    SubmitOutcome::Submitted { txid }
+}
 
-    let mut child = match tokio::process::Command::new("sh")
+async fn run_simulate_command(
+    cmd: &str,
+    leaves: &[LeafHex],
+    timeout: Duration,
+) -> Result<Vec<Rejected>, SimulateError> {
+    let payload = serde_json::json!({ "leaves": leaves }).to_string();
+    let output = run_with_stdin(cmd, payload.as_bytes(), timeout)
+        .await
+        .map_err(SimulateError::Spawn)?;
+    if !output.status.success() {
+        return Err(SimulateError::Command {
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Simulation>(stdout.trim())
+        .map(|s| s.rejected)
+        .map_err(|e| SimulateError::Decode(format!("{e}; got: {}", snippet(stdout.trim()))))
+}
+
+async fn run_with_stdin(
+    cmd: &str,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return SubmitOutcome::Failed {
-                message: format!("spawn submit command failed: {e}"),
-            }
-        }
-    };
-
+        .map_err(|e| format!("spawn command failed: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(payload.as_bytes()).await {
-            return SubmitOutcome::Failed {
-                message: format!("write to submit command failed: {e}"),
-            };
+        stdin
+            .write_all(payload)
+            .await
+            .map_err(|e| format!("write to command failed: {e}"))?;
+    }
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(output) => output.map_err(|e| format!("command wait failed: {e}")),
+        Err(_) => Err(format!("command timed out after {}s", timeout.as_secs())),
+    }
+}
+
+fn snippet(s: &str) -> String {
+    if s.len() <= 200 {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..200])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle() -> BatchBundle {
+        BatchBundle {
+            batch_id: "0xb".to_string(),
+            mode: "scripted".to_string(),
+            vkey: None,
+            public_values: "0xab".to_string(),
+            proof_bytes: "0x01".to_string(),
+            settle_txid: None,
+            leaves: Vec::new(),
+            lock_refs: Vec::new(),
         }
     }
 
-    match child.wait_with_output().await {
-        Ok(out) if out.status.success() => {
-            let txid = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if txid.is_empty() {
-                SubmitOutcome::Failed {
-                    message: "submit command exited 0 but printed no txid".to_string(),
-                }
-            } else {
-                SubmitOutcome::Submitted { txid }
+    fn submitter(submit: &str) -> Submitter {
+        Submitter::with_commands(Some(submit.to_string()), None)
+    }
+
+    fn simulator(simulate: &str) -> Submitter {
+        Submitter::with_commands(None, Some(simulate.to_string()))
+    }
+
+    #[tokio::test]
+    async fn run_command_is_cut_off_after_the_timeout() {
+        let outcome = submitter("sleep 5")
+            .with_timeout(Duration::from_millis(200))
+            .submit(&bundle())
+            .await;
+        assert!(
+            matches!(&outcome, SubmitOutcome::Failed { message } if message.contains("timed out")),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_without_command_is_skipped() {
+        assert_eq!(
+            Submitter::none().submit(&bundle()).await,
+            SubmitOutcome::Skipped
+        );
+        assert_eq!(Submitter::none().label(), "none");
+    }
+
+    #[tokio::test]
+    async fn run_command_reports_the_txid() {
+        let outcome = submitter("cat >/dev/null; echo 0xabc")
+            .submit(&bundle())
+            .await;
+        assert_eq!(
+            outcome,
+            SubmitOutcome::Submitted {
+                txid: "0xabc".to_string()
             }
-        }
-        Ok(out) => SubmitOutcome::Failed {
-            message: format!(
-                "submit command exited {}: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        },
-        Err(e) => SubmitOutcome::Failed {
-            message: format!("submit command wait failed: {e}"),
-        },
+        );
+    }
+
+    #[tokio::test]
+    async fn run_command_maps_stale_root_stderr() {
+        let outcome = submitter("cat >/dev/null; echo 'vault: stale root' >&2; exit 1")
+            .submit(&bundle())
+            .await;
+        assert_eq!(outcome, SubmitOutcome::StaleRoot);
+    }
+
+    #[tokio::test]
+    async fn run_command_reports_other_failures() {
+        let outcome = submitter("cat >/dev/null; echo boom >&2; exit 1")
+            .submit(&bundle())
+            .await;
+        assert!(matches!(outcome, SubmitOutcome::Failed { message } if message.contains("boom")));
+    }
+
+    #[tokio::test]
+    async fn run_command_refuses_a_bundle_without_proof() {
+        let mut no_proof = bundle();
+        no_proof.proof_bytes = "0x".to_string();
+        let outcome = submitter("cat >/dev/null; echo 0xabc")
+            .submit(&no_proof)
+            .await;
+        assert!(matches!(outcome, SubmitOutcome::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn simulate_without_command_rejects_nothing() {
+        assert_eq!(Submitter::none().simulate(&[]).await.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_parses_rejections() {
+        let rejected = simulator(
+            r#"cat >/dev/null; echo '{"rejected":[{"nullifier":"0x01","reason":"blocked"}]}'"#,
+        )
+        .simulate(&[])
+        .await
+        .unwrap();
+        assert_eq!(
+            rejected,
+            vec![Rejected {
+                nullifier: "0x01".to_string(),
+                reason: "blocked".to_string()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_reports_failures() {
+        let err = simulator("cat >/dev/null; echo down >&2; exit 3")
+            .simulate(&[])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SimulateError::Command { stderr, .. } if stderr == "down"));
+        let err = simulator("cat >/dev/null; echo nope")
+            .simulate(&[])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SimulateError::Decode(_)));
     }
 }

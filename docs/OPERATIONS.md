@@ -12,7 +12,7 @@ testnet setup falls short of production, the gap is named.
 |---|---|---|---|
 | Vault (`UnicityBridgeVault`) | the source chain (Tron) | the locked asset, the lock digests, the nullifier accumulator root, the allow-listed validator sets | the contract code plus one admin key (§3) |
 | Wallet (Sphere with the bridge module and the asset plugin) | the user's browser | the recovery records for deposits and burns, including the burned blobs (§6) | the user |
-| Return service (`bridge-return-service`) | a container you operate | nothing durable; proof bundles on disk | none: it can only sequence and prove |
+| Return service (`bridge-return-service`) | a container you operate | the journal of accepted burns, batches and proofs on the `return-data` volume | none: it can only sequence and prove |
 | Unicity aggregator and validators | the Unicity network | certificates for every token transition | the validator set the vault allow-lists |
 
 Outside dependencies at run time: a Tron node (TronGrid by default) for locks,
@@ -24,10 +24,14 @@ prover is untrusted: anyone may run one, and a wrong proof fails on chain.
 
 ## 2. What to provision
 
-- **Service host.** Proving is single-worker and needs about 16 GB of memory
-  for the duration of one proof (about an hour of CPU on a 12-core machine;
-  see `docs/dev-plan/04-deployment.md` for the measured runs). Precheck alone
-  needs a fraction of that. 8 GB of disk for the artifacts and bundles.
+- **Service host.** Proving is single-worker and its memory grows with the
+  burn's execution length. The 921k-cycle fixture peaked at about 14 GB
+  (`docs/dev-plan/04-deployment.md`); a live 10 USDT burn measured at
+  3,393,715 cycles (`bridge-return-host sp1-execute`) exceeded 14.6 GB of RAM
+  plus 4 GB of swap inside Docker on a 16 GB Mac and was killed every time.
+  Plan 32 GB or more for live tokens, and expect a proof to take longer than
+  the fixture's hour. Precheck alone needs a fraction of that. 8 GB of disk
+  for the artifacts and bundles.
 - **Network.** Outbound HTTPS to the Tron node, the Unicity gateway and the
   artifact bucket. Inbound HTTPS from wallets on the service port (8787 in the
   container). The service speaks plain HTTP; put TLS in front of it.
@@ -81,12 +85,17 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `TRUST_BASE_PATH` | `/app/bft-trustbase.testnet2.json` | validator set the burns must verify under |
 | `UNICITY_GATEWAY`, `UNICITY_API_KEY` | testnet2 gateway, none | certificate source |
 | `BRIDGE_JUSTIFICATION_TAG` | `1330002` | the mint-reason tag of the bridged asset |
-| `BRIDGE_RETURN_BATCH_TARGET`, `BRIDGE_RETURN_MAX_WAIT_SECS` | `1`, `60` | close a batch at this many burns or after this long |
+| `BRIDGE_RETURN_STATE_DIR` | `/data/state` | the journal, on the `return-data` volume |
+| `BRIDGE_RETURN_MAX_BATCH_SIZE`, `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8`, `8388608` | most burns, and most summed input bytes, in one proof |
+| `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
+| `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
+| `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
-| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD` | the Node relayer | settlement and event scan hooks; replaceable by any program with the same stdin/stdout contract |
+| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, unset | settlement, event scan and transfer pre-simulation hooks; replaceable by any program with the same stdin/stdout contract |
 | `BRIDGE_RETURN_BIND` | `0.0.0.0:8787` | listen address |
+| `SP1_WORKER_NUM_*` | `1` | single-worker proving; the only setting that fits a 16 GB host (`docs/dev-plan/03-status.md`) |
 
 ## 5. Running the service
 
@@ -98,16 +107,23 @@ curl localhost:8787/health
 
 Start in `precheck_only`. In that mode every burn is fully verified against
 the trust base and the deployment, queued and batched, and nothing is proven.
-Switch to `sp1_groth16` once the pipeline is confirmed. The first proof
+Switch to `sp1_groth16` once the pipeline is confirmed, and empty
+`BRIDGE_RETURN_STATE_DIR` when you do: batches proven in precheck mode carry
+no proof and would otherwise sit at `proven` for good (the wallets re-post
+their burns on the resulting 404). The first proof
 downloads the Groth16 circuit and proving key, about 5.9 GB, into the
 `sp1-artifacts` volume; keep the volume across restarts or every restart pays
 the download. Never set `SP1_CIRCUIT_MODE=dev`: it selects a private artifact
 bucket and a key the vault does not accept.
 
-Proofs run one at a time. A batch is closed by `BRIDGE_RETURN_BATCH_TARGET`
-burns or `BRIDGE_RETURN_MAX_WAIT_SECS`, whichever comes first; a larger target
-amortises the hour of proving over more returns and makes each user wait
-longer.
+Proofs run one at a time. When the prover is free, the next batch is
+everything pending, oldest first, up to `BRIDGE_RETURN_MAX_BATCH_SIZE` burns
+that share one validator set and trace to distinct deposits. Burns that arrive
+during a proof form the next batch, so a return waits at most two proof times.
+`BRIDGE_RETURN_IDLE_WAIT_SECS` adds a collection window before the first proof
+when the service is idle; the default is none. Raise the batch size only after
+measuring the energy of the largest batch on the target chain
+(`docs/dev-plan/05-cost-analysis.md`).
 
 Before proving, the service rebuilds the vault's accumulator from the on-chain
 settlement events (`BRIDGE_RETURN_EVENTS_CMD`) and checks it against the live
@@ -115,10 +131,36 @@ root. `/accumulator` reports `synced: true` when they agree. A proof built on a
 stale root is rejected by the vault with `vault: stale root`; the service then
 rebases and proves again (§8).
 
-Settlement goes through `BRIDGE_RETURN_SUBMIT_CMD` with the bundle on stdin.
-The default is `contracts/tron/scripts/relayer.js settle --stdin`, which needs
-the settlement key and the vault address. The all-Rust submitter the plan
-calls for is not built; until it is, the container carries Node for this.
+Settlement goes through `BRIDGE_RETURN_SUBMIT_CMD` with the bundle on stdin,
+and the chain log through `BRIDGE_RETURN_EVENTS_CMD`. Both default to the
+relayer of the deployment's chain family, chosen by `BRIDGE_RELAYER`:
+`relayer-eth.js` (Ethereum-family, ethers over `ETH_RPC_URL`, key `ETH_SK`,
+vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
+(Tron, TronWeb over `TRON_RPC_URL`). Both live in `contracts/tron/scripts`. The
+all-Rust submitter the plan calls for is not built; until it is, the container
+carries Node for this.
+
+The Ethereum RPC must serve logs and receipts back to the vault's deploy
+block: the wallet reads old lock transactions to verify tokens, and a fresh
+service rebuilds the spent-nullifier accumulator from every settlement since
+the deployment. publicnode keeps only about the last 10,000 blocks (some 33
+hours) and answers with empty results beyond that, which stalled the Sepolia
+service on 2026-09-25 once the first settlement aged out. A running service
+fills gaps in the log from the batches it settled itself, so it survives a
+short-history RPC as long as every settlement went through it; a fresh service
+on an older vault needs a provider with full history. Tenderly's public gateway
+(`https://sepolia.gateway.tenderly.co`) has the history and is what the wallet
+manifest reads from, but it throttles bursts with HTTP 429, which left a
+settlement broadcast retrying for half an hour, so it is not the service's
+default. Commands the service runs against the chain are cut off after
+`BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` (default 600) and count as a failed attempt.
+
+`BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
+leaf whose transfer would revert before proving the batch; the reason is the
+token's own revert string (USDC: `ERC20: transfer amount exceeds balance`). It
+matters in push-payment mode; the Sepolia vault settles in pull mode, where a
+payout never reverts. The Tron relayer's reading of the constant-call response
+was never checked against Nile (§8).
 
 ## 6. Where the money-critical state lives
 
@@ -128,10 +170,10 @@ calls for is not built; until it is, the container carries Node for this.
   then sends it to the service. Anyone holding the blob can resubmit it; the
   service is idempotent on the burn's nullifier.
 - **Those records are in the user's browser**, keyed by wallet identity, in
-  local storage. Deleting the wallet deletes them. The service keeps nothing
-  durable, so a burn whose blob is lost on the user's side is lost unless the
-  service already produced a bundle for it. For production, persist the intake
-  (a database behind `POST /returns`) so the service is a second copy.
+  local storage. Deleting the wallet deletes them. The service journals every
+  accepted burn with its input to `BRIDGE_RETURN_STATE_DIR`, so it is a second
+  copy of unsettled burns for as long as the `return-data` volume lives; back
+  the volume up if that copy matters.
 - **Proof bundles** land in `BRIDGE_RETURN_PROOF_DIR`. A bundle is public data;
   anyone may submit it, and the wallet can fetch it from `/batches/:id`.
 - **The accumulator** is reconstructable from the vault's `Released` and
@@ -141,9 +183,11 @@ calls for is not built; until it is, the container carries Node for this.
 
 ## 7. Monitoring
 
-`GET /health` returns `status`, `queueDepth`, `activeBatch`, `batchTarget`,
-`maxWaitMs`, `proveMode`, `chainSync`. `GET /accumulator` returns `synced`,
-`spentRoot`, `spentCount`. Logs are structured (`RUST_LOG`, default info).
+`GET /health` returns `status`, `queueDepth`, `activeBatch`, `activeBatchSize`,
+`provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`,
+`chainSync`. `GET /accumulator` returns `synced`, `spentRoot`, `spentCount`.
+Logs are structured (`RUST_LOG`, default info). The journal itself is readable:
+`jq -c 'keys[0]' /data/state/journal.jsonl` lists the event types.
 
 Worth alerting on:
 
@@ -152,8 +196,8 @@ Worth alerting on:
   or the Tron node is failing, and nothing will settle.
 - `queueDepth` growing with `activeBatch` unchanged for longer than a proof
   takes: proving is stuck or out of memory.
-- A return in `proving` for more than two hours, or in `submitted` for more
-  than a few minutes.
+- A batch proving for more than two proof times (`provingSinceMs` says when it
+  started), or a return whose `failure.message` says it is parked.
 - Settlement account balance below a few settlements' worth of gas.
 - On chain: every `BatchFulfilled` should match a bundle the service wrote.
 
@@ -164,11 +208,14 @@ Worth alerting on:
 | Wallet shows a return as `burned` that never becomes `queued` | service unreachable | fix the service; the wallet resubmits on its own |
 | Service refuses a burn with a config-hash mismatch | the token was minted against another vault (a v1 token after the v2 redeploy) | nothing to do here; only that vault's program can release it. The wallet does not offer such tokens for a burn; a blob that reaches the service anyway is refused as final |
 | Return `failed` with a non-recoverable message | the burn will never be accepted (wrong config, malformed reason) | the funds stay on Unicity as a burned token; investigate before telling the user |
-| Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the wallet resubmits the blob after a minute, or at once from the row's retry button, and the service queues it again; fix the cause (gas, memory, node) meanwhile |
-| Service restarted, wallet's `returnId` unknown | the service holds nothing durable | the wallet detects the 404 and resubmits the blob |
-| Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service rebases and proves again; costs another proof |
+| Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
+| Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
+| Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
+| Service restarts while proving; the return says `Proof interrupted by a service restart` (`docker events` shows `die:137`, the Docker VM's `dmesg` an `oom-kill` of `bridge-return-s`) | the Groth16 wrap's Go prover outgrew the machine: 23 GB resident in a 24 GB WSL VM on 2026-09-23 | keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours); each interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever |
+| Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
+| Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
-| A recipient's transfer reverts and takes the batch with it | push payments, a hostile or blocked recipient | drop the leaf and rebuild; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |
+| A recipient's transfer would revert and take the batch with it | push payments, a hostile or blocked recipient | with `BRIDGE_RETURN_SIMULATE_CMD` set the service excludes the leaf before proving and fails that return recoverably; without it the batch reverts on chain and is retried with the same members; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |
 | First proof fails with a truncated proving key | interrupted download | delete the artifact volume and let it download again; verify the size against `docs/dev-plan/03-status.md` |
 | Proof out of memory | under 16 GB available | more memory; there is no smaller mode |
 
@@ -211,18 +258,31 @@ deployment file before starting it against a live vault.
 ## 10. Known gaps before real value
 
 - The admin key has no time-lock (§3).
-- The service holds nothing durable; the users' browsers are the only copy of
-  unsettled burns (§6).
+- The SP1 Groth16 verification does not finish within Tron's 80 ms
+  per-transaction CPU limit. Mainnet and Shasta run 80 ms, and Nile matched
+  them on 2026-09-08 (it was 160 ms when the July settlement succeeded).
+  Until the verification is made faster or the limit raised, no batch settles
+  on Tron; every attempt is charged the fee limit.
+  Tron has no shipped fix (java-tron PR 5507 closed unmerged, issue 6374 open).
+  The same verification runs on Ethereum Sepolia through Succinct's SP1 gateway
+  at about 267k gas with no time bound, checked on 2026-09-23; the vault
+  deploys there unchanged (`docs/dev-plan/09-ethereum-sepolia.md`).
+- The journal is one file on one volume, with no backup and no pruning: done
+  returns keep their inputs in it until a pruning step exists.
+- Transfer pre-simulation is checked for `relayer-eth.js` against the vault
+  bytecode and Sepolia; the Tron relayer's was never checked against Nile. Off
+  by default.
 - The API is open: CORS is permissive and there is no rate limiting. Every
   route is permissionless by design, and a submitted burn costs the submitter
   their own token, but precheck is CPU that anyone can spend.
-- Settlement runs through a Node script, not the planned Rust submitter.
-- Milestone 2 has not run: no burn has been proven with the current program
-  and settled on the v2 vault. The three prover tests that use a live sample
-  are ignored until one exists.
+- Settlement runs through a Node relayer per chain family, not the planned Rust submitter.
+- Milestone 2 ran on Ethereum Sepolia on 2026-09-23 (a wallet burn proven
+  with the current program and settled on the Sepolia v2 vault,
+  `docs/dev-plan/09-ethereum-sepolia.md`); it never ran on the Tron v2 vault.
+  The three prover tests that use a live sample are still ignored.
 - The wallet's service URL is a build-time setting.
 - The three wallet packages are linked by path, not published (see
   `sphere/docs/WALLET-MODULES.md`).
-- The wallet's development-key signer is compiled out of production builds;
-  the demo account's key sits in the repository's `.env` and must not reach a
-  production host.
+- The repository's `.env` holds throwaway testnet keys for the scripts
+  (`TRON_SK`, `ETH_SK`); they must not reach a production host. The wallet
+  signs only through browser wallets.

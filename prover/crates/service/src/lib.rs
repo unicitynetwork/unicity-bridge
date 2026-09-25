@@ -1,9 +1,13 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod clock;
 pub mod config;
+pub mod domain;
+pub mod journal;
+pub mod orchestrator;
+pub mod ports;
 pub mod prover;
-pub mod queue;
 pub mod sequencer;
 pub mod store;
 pub mod submitter;
@@ -12,14 +16,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use bridge_return_host::s1::EnvelopeIntake;
-use queue::QueueHandle;
+use clock::Clock;
 use store::ReturnStore;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: config::ServiceConfig,
     pub store: ReturnStore,
-    pub queue: QueueHandle,
+    pub clock: Clock,
     /// Loaded when `BRIDGE_DEPLOYMENT_CONFIG` + `TRUST_BASE_PATH` are set — enables
     /// the wallet `{tokenCbor, reasonBytes}` envelope intake (else only `wireInput`).
     pub intake: Option<Arc<EnvelopeIntake>>,

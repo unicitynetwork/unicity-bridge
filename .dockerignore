@@ -1,3 +1,6 @@
+# Build context for prover/Dockerfile: the prover workspace, the conformance
+# vectors, the deployment freeze, the trust base, and the Tron relayer script.
+# Everything else (sibling checkouts, build output, secrets) stays out.
 .git
 **/node_modules
 **/target

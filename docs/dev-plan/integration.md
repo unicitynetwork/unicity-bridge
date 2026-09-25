@@ -29,8 +29,8 @@ protocol-level feature added here is **verification-result caching** (§B6).
 |---|---|---|
 | Source vault | `UnicityBridgeVault` — `lock()` stores `lockDigest`, `fulfillBatch()` verifies Groth16 + advances `spentRoot` + releases TRC20; push & pull payment | Live Nile `TLXkafFeuPdNFd3XczCzHSXztbqKCytHWW`, vkey `0x002b42fa…` |
 | On-chain verifier | SP1 v6.1.0 Groth16 verifier (`bn254`, ~218k energy) | Live Nile `TN4nQmnVz3H3zDnN77NQZTAfBpzkEdoeBR` |
-| Bridge-in verifier | `bridge-plugin-tron-usdt` — `IMintJustificationVerifier` (re-checks the lock over Tron RPC), config/identifier derivations, `createTronUsdtBridgePlugin()` | Built; mint→receive e2e live on Nile |
-| Bridge-back construction | `bridge-plugin-tron-usdt/src/bridge-back/` — `createBridgeBackBurnTransfer`, `previewReturn`, `buildWitnessRequest`, all keccak/SHA-256 derivations | Built; live burn e2e (`demo/bridge-back-e2e.ts`) |
+| Bridge-in verifier | `bridge-plugin` — `IMintJustificationVerifier` (re-checks the lock over Tron RPC), config/identifier derivations, `createTronUsdtBridgePlugin()` | Built; mint→receive e2e live on Nile |
+| Bridge-back construction | `bridge-plugin/src/bridge-back/` — `createBridgeBackBurnTransfer`, `previewReturn`, `buildWitnessRequest`, all keccak/SHA-256 derivations | Built; live burn e2e (`demo/bridge-back-e2e.ts`) |
 | Prover core + guest | `prover/crates/{core,guest,sdk-ext}` — full return relation `R(x,w)`, anchored + **certified** burn verification, depth-256 SMT accumulator, structural lock-backing verifier | B=1 + B=2 real Groth16 settled live on Nile |
 | Host services (lib) | `prover/crates/host` — `s1` (witness/precheck + live aggregator fetch + certified verify), `s2` (accumulator rebuild/next-batch), `sp1` (execute/groth16/export) | Built; multi-batch continuity settled live |
 | Relayer (S4) | `contracts/tron/scripts/relayer.{js,-lib.js}` — `scan`, `settle` | Built (Node); **superseded by an all-Rust submitter**, §B7 |

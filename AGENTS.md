@@ -17,7 +17,7 @@ or commit them here.
 | `protocol/vectors/` | Rust + JSON | Reference generator and conformance fixtures |
 | `contracts/tron/` | Solidity / Hardhat | Tron/TVM bridge vault and verifier integration |
 | `packages/bridge-core/` | TypeScript | Chain-neutral bridge interfaces and wallet boundaries |
-| `packages/bridge-plugin-tron-usdt/` | TypeScript | Tron USDT bridge plugin, verifier, wallet adapter, CLI/demo |
+| `packages/bridge-plugin/` | TypeScript | Tron USDT bridge plugin, verifier, wallet adapter, CLI/demo |
 | `prover/` | Rust / SP1 | Return relation, host tooling, prover service |
 | `bft-trustbase.testnet2.json` | JSON | Unicity testnet2 trust base |
 | `deployments/` | JSON | Frozen deployment configs |
@@ -77,8 +77,8 @@ TypeScript bridge packages:
 
 ```bash
 npm run build -w @unicitylabs/bridge-core
-npm test -w @unicitylabs/bridge-plugin-tron-usdt
-npx tsx --test packages/bridge-plugin-tron-usdt/test/verifier.test.ts
+npm test -w @unicitylabs/bridge-plugin
+npx tsx --test packages/bridge-plugin/test/verifier.test.ts
 ```
 
 Prover:

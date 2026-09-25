@@ -121,18 +121,22 @@ pub fn keccak256(input: &[u8]) -> Bytes32 {
     hash::keccak256(input)
 }
 
-pub fn token_type(chain_id_str: &str, asset_evm_hex: &str) -> Bytes32 {
+pub fn token_type(chain_family: &str, chain_id_str: &str, asset_evm_hex: &str) -> Bytes32 {
     let mut data = Vec::new();
-    data.extend_from_slice(b"unicity-bridge:tron:");
+    data.extend_from_slice(b"unicity-bridge:");
+    data.extend_from_slice(chain_family.as_bytes());
+    data.push(b':');
     data.extend_from_slice(chain_id_str.as_bytes());
     data.push(b':');
     data.extend_from_slice(asset_evm_hex.as_bytes());
     sha256(&data)
 }
 
-pub fn coin_id(chain_id_str: &str, asset_evm_hex: &str) -> Bytes32 {
+pub fn coin_id(chain_family: &str, chain_id_str: &str, asset_evm_hex: &str) -> Bytes32 {
     let mut data = Vec::new();
-    data.extend_from_slice(b"unicity-bridge-coin:tron:");
+    data.extend_from_slice(b"unicity-bridge-coin:");
+    data.extend_from_slice(chain_family.as_bytes());
+    data.push(b':');
     data.extend_from_slice(chain_id_str.as_bytes());
     data.push(b':');
     data.extend_from_slice(asset_evm_hex.as_bytes());

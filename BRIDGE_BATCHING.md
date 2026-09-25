@@ -60,7 +60,7 @@ prover/crates/service/README.md      API and status semantics; update it
 prover/docker/entrypoint.sh, prover/Dockerfile, docker-compose.yml   the container; volumes sp1-artifacts:/root/.sp1, return-data:/data
 contracts/tron/contracts/UnicityBridgeVault.sol   fulfillBatch (§4.3)
 contracts/tron/scripts/relayer.js    `events` (chain log for s2) and `settle --stdin` (S4), the default commands the service shells out to
-packages/bridge-plugin-tron-usdt/src/wallet/return-client.ts   the wallet's client: statuses, ReturnRecord, typed errors
+packages/bridge-plugin/src/wallet/return-client.ts   the wallet's client: statuses, ReturnRecord, typed errors
 sphere/src/modules/bridge/bridgeOut.ts, store.ts, useBridgeOut.ts   the wallet's return records, polling, resubmission, retry
 docs/spec/ZK_BACK3.md                the return-path spec: §7 relation layers, §9 batch atomicity, §10 off-chain roles
 docs/dev-plan/07-return-service.md   service design; R1 "multi-burn certified assembly", R2 sequencer/queue
@@ -462,7 +462,7 @@ with `docker compose up -d return-service`. Docs to update with the change:
 6. `unicity-yellowpaper-tex/appendix-bridging.tex`, section "Batched Proving".
 7. `contracts/tron/contracts/UnicityBridgeVault.sol::fulfillBatch`;
    `contracts/tron/scripts/relayer.js` for the `events` and `settle` contracts.
-8. `packages/bridge-plugin-tron-usdt/src/wallet/return-client.ts` and
+8. `packages/bridge-plugin/src/wallet/return-client.ts` and
    `sphere/src/modules/bridge/bridgeOut.ts` for what the wallet expects.
 
 Glossary: **burn** a Unicity token spent with a bridge-back reason; **nullifier**
