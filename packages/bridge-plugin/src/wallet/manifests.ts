@@ -45,10 +45,12 @@ export const NILE_USDT_BRIDGE: TronBridgeManifest = {
   tokenTypeHex: '6f2d10d27abeb4960a7ef19370c965ec090bb4da1f17752be77334e2dde19c74',
   coinIdHex: 'f1634862e1b932acd1c791a1860c62f69c7f55aa6c6115ba631d3bf4a9d8ddbb',
   disabledReason: 'Tron limits a transaction to 80 ms of CPU, less than the proof verification needs, so returns cannot settle. Bridging on Tron is paused.',
+  replacedVaults: ['TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY'],
 } as const;
 
 export const NILE_USDT_BRIDGE_V1: TronBridgeManifest = {
   ...NILE_USDT_BRIDGE,
+  replacedVaults: [],
   vault: 'TTKKLyhnRRQ7XV5vsRarV8xWWEvF9225mY',
   vkey: '0x00c34ae0ebb63e86218a754892813f4744b2f6c9ed613c085ea40999b16ce3ad',
   configHash: '7f376b16b3bff3455f375e7cf30b9d29d2a14332912f0ffb69d78e1b31d5193f',

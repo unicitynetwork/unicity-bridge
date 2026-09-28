@@ -53,6 +53,10 @@ bridge-in mint and the bridge-out burn are composed over the wallet's generic
 `burnForReturn`, `recoverPendingBurns`). The token's declared value is checked
 by `decodeBridgePaymentData` (the wallet's value format, `src/value.ts`).
 
+The plugin also carries a `BridgedTokenIssuancePolicy` for the bridged token type:
+a genesis of that type without a lock or split reason fails verification, and the
+bridged coin id counts only inside verified tokens of that type.
+
 ## CLI
 
 ```bash

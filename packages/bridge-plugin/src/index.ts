@@ -11,6 +11,7 @@ export * from './address.js';
 export * from './bridge-back/index.js';
 export * from './BridgeLockJustification.js';
 export * from './BridgeMintJustificationVerifier.js';
+export * from './BridgedTokenIssuancePolicy.js';
 export * from './config.js';
 export * from './contract-call.js';
 export * from './evm/config.js';

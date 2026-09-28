@@ -13,6 +13,7 @@
  * plus {BridgePresentation} (explorer link + address validation) for the UI.
  */
 import type { IMintJustificationVerifier } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/IMintJustificationVerifier.js';
+import type { ITokenIssuanceVerifier } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/ITokenIssuanceVerifier.js';
 
 // ── ChainWallet boundary ────────────────────────────────────────────────────
 
@@ -173,13 +174,19 @@ export interface BridgeManifestBase {
   /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
   readonly coinIdHex?: string;
   readonly disabledReason?: string;
+  readonly replacedVaults?: readonly string[];
 }
 
 // ── Wallet-side contract ────────────────────────────────────────────────────
 
+export interface WalletIssuancePolicy extends ITokenIssuanceVerifier {
+  readonly coinIds: readonly string[];
+}
+
 export interface WalletTokenPlugin {
   readonly id: string;
   readonly mintJustificationVerifiers: readonly IMintJustificationVerifier[];
+  readonly tokenIssuancePolicies: readonly WalletIssuancePolicy[];
 }
 
 export interface WalletMintResult {

@@ -19,6 +19,7 @@ import type { BridgeAssetConfig } from '../config.js';
 import { chainFamily } from '../families.js';
 import { fromHex, toHex } from '../hex.js';
 import { createBridgePlugin, type BridgePlugin, type CreateBridgePluginDeps } from '../index.js';
+import type { LockMintJustificationVerifier } from '../LockMintJustificationVerifier.js';
 
 export type { BridgeManifestBase } from '@unicitylabs/bridge-core';
 export { evmChainRef } from '../evm/family.js';
@@ -53,6 +54,7 @@ export interface LoadedBridge {
   readonly bridgeConfig: BridgeConfig;
   /** 32-byte `configHash` recomputed from the manifest (== `manifest.configHash`). */
   readonly configHash: Uint8Array;
+  readonly replacedVaultVerifiers: readonly LockMintJustificationVerifier[];
 }
 
 export function assetConfigFromManifest(m: BridgeManifest, confirmations: number): BridgeAssetConfig {
@@ -129,7 +131,10 @@ function loadOne(m: BridgeManifest, deps: CreateBridgePluginDeps): LoadedBridge 
     );
   }
 
-  return { manifest: m, plugin, bridgeConfig, configHash };
+  const replacedVaultVerifiers = (m.replacedVaults ?? []).map(
+    (vault) => createBridgePlugin(assetConfigFromManifest({ ...m, vault }, m.confirmations), { ...deps, rpc: plugin.rpc }).verifier,
+  );
+  return { manifest: m, plugin, bridgeConfig, configHash, replacedVaultVerifiers };
 }
 
 /**

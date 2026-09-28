@@ -13,7 +13,17 @@ import {
   BRIDGE_LOCK_JUSTIFICATION_TAG,
   BridgeLockJustification,
 } from '../src/index.js';
-import { bridgeTokenPlugin, createSourceAdapter, loadBridges, mintedAgainst, NILE_USDT_BRIDGE } from '../src/wallet/index.js';
+import {
+  bridgeTokenPlugin,
+  createSourceAdapter,
+  loadBridges,
+  mergeBridgeTokenPlugins,
+  mintedAgainst,
+  NILE_USDT_BRIDGE,
+  NILE_USDT_BRIDGE_V1,
+  SEPOLIA_USDC_BRIDGE,
+} from '../src/wallet/index.js';
+import { BridgeMintJustificationVerifier, LockMintJustificationVerifier, fromHex } from '../src/index.js';
 import { buildScenario, CONFIG } from './helpers.js';
 
 const deps = () => ({ rpc: new MockTronRpc(null, 0n) });
@@ -24,9 +34,44 @@ test('bridgeTokenPlugin: one plugin per bridged asset, carrying the STRICT verif
   const plugin = bridgeTokenPlugin(loaded!);
 
   assert.equal(plugin.id, `bridge:${NILE_USDT_BRIDGE.chainRef}:usdt`);
-  assert.equal(plugin.mintJustificationVerifiers.length, 1);
-  assert.equal(plugin.mintJustificationVerifiers[0]!.tag, BRIDGE_LOCK_JUSTIFICATION_TAG);
   assert.equal(plugin.mintJustificationVerifiers[0], loaded!.plugin.verifier);
+  assert.ok(plugin.mintJustificationVerifiers.every((v) => v.tag === BRIDGE_LOCK_JUSTIFICATION_TAG));
+});
+
+test('bridgeTokenPlugin: the bridged token type must be minted against a lock or split off one, and alone issues the bridged coin', () => {
+  const [loaded] = loadBridges(SEPOLIA_USDC_BRIDGE, deps());
+  const plugin = bridgeTokenPlugin(loaded!);
+
+  assert.equal(plugin.tokenIssuancePolicies.length, 1);
+  assert.equal(toHex(plugin.tokenIssuancePolicies[0]!.tokenType.bytes), loaded!.plugin.tokenTypeHex);
+  assert.deepEqual(plugin.tokenIssuancePolicies[0]!.coinIds, [loaded!.plugin.coinIdHex]);
+});
+
+test('a replaced vault stays verify-only: its locks still back tokens of the same type', () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  const plugin = bridgeTokenPlugin(loaded!);
+  const verifiers = plugin.mintJustificationVerifiers as LockMintJustificationVerifier[];
+  const lockedAt = (vault: string) => ({ chainId: NILE_USDT_BRIDGE.chainId, lockContract: fromHex(vault) }) as never;
+  const v1 = loadBridges(NILE_USDT_BRIDGE_V1, deps())[0]!.plugin.resolvedConfig.lockContractHex;
+
+  assert.deepEqual(
+    verifiers.map((v) => v.accepts(lockedAt(v1))),
+    [false, true],
+  );
+  assert.equal(verifiers[0], loaded!.plugin.verifier);
+  assert.equal(plugin.tokenIssuancePolicies.length, 1);
+});
+
+test('mergeBridgeTokenPlugins: one dispatching verifier over every vault, and every bridged type keeps its policy', () => {
+  const plugins = loadBridges([NILE_USDT_BRIDGE, SEPOLIA_USDC_BRIDGE], deps()).map(bridgeTokenPlugin);
+  const merged = mergeBridgeTokenPlugins(plugins);
+
+  assert.equal(merged.mintJustificationVerifiers.length, 1);
+  assert.ok(merged.mintJustificationVerifiers[0] instanceof BridgeMintJustificationVerifier);
+  assert.deepEqual(
+    merged.tokenIssuancePolicies.map((p) => toHex(p.tokenType.bytes)),
+    plugins.map((p) => toHex(p.tokenIssuancePolicies[0]!.tokenType.bytes)),
+  );
 });
 
 test('the adapter mint request carries the wallet-format value, the lock reason, and a 0-confirmation self verifier', async () => {

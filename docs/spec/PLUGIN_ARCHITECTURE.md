@@ -71,7 +71,7 @@ never assume validity.
 - **Standalone plugin:** `bridge-plugin/` exports
   `createTronUsdtBridgePlugin(config)` → `{ tokenTypeHex, coinIdHex, cborTag, verifier }`.
 - **sphere-sdk (generic seams, no bridge code):** `TokenPlugin`
-  `{ id, mintJustificationVerifiers }` registered via `Sphere.init({ plugins })`
+  `{ id, mintJustificationVerifiers, tokenIssuancePolicies }` registered via `Sphere.init({ plugins })`
   / `EngineConfig.plugins` next to the SDK's split verifier; `mintDataToken`
   with a genesis `justification` and per-mint verifiers; `ITokenEngine.burn`
   with a reason; payments-v2 `mintCustom`, `burn`, `pendingBurns`,
@@ -84,6 +84,14 @@ never assume validity.
 - **App → engine:** the app loads manifests, builds `bridgeTokenPlugin(loaded)`
   per asset into `Sphere.init({ plugins })`, and runs bridge-in / bridge-out
   through the bridge-core helpers over `sphere.payments`.
+- **Mandatory backing:** each plugin also registers a `BridgedTokenIssuancePolicy`
+  for its token type. A genesis of that type must carry the lock reason or a
+  split reason, whose burned source the SDK checks under the same policy, so a
+  token of the bridged type minted without a lock fails verification. The policy
+  also claims the bridged coin id for that type, so the wallet counts the coin
+  only in verified tokens of the bridged type and shows any other holding of it
+  as unverified. A vault listed in a manifest's `replacedVaults` keeps its lock
+  verifier, so tokens locked there still verify after a redeploy.
 
 ## Adding another bridged asset later
 
