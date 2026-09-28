@@ -64,7 +64,7 @@ async function fetchEvents(base, vaultBase58, eventName) {
   const out = [];
   let url =
     `${base}/v1/contracts/${vaultBase58}/events` +
-    `?event_name=${eventName}&order_by=block_timestamp,asc&limit=200`;
+    `?event_name=${eventName}&only_confirmed=true&order_by=block_timestamp,asc&limit=200`;
   for (let page = 0; page < 100 && url; page++) {
     const res = await fetch(url);
     const json = await res.json();

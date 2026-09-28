@@ -82,6 +82,19 @@ describe("relayer-eth against the vault", () => {
     expect(txid).to.match(/^0x[0-9a-f]{64}$/);
   });
 
+  it("reads the settled log and root only up to the height the confirmations make final", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "e"), "e");
+    await settle(vault, bundle);
+    const early = await settledLog(vault, 0, 3);
+    expect(early.batches).to.deep.equal([]);
+    expect(early.spent_root).to.equal(ethers.ZeroHash);
+    await hre.network.provider.send("hardhat_mine", ["0x2"]);
+    const final = await settledLog(vault, 0, 3);
+    expect(final.batches.map((b) => b.spent_root_new)).to.deep.equal([bundle.spentRootNew]);
+    expect(final.spent_root).to.equal(bundle.spentRootNew);
+  });
+
   it("names the leaves whose payout would revert", async () => {
     const { recipient, vault } = await deployBridge(false);
     const lock = await lockOnce(vault, "c");

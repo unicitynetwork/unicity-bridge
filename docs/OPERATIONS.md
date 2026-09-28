@@ -144,9 +144,11 @@ A settlement counts as settled only once it is final, because the service
 records it in its journal and rebuilds the accumulator from that record when
 the RPC no longer serves the log. `relayer-eth.js` waits for
 `ETH_SETTLE_CONFIRMATIONS` confirmations (default 12, the Sepolia lock finality;
-raise `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` with it on a slower chain), and
+raise `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` with it on a slower chain) and reads
+the settled log and the vault's root only up to the height those confirmations
+make final, so a restart during the wait cannot record the settlement early.
 `relayer.js` waits for the solidity node, which answers only for solidified
-blocks.
+blocks, and reads only confirmed events.
 
 The Ethereum RPC must serve logs and receipts back to the vault's deploy
 block: the wallet reads old lock transactions to verify tokens, and a fresh

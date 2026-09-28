@@ -41,12 +41,12 @@ function context() {
   };
 }
 
-async function settledLog(vault, fromBlock) {
+async function settledLog(vault, fromBlock, confirmations = 1) {
   const provider = vault.runner.provider ?? vault.runner;
-  const latest = await provider.getBlockNumber();
+  const final = Math.max((await provider.getBlockNumber()) - (confirmations - 1), fromBlock);
   const events = [];
-  for (let start = fromBlock; start <= latest; start += LOG_WINDOW) {
-    const end = Math.min(start + LOG_WINDOW - 1, latest);
+  for (let start = fromBlock; start <= final; start += LOG_WINDOW) {
+    const end = Math.min(start + LOG_WINDOW - 1, final);
     const logs = [
       ...(await vault.queryFilter(vault.filters.BatchFulfilled(), start, end)),
       ...(await vault.queryFilter(vault.filters.Released(), start, end)),
@@ -54,7 +54,7 @@ async function settledLog(vault, fromBlock) {
     for (const log of logs) events.push(normalizeLog(log));
   }
   const grouped = groupBatches(events);
-  return { batches: grouped.batches, spent_root: hex32(await vault.spentRoot()) };
+  return { batches: grouped.batches, spent_root: hex32(await vault.spentRoot({ blockTag: final })) };
 }
 
 function normalizeLog(log) {
@@ -139,11 +139,11 @@ async function main() {
   const { rpc, vault, fromBlock, settleConfirmations } = context();
   const address = await vault.getAddress();
   if (cmd === "events") {
-    const log = await settledLog(vault, fromBlock);
+    const log = await settledLog(vault, fromBlock, settleConfirmations);
     console.error(`relayer-eth events: vault ${address} on ${rpc} -> ${log.batches.length} settled batch(es), spentRoot ${log.spent_root}`);
     process.stdout.write(JSON.stringify(log));
   } else if (cmd === "scan") {
-    const log = await settledLog(vault, fromBlock);
+    const log = await settledLog(vault, fromBlock, settleConfirmations);
     const eventsOut = process.env.RELAYER_EVENTS_OUT || path.join(require("os").tmpdir(), "relayer-eth-events.json");
     fs.writeFileSync(eventsOut, JSON.stringify(log, null, 2));
     const rebuilt = JSON.parse(execFileSync(HOST_BIN, ["s2-rebuild", eventsOut], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
