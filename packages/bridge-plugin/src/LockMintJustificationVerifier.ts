@@ -42,7 +42,9 @@ function fail(message: string): VerificationResult<VerificationStatus> {
 /**
  * Validates a bridged token by re-checking its mint reason against a node of
  * the source chain: the lock exists, is final, has the right amount, and
- * commits to exactly this token's id + recipient. See docs/spec/MINT_REASON.md.
+ * commits to exactly this token's id + recipient. A lock the node does not show
+ * yet, or one short of its confirmations, throws instead of failing, so the
+ * recipient can retry. See docs/spec/MINT_REASON.md.
  */
 export class LockMintJustificationVerifier implements IMintJustificationVerifier {
   private readonly rpc: SourceChainRpc;
@@ -100,7 +102,7 @@ export class LockMintJustificationVerifier implements IMintJustificationVerifier
     // 3-4. Fetch the lock tx and require success + finality.
     const txInfo = await this.rpc.getTransactionInfo(toHex(j.txid));
     if (!txInfo) {
-      return fail(`Lock transaction not found: ${toHex(j.txid)}.`);
+      throw new Error(`Lock transaction not found: ${toHex(j.txid)}.`);
     }
     if (!txInfo.success) {
       return fail('Lock transaction did not succeed.');
@@ -108,7 +110,7 @@ export class LockMintJustificationVerifier implements IMintJustificationVerifier
     const tip = await this.rpc.getNowBlockNumber();
     const confirmations = tip - txInfo.blockNumber;
     if (confirmations < BigInt(this.config.confirmations)) {
-      return fail(
+      throw new Error(
         `Insufficient confirmations: ${confirmations} < ${this.config.confirmations} (awaiting source finality).`,
       );
     }

@@ -84,7 +84,10 @@ are never trusted from the justification body.
 ## Verification rule
 
 Executed by every recipient (in `IMintJustificationVerifier.verify`). All checks
-must pass; any failure ⇒ `VerificationStatus.FAIL` with a specific message.
+must pass; a definitive failure ⇒ `VerificationStatus.FAIL` with a specific
+message. A check that cannot be decided yet throws instead: the lock transaction
+is not on the node yet, it is short of its confirmations, or the node is
+unreachable. A recipient treats a throw as "retry later", never as a rejection.
 
 1. **Decode & trust anchors.** Decode the justification. Reject unless
    `chainId`, `lockContract`, `assetContract` equal the verifier's configured
@@ -95,7 +98,7 @@ must pass; any failure ⇒ `VerificationStatus.FAIL` with a specific message.
    receipt result to be `SUCCESS`.
 4. **Finality.** `wallet/getnowblock` tip; require
    `tip.blockNumber − tx.blockNumber ≥ confirmations` (default `K = 20`, ~Tron SR
-   irreversibility). Below that ⇒ FAIL ("awaiting source finality").
+   irreversibility). Below that ⇒ throw ("awaiting source finality").
 5. **Locate event.** Take `log[logIndex]`; require it was emitted by
    `lockContract` and is the `Lock` event (topic0 == keccak256 of the event
    signature). Decode `{ nonce, from, amount, unicityTokenId, recipientCommitment }`.

@@ -51,11 +51,9 @@ test('the adapter mint request carries the wallet-format value, the lock reason,
   assert.notEqual(req.mintJustificationVerifiers[0], loaded!.plugin.verifier, 'the self verifier is a separate, weaker instance');
 });
 
-test('the self verifier accepts a lock that is in a block but not final; the strict one does not', async () => {
+test('the self verifier accepts a lock that is in a block but not final; the strict one is not ready to answer', async () => {
   const s = await buildScenario({ tip: 101n });
-  const strict = await s.plugin.verifier.verify(s.certifiedTx, noNestedTokens);
-  assert.equal(strict.status, VerificationStatus.FAIL);
-  assert.match(strict.message, /Insufficient confirmations: 1 < 20/);
+  await assert.rejects(s.plugin.verifier.verify(s.certifiedTx, noNestedTokens), /Insufficient confirmations: 1 < 20/);
 
   const self = createBridgePlugin({ ...CONFIG, confirmations: 0 }, { rpc: s.rpc }).verifier;
   const own = await self.verify(s.certifiedTx, noNestedTokens);

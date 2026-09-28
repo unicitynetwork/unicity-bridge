@@ -66,19 +66,15 @@ test('FAIL: wrong/forged lock contract emitted the event', async () => {
   assert.match(result.message, /canonical lock contract/);
 });
 
-test('FAIL: insufficient confirmations (not yet final)', async () => {
+test('throws, so the recipient retries, while the lock is short of its confirmations', async () => {
   const s = await buildScenario({ blockNumber: 100n, tip: 100n + BigInt(CONFIRMATIONS) - 1n });
-  const result = await verify(s);
-  assert.equal(result.status, VerificationStatus.FAIL);
-  assert.match(result.message, /Insufficient confirmations/);
+  await assert.rejects(verify(s), /Insufficient confirmations/);
 });
 
-test('FAIL: lock transaction not found on the node', async () => {
+test('throws, so the recipient retries, while the node does not show the lock transaction yet', async () => {
   const s = await buildScenario();
   s.rpc.txInfo = null;
-  const result = await verify(s);
-  assert.equal(result.status, VerificationStatus.FAIL);
-  assert.match(result.message, /not found/);
+  await assert.rejects(verify(s), /not found/);
 });
 
 test('FAIL: lock transaction reverted on chain', async () => {
