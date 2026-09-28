@@ -32,7 +32,13 @@ function context() {
   const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });
   const signer = env.ETH_SK ? new ethers.NonceManager(new ethers.Wallet(env.ETH_SK, provider)) : null;
   const vault = new ethers.Contract(env.ETH_VAULT, [...VAULT_ABI, ...VERIFIER_ERRORS], signer ?? provider);
-  return { rpc, provider, vault, fromBlock: Number(env.ETH_VAULT_DEPLOY_BLOCK || 0) };
+  return {
+    rpc,
+    provider,
+    vault,
+    fromBlock: Number(env.ETH_VAULT_DEPLOY_BLOCK || 0),
+    settleConfirmations: Number(env.ETH_SETTLE_CONFIRMATIONS || 12),
+  };
 }
 
 async function settledLog(vault, fromBlock) {
@@ -85,7 +91,7 @@ function leafTuple(l) {
   return [l.nullifier, l.recipient, BigInt(l.amount), l.feeRecipient, BigInt(l.feeAmount), BigInt(l.deadline)];
 }
 
-async function settle(vault, bundle) {
+async function settle(vault, bundle, confirmations = 1) {
   const leaves = (bundle.leaves || []).map(leafTuple);
   const lockRefs = (bundle.lockRefs || []).map((r) => [BigInt(r.nonce), r.digest]);
   let tx;
@@ -94,7 +100,7 @@ async function settle(vault, bundle) {
   } catch (e) {
     throw new Error(`fulfillBatch rejected: ${revertReason(vault, e)}`);
   }
-  const receipt = await tx.wait();
+  const receipt = await tx.wait(confirmations);
   if (!receipt || receipt.status !== 1) {
     throw new Error(`fulfillBatch tx ${tx.hash} reverted on chain`);
   }
@@ -130,7 +136,7 @@ function readStdin() {
 async function main() {
   const cmd = process.argv[2];
   const stdin = process.argv.includes("--stdin");
-  const { rpc, vault, fromBlock } = context();
+  const { rpc, vault, fromBlock, settleConfirmations } = context();
   const address = await vault.getAddress();
   if (cmd === "events") {
     const log = await settledLog(vault, fromBlock);
@@ -150,7 +156,7 @@ async function main() {
   } else if (cmd === "settle" && stdin) {
     const bundle = JSON.parse(await readStdin());
     console.error(`relayer-eth settle: batch ${bundle.batchId}, ${(bundle.leaves || []).length} leaf(ves) on vault ${address}`);
-    const { txid, gasUsed, blockNumber } = await settle(vault, bundle);
+    const { txid, gasUsed, blockNumber } = await settle(vault, bundle, settleConfirmations);
     console.error(`settled in block ${blockNumber}, gas ${gasUsed}: ${txid}`);
     process.stdout.write(txid);
   } else if (cmd === "simulate" && stdin) {

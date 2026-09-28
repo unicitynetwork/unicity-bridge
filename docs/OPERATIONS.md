@@ -140,6 +140,14 @@ vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
 all-Rust submitter the plan calls for is not built; until it is, the container
 carries Node for this.
 
+A settlement counts as settled only once it is final, because the service
+records it in its journal and rebuilds the accumulator from that record when
+the RPC no longer serves the log. `relayer-eth.js` waits for
+`ETH_SETTLE_CONFIRMATIONS` confirmations (default 12, the Sepolia lock finality;
+raise `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` with it on a slower chain), and
+`relayer.js` waits for the solidity node, which answers only for solidified
+blocks.
+
 The Ethereum RPC must serve logs and receipts back to the vault's deploy
 block: the wallet reads old lock transactions to verify tokens, and a fresh
 service rebuilds the spent-nullifier accumulator from every settlement since

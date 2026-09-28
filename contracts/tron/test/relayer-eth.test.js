@@ -70,6 +70,18 @@ describe("relayer-eth against the vault", () => {
     expect(err.message).to.include("vault: stale root");
   });
 
+  it("reports a settlement only once it has the confirmations asked for", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "d"), "d");
+    let reported = false;
+    const settling = settle(vault, bundle, 3).then((r) => ((reported = true), r));
+    await new Promise((r) => setTimeout(r, 500));
+    expect(reported).to.equal(false);
+    await hre.network.provider.send("hardhat_mine", ["0x2"]);
+    const { txid } = await settling;
+    expect(txid).to.match(/^0x[0-9a-f]{64}$/);
+  });
+
   it("names the leaves whose payout would revert", async () => {
     const { recipient, vault } = await deployBridge(false);
     const lock = await lockOnce(vault, "c");
