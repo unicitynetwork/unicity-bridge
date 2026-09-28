@@ -50,7 +50,7 @@ function configFromVector(): BridgeConfig {
 
 test('VERSION matches the pinned vectors', () => {
   const v = readFileSync(new URL('../../../protocol/vectors/VERSION', import.meta.url), 'utf8').trim();
-  assert.equal(v, '1');
+  assert.equal(v, '2');
 });
 
 test('config -> configHash (00 §2)', () => {

@@ -24,7 +24,7 @@ enum Backend {
 }
 
 pub enum SubmitOutcome {
-    /// No submitter configured — left at `proven` (self-settleable).
+    /// No submitter configured, or no proof to settle: left at `proven`.
     Skipped,
     Submitted { txid: String },
     Failed { message: String },
@@ -71,10 +71,7 @@ async fn run_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
 
     // A no-proof bundle (precheck-only mode) can't settle on-chain.
     if bundle.proof_bytes == "0x" {
-        return SubmitOutcome::Failed {
-            message: "submit requested but the batch has no proof (prove_mode != sp1_groth16)"
-                .to_string(),
-        };
+        return SubmitOutcome::Skipped;
     }
 
     // The whole published bundle — batchId, mode, vkey, publicValues, proofBytes,
@@ -129,5 +126,34 @@ async fn run_command(cmd: &str, bundle: &BatchBundle) -> SubmitOutcome {
         Err(e) => SubmitOutcome::Failed {
             message: format!("submit command wait failed: {e}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle(proof_bytes: &str) -> BatchBundle {
+        BatchBundle {
+            batch_id: "b".to_string(),
+            mode: "precheck_only".to_string(),
+            vkey: None,
+            public_values: "0x".to_string(),
+            proof_bytes: proof_bytes.to_string(),
+            settle_txid: None,
+            leaves: Vec::new(),
+            lock_refs: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bundle_without_proof_is_left_proven_even_with_a_submit_command() {
+        let submitter = Submitter {
+            backend: Backend::Command("false".to_string()),
+        };
+        assert!(matches!(
+            submitter.submit(&bundle("0x")).await,
+            SubmitOutcome::Skipped
+        ));
     }
 }

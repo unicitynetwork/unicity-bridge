@@ -125,3 +125,5 @@ temp/
 *.sqlite
 *.sqlite3
 *.db
+
+sp1-vkey.json

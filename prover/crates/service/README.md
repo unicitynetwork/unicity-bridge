@@ -125,6 +125,13 @@ typed: `{error:{code, message, recoverable}}` with HTTP 400/404. Failure `kind`s
 `precheck_rejected`, `proving_failed`, `submission_failed`, `chain_rejected`,
 `service_unavailable`.
 
+`recoverable` says whether the same blob may go through later. A precheck
+rejection is deterministic for that blob and is never recoverable; a closed
+queue, a host error or an unsynced accumulator is. `POST /returns` is idempotent
+on the nullifier, with one exception: a return whose last attempt `failed` with
+`recoverable: true` is queued again by a resubmit (`duplicate: false`), so a
+wallet retries by posting the blob once more.
+
 ---
 
 ## S4 submitter

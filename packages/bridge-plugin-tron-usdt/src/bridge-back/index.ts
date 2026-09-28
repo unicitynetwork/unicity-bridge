@@ -8,3 +8,4 @@ export * as bridgeCbor from './cbor.js';
 export * as bridgeAbi from './abi.js';
 export * from './derivations.js';
 export * from './burn.js';
+export * from './burned-blob.js';

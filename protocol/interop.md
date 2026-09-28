@@ -7,7 +7,7 @@ not fixed here. It refines [`../ZK_BACK3.md`](../ZK_BACK3.md) §2, §5, §14 and
 yellowpaper `appendix-bridging.tex` "Shared Parameters" table into a frozen,
 testable form.
 
-**Version:** `BRIDGE_PROTO_VERSION = 1` — decisions below are fixed; vectors are
+**Version:** `BRIDGE_PROTO_VERSION = 2` — decisions below are fixed; vectors are
 published at M0. Every repo pins this constant; the conformance vectors are tagged
 with it.
 
@@ -72,6 +72,38 @@ configHash = K(abi.encode(
   `tokenType = SHA256("unicity-bridge:tron:<chainId>:<assetEvmHex>")`,
   `coinId = SHA256("unicity-bridge-coin:tron:<chainId>:<assetEvmHex>")`. Those
   derivations are frozen here too (they feed `config`).
+
+### 2.1 The bridged token's value payload (CHANGED 2026-09-18; `BRIDGE_PROTO_VERSION = 2` since 2026-09-21)
+
+The bridge defines no value format of its own. A bridged token's genesis `data`
+is the **wallet's value payload**, the format the network's wallets and their
+servers read natively, so a bridged token is an ordinary valued token to them
+from the moment it is minted. Today that is sphere-sdk's `SpherePaymentData`:
+
+```
+data = tag(39050) [ version = 1, PaymentAssetCollection, memo: bstr | null ]
+```
+
+with the collection inline (not wrapped in a byte string) and the memo `null`
+for bridge mints. The amount the bridge checks (mint-time value == locked
+amount; return-time burned value == locked amount) is the collection's entry for
+`config.coinId`.
+
+- **TS plugin:** `packages/bridge-plugin-tron-usdt/src/value.ts` encodes and
+  decodes it (pinned byte-for-byte against sphere-sdk's encoder in
+  `test/value.test.ts`). Bare `PaymentAssetCollection` bytes, the v1 dialect,
+  now decode as "no value".
+- **Circuit / prover:** `decode_bridged_payment_data`
+  (`prover/crates/sdk-ext/src/bridge.rs`) accepts this envelope and rejects the
+  bare collection, since 2026-09-21 (Rust SDK v3.0.1 port). `BRIDGE_PROTO_VERSION`
+  is 2 and the `token/` vectors are regenerated. The deployed v1 vault's verifying
+  key predates this guest; the v2 vault is deployed with the new key.
+- **Why:** wallet-api decides a token's assets server-side from the blob, and
+  sphere-sdk classifies a bare collection as an unreadable dialect; a client-side
+  decoder alone cannot make a v1 bridged token spendable. Adopting the wallet's
+  format needs nothing from the wallet or server teams. If the network later
+  fixes one canonical value payload, the bridge follows it: one function per
+  implementation plus a version bump.
 
 ---
 

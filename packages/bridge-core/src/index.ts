@@ -12,7 +12,7 @@
  *                            decode the commit, build the Unicity mint request
  * plus {BridgePresentation} (explorer link + address validation) for the UI.
  */
-import type { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
+import type { IMintJustificationVerifier } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/IMintJustificationVerifier.js';
 
 // ── ChainWallet boundary ────────────────────────────────────────────────────
 
@@ -79,16 +79,16 @@ export interface CommitInfo {
   readonly logIndex: number;
 }
 
-/** A chain-neutral Unicity mint request (the orchestrator hands this to the SDK). */
+/** A chain-neutral Unicity mint request (the orchestrator hands this to the wallet via {mintBridgedToken}). */
 export interface MintRequest {
   readonly coinIdHex: string;
   readonly amount: bigint;
-  /** Raw bridge-owned `MintTransaction.data` bytes. For Tron-USDT this is bare SDK `PaymentAssetCollection` CBOR. */
+  /** The genesis value payload, in the wallet's value format. */
   readonly mintData: Uint8Array;
   readonly tokenType: Uint8Array;
   readonly salt: Uint8Array;
   readonly genesisReason: Uint8Array;
-  readonly mintJustificationVerifierOverride: MintJustificationVerifierService;
+  readonly mintJustificationVerifiers: readonly IMintJustificationVerifier[];
 }
 
 export interface DepositParams {
@@ -171,4 +171,94 @@ export interface BridgeManifestBase {
   readonly tokenTypeHex?: string;
   /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
   readonly coinIdHex?: string;
+}
+
+// ── Wallet-side contract ────────────────────────────────────────────────────
+
+export interface WalletTokenPlugin {
+  readonly id: string;
+  readonly mintJustificationVerifiers: readonly IMintJustificationVerifier[];
+}
+
+export interface WalletMintResult {
+  readonly success: boolean;
+  readonly tokenId?: string;
+  readonly error?: string;
+}
+
+export interface WalletBurnResult {
+  readonly success: boolean;
+  readonly burnId: string;
+  readonly tokenId: string;
+  readonly burnedToken?: Uint8Array;
+  readonly error?: string;
+}
+
+export interface WalletPendingBurn {
+  readonly burnId: string;
+  readonly tokenId: string;
+  readonly reasonBytes: Uint8Array;
+  readonly burnedToken: Uint8Array | null;
+  readonly settled: boolean;
+}
+
+export interface BridgePayments {
+  mintCustom(request: {
+    readonly tokenType: Uint8Array;
+    readonly salt: Uint8Array;
+    readonly data: Uint8Array;
+    readonly justification?: Uint8Array;
+    readonly assets: readonly { coinId: string; amount: bigint }[];
+    readonly mintJustificationVerifiers?: readonly IMintJustificationVerifier[];
+  }): Promise<WalletMintResult>;
+  burn(request: { readonly tokenId: string; readonly reasonBytes: Uint8Array }): Promise<WalletBurnResult>;
+  tokenJustification(tokenId: string): Promise<Uint8Array | null>;
+  pendingBurns(): Promise<readonly WalletPendingBurn[]>;
+  acknowledgeBurn(burnId: string): Promise<void>;
+}
+
+export function mintBridgedToken(payments: BridgePayments, request: MintRequest): Promise<WalletMintResult> {
+  return payments.mintCustom({
+    tokenType: request.tokenType,
+    salt: request.salt,
+    data: request.mintData,
+    justification: request.genesisReason,
+    assets: [{ coinId: request.coinIdHex, amount: request.amount }],
+    mintJustificationVerifiers: request.mintJustificationVerifiers,
+  });
+}
+
+export interface BurnForReturnArgs {
+  readonly tokenId: string;
+  readonly reasonBytes: Uint8Array;
+  readonly persist: (burnedToken: Uint8Array, burnId: string) => Promise<void>;
+}
+
+export interface BurnForReturnResult {
+  readonly burnId: string;
+  readonly burnedToken: Uint8Array;
+}
+
+export async function burnForReturn(payments: BridgePayments, args: BurnForReturnArgs): Promise<BurnForReturnResult> {
+  const result = await payments.burn({ tokenId: args.tokenId, reasonBytes: args.reasonBytes });
+  if (!result.success || !result.burnedToken) {
+    throw new Error(`burn failed for token ${args.tokenId}: ${result.error ?? 'no burned blob returned'}`);
+  }
+  await args.persist(result.burnedToken, result.burnId);
+  await payments.acknowledgeBurn(result.burnId);
+  return { burnId: result.burnId, burnedToken: result.burnedToken };
+}
+
+export async function recoverPendingBurns(
+  payments: BridgePayments,
+  persist: BurnForReturnArgs['persist'],
+): Promise<readonly BurnForReturnResult[]> {
+  const recovered: BurnForReturnResult[] = [];
+  for (const pending of await payments.pendingBurns()) {
+    if (!pending.settled || pending.burnedToken === null) continue;
+    await persist(pending.burnedToken, pending.burnId);
+    await payments.acknowledgeBurn(pending.burnId);
+    recovered.push({ burnId: pending.burnId, burnedToken: pending.burnedToken });
+  }
+  return recovered;
 }

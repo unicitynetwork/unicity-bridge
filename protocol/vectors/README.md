@@ -6,7 +6,7 @@ One reference generator produces them; the contracts (Solidity), the TS SDK, and
 the prover (Rust) each consume them as test input. A component is "in sync" iff
 its CI reproduces every vector for its subset.
 
-**`BRIDGE_PROTO_VERSION`** is in [`VERSION`](./VERSION) (`= 1`). Every consumer
+**`BRIDGE_PROTO_VERSION`** is in [`VERSION`](./VERSION) (`= 2`). Every consumer
 pins it; a version skew is a CI failure.
 
 ## Layout
@@ -21,6 +21,7 @@ protocol/vectors/
   nullifier/   *.json     # (stateId, txHash, configHash) → nullifier      [implemented]
   public/      *.json     # leaves/refs → roots; PublicValues → ABI        [implemented]
   accumulator/ *.json     # ordered nullifier stream → roots + witnesses   [implemented]
+  value/       *.json     # wallet value payload → amount, or rejected    [implemented]
   token/       README.md  # burned-token blobs → relation outputs          [stub → M2]
 ```
 
@@ -45,7 +46,7 @@ cross-referenced to the `00` clause it implements.
 | Component | Must reproduce |
 |---|---|
 | Contracts (Solidity tests) | `config`, `lock`, `public` (keccak/ABI recompute), settlement |
-| TS SDK | `config`, `reason`, `nullifier`, `lock` (recipientCommitment) |
+| TS SDK | `config`, `reason`, `nullifier`, `lock` (recipientCommitment), `value` |
 | Prover (Rust) | all groups |
 
 Recompute each `out` from the `in` with your implementation and assert equality.

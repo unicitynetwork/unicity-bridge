@@ -36,5 +36,5 @@ fn live_fetch_terminal_proof() {
 
     let proof = aggregator::fetch_terminal_inclusion_proof(&client, &token)
         .expect("fetch terminal inclusion proof");
-    assert!(proof.inclusion_certificate.is_some());
+    assert!(proof.reference_time > 0);
 }

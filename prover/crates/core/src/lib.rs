@@ -2,7 +2,7 @@
 //!
 //! This crate implements the prover-side subset of
 //! `protocol/interop.md` for
-//! `BRIDGE_PROTO_VERSION = 1`.
+//! `BRIDGE_PROTO_VERSION = 2`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
@@ -15,7 +15,7 @@ mod hash;
 
 use alloc::vec::Vec;
 
-pub const BRIDGE_PROTO_VERSION: u32 = 1;
+pub const BRIDGE_PROTO_VERSION: u32 = 2;
 
 pub const DOMAIN_CONFIG: &str = "unicity-bridge-return-config:v1";
 pub const DOMAIN_LOCK: &str = "unicity-bridge-lock:v1";

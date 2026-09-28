@@ -70,14 +70,20 @@ never assume validity.
 
 - **Standalone plugin:** `bridge-plugin-tron-usdt/` exports
   `createTronUsdtBridgePlugin(config)` → `{ tokenTypeHex, coinIdHex, cborTag, verifier }`.
-- **sphere-sdk:** `token-engine/factory.ts` builds the
-  `MintJustificationVerifierService` (today it registers
-  `SplitMintJustificationVerifier`). `EngineConfig.bridgePlugins` is registered
-  there too, right after. `token-engine/` stays browser/IPFS/Nostr-free; the
-  plugin uses only `fetch`.
-- **App → engine:** plumbing the manifest/config from the app into
-  `EngineConfig.bridgePlugins` (and unknown-asset discovery) is the deferred UI
-  phase; the factory hook + an integration test land now.
+- **sphere-sdk (generic seams, no bridge code):** `TokenPlugin`
+  `{ id, mintJustificationVerifiers }` registered via `Sphere.init({ plugins })`
+  / `EngineConfig.plugins` next to the SDK's split verifier; `mintDataToken`
+  with a genesis `justification` and per-mint verifiers; `ITokenEngine.burn`
+  with a reason; payments-v2 `mintCustom`, `burn`, `pendingBurns`,
+  `acknowledgeBurn` (journal-first, crash-replayed). `token-engine/` stays
+  browser/IPFS/Nostr-free; the plugin uses only `fetch`.
+- **bridge-core (chain-neutral):** the structural wallet contract
+  (`WalletTokenPlugin`, `BridgePayments`) and the composition helpers
+  `mintBridgedToken`, `burnForReturn`, `recoverPendingBurns`. It never imports
+  the wallet SDK; a sphere-sdk `PaymentsV2` satisfies `BridgePayments` as is.
+- **App → engine:** the app loads manifests, builds `bridgeTokenPlugin(loaded)`
+  per asset into `Sphere.init({ plugins })`, and runs bridge-in / bridge-out
+  through the bridge-core helpers over `sphere.payments`.
 
 ## Adding another bridged asset later
 

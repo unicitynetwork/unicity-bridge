@@ -253,7 +253,7 @@ async fn submit_batch(
             tracing::info!(
                 return_id = %id,
                 batch_id = %batch_id,
-                "no S4 submitter configured — left proven (self-settleable)",
+                "no S4 submitter configured or no proof to settle, left proven",
             );
         }
         SubmitOutcome::Submitted { txid } => {

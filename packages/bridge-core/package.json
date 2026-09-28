@@ -1,7 +1,7 @@
 {
   "name": "@unicitylabs/bridge-core",
   "version": "0.1.0-bridge.2",
-  "description": "Chain-neutral bridge contracts: the source-adapter, wallet/client boundaries, and presentation interfaces a wallet's bridge orchestration runs on. Chain plugins (Tron, EVM, …) implement these; the orchestrator never imports a chain package.",
+  "description": "Chain-neutral bridge contracts: the source-adapter, wallet/client boundaries, and presentation interfaces a wallet's bridge orchestration runs on. Chain plugins (Tron, EVM, \u2026) implement these; the orchestrator never imports a chain package.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -27,7 +27,8 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
   },
   "engines": {
     "node": ">=22"
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0"
   }
 }

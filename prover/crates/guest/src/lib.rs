@@ -123,10 +123,7 @@ fn validate_bridge_burns(
     sorted_lock_refs: &[SourceLockRef],
     burns: &[BridgeBurnWitness],
 ) -> Result<()> {
-    if burns.is_empty() {
-        return Ok(());
-    }
-    if burns.len() != leaves.len() {
+    if burns.is_empty() || burns.len() != leaves.len() {
         return Err(BridgeCoreError::WrongBatchSize);
     }
     let sdk_config = sdk_bridge_config(config);
@@ -446,16 +443,34 @@ mod tests {
     }
 
     #[test]
-    fn execute_threads_accumulator_witnesses() {
+    fn execute_rejects_leaves_without_burns() {
         let input = input(alloc::vec![leaf([0x01; 32], 3), leaf([0x02; 32], 4)]);
-        assert!(execute(&input).is_ok());
+        assert_eq!(execute(&input), Err(BridgeCoreError::WrongBatchSize));
     }
 
     #[test]
-    fn execute_rejects_stale_accumulator_witness() {
+    fn accumulator_transition_threads_witnesses() {
+        let input = input(alloc::vec![leaf([0x01; 32], 3), leaf([0x02; 32], 4)]);
+        assert!(validate_accumulator_transition(
+            input.public_values.spent_root_old,
+            input.public_values.spent_root_new,
+            &input.return_leaves,
+            &input.witness.accumulator_witnesses,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn accumulator_transition_rejects_stale_witness() {
         let mut input = input(alloc::vec![leaf([0x01; 32], 3), leaf([0x02; 32], 4)]);
         input.witness.accumulator_witnesses.swap(0, 1);
-        assert!(execute(&input).is_err());
+        assert!(validate_accumulator_transition(
+            input.public_values.spent_root_old,
+            input.public_values.spent_root_new,
+            &input.return_leaves,
+            &input.witness.accumulator_witnesses,
+        )
+        .is_err());
     }
 
     #[test]

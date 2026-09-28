@@ -247,7 +247,9 @@ cd ../prover && cargo run -p bridge-return-host --example cross_check_live -- \
   ../packages/bridge-plugin-tron-usdt/demo/.bridge-back-state.json
 ```
 
-> Interop note: the token **value envelope must use the SDK `PaymentAssetCollection`
-> format** (which the prover decodes), not the bespoke `encodeBridgedValue` in
-> `src/value.ts` (CLI-only, not cross-stack compatible). The production wallet
-> (sphere) likewise uses SDK payment data.
+> Interop note: the token's value payload is the **wallet's format**
+> (`SpherePaymentData`, CBOR tag 39050; `protocol/interop.md` §2.1), written and
+> read by `encodeBridgePaymentData` / `decodeBridgePaymentData` in `src/value.ts`.
+> The bespoke `encodeBridgedValue` there is CLI-only. The Rust prover's decoder
+> follows in the SDK-v3 port (`docs/dev-plan/09-testnet-e2e.md`, Phase 2); until
+> then `cross_check_live` does not accept tokens minted by this demo.

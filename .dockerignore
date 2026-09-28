@@ -1,0 +1,16 @@
+.git
+**/node_modules
+**/target
+**/dist
+sphere
+sphere-sdk
+state-transition-sdk-js
+aggregator-go
+unicity-yellowpaper-tex
+packages
+docs
+contracts/tron/artifacts
+contracts/tron/cache
+.env
+.env.*
+*.log

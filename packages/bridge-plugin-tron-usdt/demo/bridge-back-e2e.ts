@@ -33,9 +33,6 @@ import { SignaturePredicate } from '@unicitylabs/state-transition-sdk/lib/predic
 import { SignaturePredicateUnlockScript } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicateUnlockScript.js';
 import { EncodedPredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/EncodedPredicate.js';
 import { StateTransitionClient } from '@unicitylabs/state-transition-sdk/lib/StateTransitionClient.js';
-import { Asset } from '@unicitylabs/state-transition-sdk/lib/payment/asset/Asset.js';
-import { AssetId } from '@unicitylabs/state-transition-sdk/lib/payment/asset/AssetId.js';
-import { PaymentAssetCollection } from '@unicitylabs/state-transition-sdk/lib/payment/asset/PaymentAssetCollection.js';
 import { MintTransaction } from '@unicitylabs/state-transition-sdk/lib/transaction/MintTransaction.js';
 import { Token } from '@unicitylabs/state-transition-sdk/lib/transaction/Token.js';
 import { TokenId } from '@unicitylabs/state-transition-sdk/lib/transaction/TokenId.js';
@@ -66,6 +63,8 @@ import {
   type TronLog,
   type TronRpc,
   type TronTxInfo,
+  decodeBridgePaymentData,
+  encodeBridgePaymentData,
 } from '../src/index.js';
 
 // ---- env -------------------------------------------------------------------
@@ -132,19 +131,6 @@ function makeLockLog(
   };
 }
 
-// Read the bridged-coin value using the SDK PaymentAssetCollection format — the
-// SAME format the Rust prover decodes (00: token value/coinId). The bespoke
-// `encodeBridgedValue` envelope in src/value.ts is CLI-only and is NOT
-// cross-stack compatible; the production wallet (sphere) likewise uses the SDK
-// payment data. This is why the demo encodes/extracts via the SDK collection.
-function extractSdkAmount(data: Uint8Array | null, coinId: Uint8Array): bigint | null {
-  if (!data) return null;
-  try {
-    return PaymentAssetCollection.fromCBOR(data).get(new AssetId(coinId))?.value ?? null;
-  } catch {
-    return null;
-  }
-}
 
 function trustBase(): RootTrustBase {
   return RootTrustBase.fromJSON(JSON.parse(readFileSync(new URL(TRUSTBASE, repoRoot).pathname, 'utf8')));
@@ -187,7 +173,6 @@ async function main(): Promise<void> {
   });
   const plugin = createTronUsdtBridgePlugin(pluginConfig, {
     rpc: new MockTronRpc({ blockNumber: 100n, success: true, logs: [lockLog] }, 100n),
-    extractAmount: extractSdkAmount,
   });
 
   // The bridge config the reason/nullifier bind to (and the prover must use).
@@ -219,7 +204,7 @@ async function main(): Promise<void> {
     amount: AMOUNT,
     nonce: NONCE,
   }).toCBOR();
-  const valueData = PaymentAssetCollection.create(new Asset(new AssetId(cfg.coinId), AMOUNT)).toCBOR();
+  const valueData = encodeBridgePaymentData(cfg.coinId, AMOUNT);
   const mintTx = await MintTransaction.create(networkId, ownerPredicate, {
     data: valueData,
     tokenType: new TokenType(cfg.tokenType),
@@ -237,7 +222,7 @@ async function main(): Promise<void> {
     await waitInclusionProof(c, tb, v.predicateVerifier, v.unicityCertificateVerifier, mintTx),
   );
   const token = await Token.mint(certifiedMint, v.context);
-  log(`   minted: ${toHex(token.toCBOR()).length / 2} bytes, value ${extractSdkAmount(valueData, cfg.coinId)}, backing OK\n`);
+  log(`   minted: ${toHex(token.toCBOR()).length / 2} bytes, value ${decodeBridgePaymentData(valueData, cfg.coinId)}, backing OK\n`);
 
   // 2. burn it to a BridgeBackReason -----------------------------------------
   const reason: BridgeBackReason = {
