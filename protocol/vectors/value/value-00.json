@@ -1,0 +1,6 @@
+{
+  "description": "wallet value payload tag(39050) [ 1, [[coinId, amount]], memo ]: the memo is a byte string or null and nothing follows the item; accept `valid` with this amount, reject every `invalid`",
+  "in": { "coin_id": "0x16fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b", "amount": 1000000 },
+  "valid": ["0xd9988a83018182582016fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b430f4240f6", "0xd9988a83018182582016fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b430f4240446d656d6f"],
+  "invalid": [{ "why": "the memo is an integer", "payload": "0xd9988a83018182582016fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b430f424000" }, { "why": "the memo is a text string", "payload": "0xd9988a83018182582016fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b430f4240646d656d6f" }, { "why": "a byte follows the payload", "payload": "0xd9988a83018182582016fb6597bb3233902232a7aa6ee54f41e45014ffc4927ee63e8710823638d20b430f4240f600" }]
+}
