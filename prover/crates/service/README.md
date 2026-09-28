@@ -153,9 +153,11 @@ batches.
 rejection is deterministic for that blob and is never recoverable. A batch-wide
 fault (`proving_failed`, `submission_failed`, `chain_rejected`) marks every
 member `failed` with `recoverable: true` and a retry scheduled at `notBeforeMs`,
-doubling from `BRIDGE_RETURN_RETRY_BASE_SECS`. The service retries on its own; a
-settlement retry reuses the proof; after `BRIDGE_RETURN_MAX_ATTEMPTS` the return
-is parked as a final `failed` whose message says so. `POST /returns` is
+doubling from `BRIDGE_RETURN_RETRY_BASE_SECS`. While that retry is pending the
+record is not `terminal`, `success` is null and `nextPollMs` stays non-zero. The
+service retries on its own; a settlement retry reuses the proof; after
+`BRIDGE_RETURN_MAX_ATTEMPTS` the return is parked as a final, `terminal` `failed`
+whose message says so. `POST /returns` is
 idempotent on the nullifier, with one exception: a recoverably failed return is
 queued again by a resubmit (`duplicate: false`) without shortening its schedule.
 

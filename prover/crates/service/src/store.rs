@@ -489,15 +489,16 @@ fn apply_status_defaults(record: &mut ReturnRecord) {
             record.next_poll_ms = 0;
         }
         ReturnStatus::Failed => {
-            record.terminal = true;
-            record.success = Some(false);
+            let retrying = record.failed_recoverably();
+            record.terminal = !retrying;
+            record.success = if retrying { None } else { Some(false) };
             record.progress = 100;
             if let Some(failure) = &record.failure {
                 record.message = failure.message.clone();
             } else {
                 record.message = "Return failed".to_string();
             }
-            record.next_poll_ms = 0;
+            record.next_poll_ms = if retrying { 15_000 } else { 0 };
         }
     }
 }

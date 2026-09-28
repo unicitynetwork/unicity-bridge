@@ -533,6 +533,24 @@ mod tests {
     }
 
     #[test]
+    fn a_return_waiting_for_its_retry_is_not_terminal_until_it_is_parked() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        let first = formed(&mut ledger, &["a"], 200);
+        failed(&mut ledger, &first, 300);
+        let waiting = ledger.record("a").unwrap();
+        assert!(!waiting.terminal);
+        assert_eq!(waiting.success, None);
+        assert!(waiting.next_poll_ms > 0);
+
+        let second = formed(&mut ledger, &["a"], 400);
+        failed(&mut ledger, &second, 500);
+        let parked = ledger.record("a").unwrap();
+        assert!(parked.terminal);
+        assert_eq!(parked.success, Some(false));
+        assert_eq!(parked.next_poll_ms, 0);
+    }
+
+    #[test]
     fn settled_batches_carry_the_roots_of_their_public_values() {
         let public_values = PublicValues {
             domain_tag: [0xd; 32],
