@@ -258,8 +258,12 @@ export async function recoverPendingBurns(
   const recovered: BurnForReturnResult[] = [];
   for (const pending of await payments.pendingBurns()) {
     if (!pending.settled || pending.burnedToken === null) continue;
-    await persist(pending.burnedToken, pending.burnId);
-    await payments.acknowledgeBurn(pending.burnId);
+    try {
+      await persist(pending.burnedToken, pending.burnId);
+      await payments.acknowledgeBurn(pending.burnId);
+    } catch {
+      continue;
+    }
     recovered.push({ burnId: pending.burnId, burnedToken: pending.burnedToken });
   }
   return recovered;

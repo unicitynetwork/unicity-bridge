@@ -109,3 +109,17 @@ test('recoverPendingBurns: settled blobs are persisted and released; in-flight o
   assert.deepEqual(recovered, [{ burnId: 'b-settled', burnedToken: new Uint8Array([5]) }]);
   assert.deepEqual(p.log, ['persist:b-settled:5', 'ack:b-settled']);
 });
+
+test('recoverPendingBurns: a burn the caller cannot persist stays journaled and the later ones are still recovered', async () => {
+  const pending: WalletPendingBurn[] = [
+    { burnId: 'b-unknown', tokenId: '44'.repeat(32), reasonBytes: new Uint8Array([4]), burnedToken: new Uint8Array([7]), settled: true },
+    { burnId: 'b-known', tokenId: '55'.repeat(32), reasonBytes: new Uint8Array([5]), burnedToken: new Uint8Array([8]), settled: true },
+  ];
+  const p = payments({ pendingBurns: async () => pending });
+  const recovered = await recoverPendingBurns(p, async (blob, burnId) => {
+    if (burnId === 'b-unknown') throw new Error('no configured asset recognises this burned token');
+    p.log.push(`persist:${burnId}:${blob.join(',')}`);
+  });
+  assert.deepEqual(recovered, [{ burnId: 'b-known', burnedToken: new Uint8Array([8]) }]);
+  assert.deepEqual(p.log, ['persist:b-known:8', 'ack:b-known']);
+});
