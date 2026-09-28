@@ -216,6 +216,8 @@ pub enum ApiError {
     Host(#[from] bridge_return_host::HostError),
     #[error("accumulator not synced to chain: {0}")]
     ChainUnsynced(String),
+    #[error("envelope intake is not configured (set BRIDGE_DEPLOYMENT_CONFIG + TRUST_BASE_PATH)")]
+    IntakeUnconfigured,
     #[error("return not found: {0}")]
     NotFound(String),
 }
@@ -226,7 +228,9 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_, _) | ApiError::PrecheckRejected(_) | ApiError::Host(_) => {
                 StatusCode::BAD_REQUEST
             }
-            ApiError::ChainUnsynced(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
         };
         let code = match &self {
@@ -234,9 +238,13 @@ impl IntoResponse for ApiError {
             ApiError::PrecheckRejected(_) => "precheck_rejected",
             ApiError::Host(_) => "host_error",
             ApiError::ChainUnsynced(_) => "chain_unsynced",
+            ApiError::IntakeUnconfigured => "intake_unconfigured",
             ApiError::NotFound(_) => "not_found",
         };
-        let recoverable = matches!(&self, ApiError::Host(_) | ApiError::ChainUnsynced(_));
+        let recoverable = matches!(
+            &self,
+            ApiError::Host(_) | ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured
+        );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves
         // to when the caller only reports a code, not the full message.
@@ -261,13 +269,7 @@ impl IntoResponse for ApiError {
 fn build_wire_input(state: &AppState, req: &CreateReturnRequest) -> Result<Vec<u8>, ApiError> {
     match (&req.token_cbor, &req.reason_bytes) {
         (Some(token_cbor), Some(reason_bytes)) => {
-            let intake = state.intake.as_ref().ok_or_else(|| {
-                ApiError::BadRequest(
-                    "intake_unconfigured",
-                    "envelope intake is not configured (set BRIDGE_DEPLOYMENT_CONFIG + TRUST_BASE_PATH)"
-                        .to_string(),
-                )
-            })?;
+            let intake = state.intake.as_ref().ok_or(ApiError::IntakeUnconfigured)?;
             if let Some(declared) = &req.config_hash {
                 let declared = decode_hex(declared)?;
                 if declared != intake.config_hash() {

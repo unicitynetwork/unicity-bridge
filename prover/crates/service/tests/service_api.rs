@@ -158,6 +158,27 @@ async fn rejects_truncated_wire() {
 }
 
 #[tokio::test]
+async fn an_envelope_without_configured_intake_is_refused_recoverably() {
+    let app = app(Duration::from_secs(60), 1);
+    let response = app
+        .oneshot(
+            Request::post("/returns")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tokenCbor":"0x00","reasonBytes":"0x00"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let error: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["error"]["code"], "intake_unconfigured");
+    assert_eq!(error["error"]["recoverable"], true);
+}
+
+#[tokio::test]
 async fn resubmitting_a_recoverably_failed_return_requeues_it() {
     let immediate = RetryPolicy {
         base: Duration::ZERO,

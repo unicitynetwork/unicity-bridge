@@ -110,8 +110,9 @@ cargo run -p bridge-return-service --features sp1 --release
 
 Without `BRIDGE_DEPLOYMENT_CONFIG` + `TRUST_BASE_PATH` the service runs in
 **wireInput-only** mode (accepts a pre-assembled guest input; used by fixtures /
-relayers) and rejects the wallet `{tokenCbor, reasonBytes}` envelope with
-`intake_unconfigured`.
+relayers) and refuses the wallet `{tokenCbor, reasonBytes}` envelope with
+`intake_unconfigured` (HTTP 503, recoverable: the same burn goes through once the
+operator fixes the configuration).
 
 ---
 
@@ -135,7 +136,7 @@ All responses are **camelCase JSON**.
 (`{kind, message, recoverable}`), `attempts`, `notBeforeMs`, `queuePosition`,
 and an `events` audit trail. `submitted` stays in the enum for older clients
 but is no longer emitted: the submitter returns only once the receipt is in.
-Errors are typed: `{error:{code, message, recoverable}}` with HTTP 400/404.
+Errors are typed: `{error:{code, message, recoverable}}` with HTTP 400/404/503.
 Failure `kind`s: `precheck_rejected`, `proving_failed`, `submission_failed`,
 `chain_rejected`, `service_unavailable`.
 
