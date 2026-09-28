@@ -38,9 +38,6 @@
       "default": "./lib/bridge-back/*.js"
     }
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/unicitynetwork/unicity-bridge.git",
