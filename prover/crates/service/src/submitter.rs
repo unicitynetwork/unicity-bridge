@@ -90,11 +90,8 @@ fn env_command(key: &str) -> Option<String> {
 }
 
 async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) -> SubmitOutcome {
-    if bundle.proof_bytes == "0x" {
-        return SubmitOutcome::Failed {
-            message: "submit requested but the batch has no proof (prove_mode != sp1_groth16)"
-                .to_string(),
-        };
+    if !bundle.has_proof() {
+        return SubmitOutcome::Skipped;
     }
     let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
     tracing::debug!(batch_id = %bundle.batch_id, cmd, "spawning S4 submit command");
@@ -251,13 +248,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_command_refuses_a_bundle_without_proof() {
+    async fn a_bundle_without_proof_is_left_proven_even_with_a_submit_command() {
         let mut no_proof = bundle();
         no_proof.proof_bytes = "0x".to_string();
         let outcome = submitter("cat >/dev/null; echo 0xabc")
             .submit(&no_proof)
             .await;
-        assert!(matches!(outcome, SubmitOutcome::Failed { .. }));
+        assert_eq!(outcome, SubmitOutcome::Skipped);
     }
 
     #[tokio::test]

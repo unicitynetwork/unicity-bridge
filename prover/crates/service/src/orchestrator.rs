@@ -226,7 +226,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         };
         match self.settler.submit(bundle).await {
             SubmitOutcome::Skipped => {
-                tracing::info!(batch_id = %batch.id, "no submitter configured; batch left proven and self-settleable");
+                tracing::info!(batch_id = %batch.id, "no submitter configured or no proof to settle; batch left proven");
                 Stage::Done
             }
             SubmitOutcome::Submitted { txid } => {
