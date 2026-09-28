@@ -80,4 +80,11 @@ describe("relayer-eth against the vault", () => {
     expect(rejected[0].reason).to.include("insufficient balance");
     void lock;
   });
+
+  it("rejects nothing for a pull-payment vault, whose settlement only credits what it owes", async () => {
+    const { recipient, vault } = await deployBridge(true);
+    const tooMuch = { nullifier: ethers.id("n3"), recipient: recipient.address, amount: (AMOUNT * 5n).toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0" };
+    const { rejected } = await simulate(vault, [tooMuch]);
+    expect(rejected).to.deep.equal([]);
+  });
 });

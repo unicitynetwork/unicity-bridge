@@ -319,7 +319,12 @@ async function simulateFromStdin() {
       "utf8"
     )
   ).abi;
-  const assetHex = toTronHex(tw, await tw.contract(abi, vaultHex).ASSET().call());
+  const vault = tw.contract(abi, vaultHex);
+  if (await vault.PULL_PAYMENTS().call()) {
+    process.stdout.write(JSON.stringify({ rejected: [] }));
+    return;
+  }
+  const assetHex = toTronHex(tw, await vault.ASSET().call());
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const now = BigInt(Math.floor(Date.now() / 1000));
 

@@ -158,9 +158,10 @@ default. Commands the service runs against the chain are cut off after
 `BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
 leaf whose transfer would revert before proving the batch; the reason is the
 token's own revert string (USDC: `ERC20: transfer amount exceeds balance`). It
-matters in push-payment mode; the Sepolia vault settles in pull mode, where a
-payout never reverts. The Tron relayer's reading of the constant-call response
-was never checked against Nile (§8).
+matters in push-payment mode only. Against a pull-payment vault, such as the
+Sepolia one, both relayers reject nothing, since settlement only credits what
+the vault owes. The Tron relayer's reading of the constant-call response was
+never checked against Nile (§8).
 
 ## 6. Where the money-critical state lives
 

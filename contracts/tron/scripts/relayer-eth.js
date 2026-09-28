@@ -102,6 +102,7 @@ async function settle(vault, bundle) {
 }
 
 async function simulate(vault, leaves) {
+  if (await vault.PULL_PAYMENTS()) return { rejected: [] };
   const provider = vault.runner.provider ?? vault.runner;
   const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
   const vaultAddress = await vault.getAddress();
