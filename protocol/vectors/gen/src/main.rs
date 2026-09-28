@@ -260,6 +260,39 @@ fn main() {
             .raw("witnesses", format!("[{}]", witnesses.join(", "))))
         .render());
 
+    let value_amount: u64 = 1_000_000;
+    let payload = |memo: &[u8]| {
+        let mut v = cbor::tag(39050);
+        v.extend(cbor::array_header(3));
+        v.extend(cbor::uint(1));
+        v.extend(cbor::array_header(1));
+        v.extend(cbor::array_header(2));
+        v.extend(cbor::bytes(&cfg.coin_id));
+        v.extend(cbor::bytes(&value_amount.to_be_bytes()[5..]));
+        v.extend_from_slice(memo);
+        v
+    };
+    let null_memo = payload(&[0xf6]);
+    let mut trailing = null_memo.clone();
+    trailing.push(0x00);
+    let invalid = [
+        ("the memo is an integer", payload(&cbor::uint(0))),
+        ("the memo is a text string", payload(&cbor::text("memo"))),
+        ("a byte follows the payload", trailing),
+    ];
+    let invalid_arr: Vec<String> = invalid
+        .iter()
+        .map(|(why, bytes)| Obj::new().str("why", why).hex("payload", bytes).render_inline())
+        .collect();
+    write(&base, "value", "value-00.json", Obj::new()
+        .str("description", "wallet value payload tag(39050) [ 1, [[coinId, amount]], memo ]: the memo is a byte string or null and nothing follows the item; accept `valid` with this amount, reject every `invalid`")
+        .obj("in", Obj::new()
+            .hex("coin_id", &cfg.coin_id)
+            .num("amount", value_amount))
+        .raw("valid", format!("[\"0x{}\", \"0x{}\"]", hex(&null_memo), hex(&payload(&cbor::bytes(b"memo")))))
+        .raw("invalid", format!("[{}]", invalid_arr.join(", ")))
+        .render());
+
     println!("done — implemented groups written; token/ is still a stub (see its README).");
 }
 

@@ -20,12 +20,14 @@ use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, verify_non_member, NonMembershipTerminal, NonMembershipWitness,
     SmtProofStep, EMPTY_TREE_ROOT,
 };
+use bridge_return_sdk_ext::bridge::decode_bridged_payment_data;
 use serde_json::Value;
 use thiserror::Error;
 use unicity_token::api::bft::{RootTrustBase, RootTrustBaseNodeInfo, UnicityCertificate};
 use unicity_token::api::NetworkId;
 use unicity_token::cbor::Decoder;
 use unicity_token::crypto::signature::PublicKey;
+use unicity_token::payment::AssetId;
 use unicity_token::transaction::Token;
 
 #[derive(Debug, Error)]
@@ -75,6 +77,7 @@ pub fn check_vectors(root: &Path) -> Result<()> {
         &read(root, "token/token-02.json")?,
         &read(root, "config/config-00.json")?,
     )?;
+    check_value(&read(root, "value/value-00.json")?)?;
     println!("bridge return prover vectors ok");
     Ok(())
 }
@@ -133,6 +136,29 @@ fn check_lock(lock: &Value, config: &Value) -> Result<()> {
         output,
         "lock_digest",
     )
+}
+
+fn check_value(v: &Value) -> Result<()> {
+    let coin = AssetId::new(b32_field(&v["in"], "coin_id")?.to_vec());
+    let amount = num_bigint::BigUint::from(u64_field(&v["in"], "amount")?);
+    for payload in array_field(v, "valid")? {
+        let bytes = bytes_from_hex(payload.as_str().unwrap_or_default())?;
+        let assets = decode_bridged_payment_data(&bytes).map_err(|e| {
+            HostError::Check(format!("value vector rejected a valid payload: {e:?}"))
+        })?;
+        if assets.get(&coin).map(|a| a.value()) != Some(&amount) {
+            return Err(HostError::Check("value vector amount mismatch".to_string()));
+        }
+    }
+    for case in array_field(v, "invalid")? {
+        if decode_bridged_payment_data(&bytes_field(case, "payload")?).is_ok() {
+            return Err(HostError::Check(format!(
+                "value vector accepted an invalid payload: {}",
+                str_field(case, "why")?
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn check_reason(v: &Value) -> Result<()> {

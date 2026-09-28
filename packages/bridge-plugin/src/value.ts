@@ -32,8 +32,8 @@ export function encodeBridgePaymentData(coinId: Uint8Array, amount: bigint): Uin
 
 /**
  * Decode the wallet-format payload and return the amount it declares for
- * `coinId`; null when the bytes are not that format, the version is unknown, or
- * the coin is absent.
+ * `coinId`; null when the bytes are not that format, the version is unknown, the
+ * memo is neither a byte string nor null, or the coin is absent.
  */
 export function decodeBridgePaymentData(data: Uint8Array | null, coinId: Uint8Array): bigint | null {
   if (!data) return null;
@@ -42,6 +42,7 @@ export function decodeBridgePaymentData(data: Uint8Array | null, coinId: Uint8Ar
     if (tag.tag !== WALLET_VALUE_TAG) return null;
     const fields = CborDeserializer.decodeArray(tag.data, 3);
     if (CborDeserializer.decodeUnsignedInteger(fields[0]) !== WALLET_VALUE_VERSION) return null;
+    CborDeserializer.decodeNullable(fields[2], (memo) => CborDeserializer.decodeByteString(memo));
     return PaymentAssetCollection.fromCBOR(fields[1]).get(new AssetId(coinId))?.value ?? null;
   } catch {
     return null;
