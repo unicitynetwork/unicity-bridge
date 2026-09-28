@@ -5,7 +5,7 @@ layer wallet-agnostic (official `tronwallet-adapter` + WalletConnect), and remov
 Tron-specific assumptions so future EVM chains / stablecoins are additive rather
 than a fork. Builds on [`06-wallet-bridge-integration.md`](./06-wallet-bridge-integration.md)
 (§A1.1 lock→mint, §A1.3 `TronSigner`) and the live Nile deployment
-(`NILE_USDT_BRIDGE` in `bridge-plugin-tron-usdt/src/wallet/manifests.ts`).
+(`NILE_USDT_BRIDGE` in `bridge-plugin/src/wallet/manifests.ts`).
 
 **Motivation (review findings, all confirmed against code):**
 

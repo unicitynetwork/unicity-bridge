@@ -74,15 +74,16 @@ fn check_frozen(file: &str, onchain_config_hash: &str) {
             .unwrap(),
     };
 
-    // token_type / coin_id re-derive from (chain_id_str, asset_evm_hex).
+    // token_type / coin_id re-derive from (chain_family, chain_id_str, asset_evm_hex).
+    let chain_family = doc["chain_family"].as_str().unwrap_or("tron");
     let chain_id_str = doc["chain_id_str"].as_str().unwrap();
     let asset_evm_hex = doc["asset_evm_hex"].as_str().unwrap();
     assert_eq!(
-        h(&token_type(chain_id_str, asset_evm_hex)),
+        h(&token_type(chain_family, chain_id_str, asset_evm_hex)),
         c["token_type"].as_str().unwrap()
     );
     assert_eq!(
-        h(&coin_id(chain_id_str, asset_evm_hex)),
+        h(&coin_id(chain_family, chain_id_str, asset_evm_hex)),
         c["coin_id"].as_str().unwrap()
     );
 

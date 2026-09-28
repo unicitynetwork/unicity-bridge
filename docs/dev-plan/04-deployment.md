@@ -73,7 +73,7 @@ vault address, and `CONFIG_HASH = keccak(abi.encode(cfg))` is recomputed on-chai
    ```
 
    The TS plugin already derives `tokenType`/`coinId` from `(chainId, asset)`
-   (`bridge-plugin-tron-usdt` `deriveTokenType`/`deriveCoinId`); use the same
+   (`bridge-plugin` `deriveTokenType`/`deriveCoinId`); use the same
    values in the Rust `BridgeConfig` so `config_hash` matches across all three
    stacks. **This shared config is blocker #3** — freeze it before Stage C.
 

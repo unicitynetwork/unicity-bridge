@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
 
 use bridge_return_service::{
-    config::ServiceConfig, load_intake, prover::Prover, queue, router, sequencer::ChainEvents,
-    store::ReturnStore, submitter::Submitter, AppState,
+    clock::Clock, config::ServiceConfig, domain::policy::BatchPolicy, load_intake,
+    orchestrator::Orchestrator, prover::Prover, router, sequencer::ChainEvents, store::ReturnStore,
+    submitter::Submitter, AppState,
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -27,10 +28,22 @@ async fn main() {
     } else {
         tracing::warn!("envelope intake disabled — only wireInput submissions accepted");
     }
-    let store = ReturnStore::default();
-    let submitter = Submitter::from_env();
+    let clock = Clock::default();
+    let store = match &config.state_dir {
+        Some(dir) => ReturnStore::open(dir, config.retry, clock.now_ms()).unwrap_or_else(|err| {
+            eprintln!("cannot open state directory {}: {err}", dir.display());
+            std::process::exit(2);
+        }),
+        None => {
+            tracing::warn!(
+                "BRIDGE_RETURN_STATE_DIR unset — returns are kept in memory and lost on restart"
+            );
+            ReturnStore::memory(config.retry)
+        }
+    };
+    let submitter = Submitter::from_env().with_timeout(config.command_timeout);
     tracing::info!("S4 submitter: {}", submitter.label());
-    let chain_events = ChainEvents::from_env();
+    let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
     if !chain_events.is_live() {
         tracing::warn!(
@@ -41,23 +54,28 @@ async fn main() {
     }
     tracing::info!(
         prove_mode = ?config.prove_mode,
-        batch_target = config.batch_target,
-        max_wait_secs = config.max_wait.as_secs(),
+        max_batch_size = config.max_batch_size,
+        idle_wait_secs = config.idle_wait.as_secs(),
+        state_dir = ?config.state_dir,
         vault = config.vault.as_deref().unwrap_or("(none)"),
         "service configuration",
     );
-    let queue = queue::spawn(
-        store.clone(),
-        Prover::new(config.clone()),
-        submitter,
-        chain_events.clone(),
-        config.batch_target,
-        config.max_wait,
+    tokio::spawn(
+        Orchestrator::new(
+            store.clone(),
+            Prover::new(config.clone()),
+            submitter,
+            chain_events.clone(),
+            BatchPolicy::from(&config),
+            config.retry,
+            clock.clone(),
+        )
+        .run(),
     );
     let app = router(AppState {
         config,
         store,
-        queue,
+        clock,
         intake,
         chain_events,
     })
@@ -80,6 +98,8 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("serve bridge-return-service");
+    tracing::info!("shutting down; an in-flight proof is abandoned and re-run at start");
+    std::process::exit(0);
 }
 
 async fn shutdown_signal() {

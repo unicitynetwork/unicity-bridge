@@ -6,6 +6,7 @@
 //
 //   node scripts/relayer.js scan                       # rebuild from events, verify vs on-chain spentRoot
 //   node scripts/relayer.js settle <bundle> <settle>   # submit fulfillBatch for a prepared batch
+//   node scripts/relayer.js simulate --stdin           # which leaves' transfers would revert (constant calls)
 //
 // The full self-settle loop:
 //   1. scan      — confirm the local view matches the chain (this tool)
@@ -63,7 +64,7 @@ async function fetchEvents(base, vaultBase58, eventName) {
   const out = [];
   let url =
     `${base}/v1/contracts/${vaultBase58}/events` +
-    `?event_name=${eventName}&order_by=block_timestamp,asc&limit=200`;
+    `?event_name=${eventName}&only_confirmed=true&order_by=block_timestamp,asc&limit=200`;
   for (let page = 0; page < 100 && url; page++) {
     const res = await fetch(url);
     const json = await res.json();
@@ -299,10 +300,72 @@ async function settleFromStdin() {
   process.stdout.write(id);
 }
 
+function toTronHex(tw, address) {
+  const text = String(address);
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(text)) return tw.address.toHex(text);
+  const hex = text.replace(/^0x/i, "");
+  return hex.length === 40 ? "41" + hex : hex;
+}
+
+async function simulateFromStdin() {
+  const payload = JSON.parse(await readStdin());
+  const env = loadEnv();
+  const base = (env.TRON_RPC_URL || "https://nile.trongrid.io").replace(/\/$/, "");
+  const tw = new TronWeb({ fullHost: base, privateKey: env.TRON_SK });
+  const vaultHex = tw.address.toHex(env.TRON_VAULT);
+  const abi = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "..", "artifacts/contracts/UnicityBridgeVault.sol/UnicityBridgeVault.json"),
+      "utf8"
+    )
+  ).abi;
+  const vault = tw.contract(abi, vaultHex);
+  if (await vault.PULL_PAYMENTS().call()) {
+    process.stdout.write(JSON.stringify({ rejected: [] }));
+    return;
+  }
+  const assetHex = toTronHex(tw, await vault.ASSET().call());
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const now = BigInt(Math.floor(Date.now() / 1000));
+
+  async function transferReverts(to, amount) {
+    const parameter = coder.encode(["address", "uint256"], [to, amount]).slice(2);
+    const r = await fetch(base + "/wallet/triggerconstantcontract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        owner_address: vaultHex,
+        contract_address: assetHex,
+        function_selector: "transfer(address,uint256)",
+        parameter,
+        visible: false,
+      }),
+    });
+    const j = await r.json();
+    if (j.Error) throw new Error(`triggerconstantcontract: ${j.Error}`);
+    if (j.result && j.result.result === true && !j.result.message) return null;
+    return revertReason({ contractResult: j.constant_result, resMessage: j.result && j.result.message });
+  }
+
+  const rejected = [];
+  for (const leaf of payload.leaves || []) {
+    const fee = now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
+    const principal = BigInt(leaf.amount) - fee;
+    let reason = principal > 0n ? await transferReverts(leaf.recipient, principal) : null;
+    if (!reason && fee > 0n) reason = await transferReverts(leaf.feeRecipient, fee);
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason });
+  }
+  console.error(
+    `relayer simulate --stdin: ${(payload.leaves || []).length} leaf(ves), ${rejected.length} rejected`
+  );
+  process.stdout.write(JSON.stringify({ rejected }));
+}
+
 async function main() {
   const cmd = process.argv[2];
   if (cmd === "scan") return scan();
   if (cmd === "events") return events();
+  if (cmd === "simulate" && process.argv[3] === "--stdin") return simulateFromStdin();
   if (cmd === "settle") {
     if (process.argv[3] === "--stdin") return settleFromStdin();
     const [, , , bundle, settlePath] = process.argv;
@@ -310,7 +373,7 @@ async function main() {
     return settle(bundle, settlePath);
   }
   console.log(
-    "usage: relayer.js scan | events | settle <bundle.json> <settle.json> | settle --stdin"
+    "usage: relayer.js scan | events | settle <bundle.json> <settle.json> | settle --stdin | simulate --stdin"
   );
 }
 

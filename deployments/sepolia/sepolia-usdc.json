@@ -1,0 +1,54 @@
+{
+  "description": "Frozen Ethereum Sepolia USDC bridge deployment config, v2 (2026-09-23). config_hash equals the LIVE deployed vault CONFIG_HASH; the vault, the prover and the wallet use these values. Asset is Circle's Sepolia USDC (FiatToken v2, blocklist), so the vault settles in pull-payment mode. The proof verifier is Succinct's SP1 Groth16 gateway; the v6.1.0 verifier behind it is listed for reference. vkey 0x0039a542... is the BRIDGE_PROTO_VERSION 2 guest, the same key as the Nile v2 vault. v2 differs from v1 (0x5153EE37..., same day, written off with 1 USDC) by the token type and coin id: they derive from the chain family label eip155 (interop section 2) instead of the tron label the first deployment inherited. Deployed with contracts/tron/scripts/deploy-eth.js vault <asset> <vkey>; config derived and cross-checked with bridge-return-host emit-config.",
+  "proto": 2,
+  "network": "ethereum-sepolia",
+  "chain_family": "eip155",
+  "chain_id_str": "11155111",
+  "asset_evm_hex": "1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+  "config": {
+    "asset": "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+    "coin_id": "0xeae954053183b9d1836d6b5c892867014bcc1571fcc6813f5b56b16a78d0497f",
+    "config_hash": "0x4058e87dff330d9c6925af755e0732dbc80be85643fdce46c8315eae51c9f7e8",
+    "domain_tag": "0x6a6b3d1a43cfa710342bd7b7aee2a83362f60d065500fb8b7ec1ef2e04822b0f",
+    "lock_domain": "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932",
+    "nullifier_domain": "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32688a510e2d5d",
+    "reason_tag": 39048,
+    "source_chain_id": 11155111,
+    "token_type": "0x2ccbf3157add2b9a2dcc10e772abf5cf328e2723f9f290a9d2b6c4a42a132d6c",
+    "vault": "0x9c2bf4ed5b85130ffd14be8fa65c60f299fc9a2e"
+  },
+  "deployment": {
+    "vault": "0x9C2BF4Ed5b85130fFD14BE8FA65c60F299Fc9a2E",
+    "verifier_sp1": "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B",
+    "verifier_sp1_impl": "0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2",
+    "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "vkey": "0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5",
+    "pull_payments": true,
+    "admin": "0x2B00d708fc777F174A248B9bE01c8E8379d69Caf",
+    "asset_symbol": "USDC",
+    "asset_decimals": 6,
+    "guest_elf_sha256": "ce8b6ddb882c5da2f7fb995ddcd9193e289c5b195a22f994841d4601b125f1d8",
+    "sp1_version": "v6.3.1",
+    "deploy_txid": "0x32567ca425a698218de02907096f8f699ac39ad9ed36a4e882bcc238b93a12f2",
+    "deploy_block": 11764672,
+    "deployed_at": "2026-09-23",
+    "trust_base_allowed_txid": "0x533f90406fb1015764d3edaddfafe91e2956455f3d0e344f929f3fffc27f794c",
+    "lock_smoke": {
+      "approve_txid": "0xb0a9b66cc225ab9a1868f10e500b96e2c1f44aace40c3e3f4c8eee698ae8893a",
+      "lock_txid": "0x9dd8fd6344b15ecc0161279923dcbc57933f1ea549eef995d7bbd08b5504982c",
+      "nonce": 0,
+      "amount": 1000000,
+      "lock_digest": "0xfcce28c867c8ff4ba609c8c858fbf4115c4d1384cc1ffb8d6cd00bc377afe1ad"
+    },
+    "supersedes": {
+      "vault": "0x5153EE37c673C9E77af01EC3Bc168faee7c68E24",
+      "config_hash": "0x8d5defb0711b18c345ecda6ffc2f91902b243b276191de43040dc7126882c304",
+      "deploy_txid": "0xfa154a7aec81976096040e3968cbc1935fbfe7b1d37a4d2a1c7a6fe71a6b3cad"
+    }
+  },
+  "trust_base": {
+    "file": "../../bft-trustbase.testnet2.json",
+    "network_id": 4,
+    "canonical_hash": "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0"
+  }
+}

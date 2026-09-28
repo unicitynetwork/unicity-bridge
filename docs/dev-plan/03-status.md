@@ -443,7 +443,7 @@ anchor saves `(B-1)` quorum checks.
   (smoke-verified the B=2 vector's root). This is the load-bearing primitive for
   multi-batch operation (S4 relayer / a live multi-batch settle build on it).
 - **Bridge-in mint→receive e2e on Nile via the current vault (M1 exit met).**
-  The real bridge-in demo (`bridge-plugin-tron-usdt/demo/e2e.ts`) now routes
+  The real bridge-in demo (`bridge-plugin/demo/e2e.ts`) now routes
   through **`UnicityBridgeVault`** instead of the superseded `UnicityLock`:
   `tron.ts` gained a struct-safe vault deploy (`encodeVaultCtor` hand-encodes the
   all-static `BridgeConfig` ctor, since TronWeb mis-encodes tuples — no `ethers`
@@ -549,7 +549,7 @@ anchor saves `(B-1)` quorum checks.
 ## Dirty Workspace Notes
 
 As of this update, the top-level workspace contains unrelated changes in
-`bridge-plugin-tron-usdt/` and a root `bft-trustbase.testnet2.json` file from
+`bridge-plugin/` and a root `bft-trustbase.testnet2.json` file from
 other work. The file `prover/crates/host/examples/cross_check_live.rs` was
 produced by the substream 01/02 agents and was only adjusted to import the
 prover-owned `sdk-ext` crate after SDK changes were moved out. Do not revert or

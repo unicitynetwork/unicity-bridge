@@ -140,10 +140,11 @@ export interface BridgePresentation {
  * (`tron:0x…`, `eip155:1`) — not a JavaScript number; a family's native numeric id
  * (if any) lives inside that family's plugin manifest variant.
  */
+export type ChainFamily = 'tron' | 'eip155';
+
 export interface BridgeManifestBase {
   /** Human label for the bridged asset, e.g. "USDT (bridged · Tron)". */
   readonly label: string;
-  /** Short ticker for the primary balance display, e.g. "USDT". */
   readonly symbol: string;
   /** CAIP-2-style chain reference (e.g. `tron:0xcd8690dc`) — the generic chain identity. */
   readonly chainRef: string;
@@ -171,6 +172,7 @@ export interface BridgeManifestBase {
   readonly tokenTypeHex?: string;
   /** Optional explicit `coinIdHex`; derived + cross-checked when present. */
   readonly coinIdHex?: string;
+  readonly disabledReason?: string;
 }
 
 // ── Wallet-side contract ────────────────────────────────────────────────────
@@ -256,8 +258,12 @@ export async function recoverPendingBurns(
   const recovered: BurnForReturnResult[] = [];
   for (const pending of await payments.pendingBurns()) {
     if (!pending.settled || pending.burnedToken === null) continue;
-    await persist(pending.burnedToken, pending.burnId);
-    await payments.acknowledgeBurn(pending.burnId);
+    try {
+      await persist(pending.burnedToken, pending.burnId);
+      await payments.acknowledgeBurn(pending.burnId);
+    } catch {
+      continue;
+    }
     recovered.push({ burnId: pending.burnId, burnedToken: pending.burnedToken });
   }
   return recovered;

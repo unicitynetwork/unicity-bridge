@@ -1,7 +1,8 @@
 {
-  "description": "Frozen canonical Nile-USDT bridge deployment config, v2 (2026-09-21). config_hash equals the LIVE deployed vault CONFIG_HASH (TBKJ844…, reason_tag 39048, real SP1 verifier, R6 false-tolerant safe-transfer); the vault, the prover and the wallet all use these values. v2 differs from v1 (nile-usdt.json) by the vault address and hence config_hash, and by the verifying key: vkey 0x0039a542… is the BRIDGE_PROTO_VERSION 2 guest (Rust SDK v3.0.1, wallet value payload, empty burn batches rejected). Tokens minted against v1 cannot return through v2. Deployed with contracts/tron/scripts/deploy-nile.js real-vault <asset> <vkey>; config derived and cross-checked with `bridge-return-host emit-config`.",
+  "description": "Frozen canonical Nile-USDT bridge deployment config, v2 (2026-09-21). config_hash equals the LIVE deployed vault CONFIG_HASH (TBKJ844\u2026, reason_tag 39048, real SP1 verifier, R6 false-tolerant safe-transfer); the vault, the prover and the wallet all use these values. v2 differs from v1 (nile-usdt.json) by the vault address and hence config_hash, and by the verifying key: vkey 0x0039a542\u2026 is the BRIDGE_PROTO_VERSION 2 guest (Rust SDK v3.0.1, wallet value payload, empty burn batches rejected). Tokens minted against v1 cannot return through v2. Deployed with contracts/tron/scripts/deploy-nile.js real-vault <asset> <vkey>; config derived and cross-checked with `bridge-return-host emit-config`.",
   "proto": 2,
   "network": "tron-nile",
+  "chain_family": "tron",
   "chain_id_str": "3448148188",
   "asset_evm_hex": "eca9bc828a3005b9a3b909f2cc5c2a54794de05f",
   "config": {

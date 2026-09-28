@@ -126,4 +126,5 @@ temp/
 *.sqlite3
 *.db
 
+# Local record of the current guest verifying key (prover/Dockerfile); the tracked record is deployments/.
 sp1-vkey.json

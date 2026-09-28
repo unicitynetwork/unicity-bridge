@@ -209,6 +209,7 @@ fn emit_config(path: Option<String>) -> bridge_return_host::Result<()> {
     };
 
     let source_chain_id = u64f("source_chain_id")?;
+    let chain_family = chain_family(&json);
     let vault: [u8; 20] = arr("vault", 20)?.try_into().unwrap();
     let asset: [u8; 20] = arr("asset", 20)?.try_into().unwrap();
     let reason_tag = u64f("reason_tag")?;
@@ -217,8 +218,8 @@ fn emit_config(path: Option<String>) -> bridge_return_host::Result<()> {
 
     let chain_id_str = source_chain_id.to_string();
     let asset_evm_hex = hex::encode(asset); // lowercase, no 0x — matches the SDK derivation
-    let token_type = token_type(&chain_id_str, &asset_evm_hex);
-    let coin_id = coin_id(&chain_id_str, &asset_evm_hex);
+    let token_type = token_type(chain_family, &chain_id_str, &asset_evm_hex);
+    let coin_id = coin_id(chain_family, &chain_id_str, &asset_evm_hex);
     let cfg = BridgeConfig {
         source_chain_id,
         vault,
@@ -233,6 +234,7 @@ fn emit_config(path: Option<String>) -> bridge_return_host::Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
+            "chain_family": chain_family,
             "source_chain_id": source_chain_id,
             "vault": h(&vault),
             "asset": h(&asset),
@@ -305,8 +307,8 @@ fn emit_settlement(
         source_chain_id,
         vault: arr("vault", 20)?.try_into().unwrap(),
         asset,
-        token_type: token_type(&chain_id_str, &asset_evm_hex),
-        coin_id: coin_id(&chain_id_str, &asset_evm_hex),
+        token_type: token_type(chain_family(&json), &chain_id_str, &asset_evm_hex),
+        coin_id: coin_id(chain_family(&json), &chain_id_str, &asset_evm_hex),
         reason_tag: u64f("reason_tag")?,
         lock_domain: arr("lock_domain", 32)?.try_into().unwrap(),
         nullifier_domain: arr("nullifier_domain", 32)?.try_into().unwrap(),
@@ -447,8 +449,8 @@ fn emit_settlement_continued(input_path: Option<String>) -> bridge_return_host::
         source_chain_id,
         vault: field("vault", 20)?.try_into().unwrap(),
         asset,
-        token_type: token_type(&chain_id_str, &asset_evm_hex),
-        coin_id: coin_id(&chain_id_str, &asset_evm_hex),
+        token_type: token_type(chain_family(&json), &chain_id_str, &asset_evm_hex),
+        coin_id: coin_id(chain_family(&json), &chain_id_str, &asset_evm_hex),
         reason_tag: u64f("reason_tag")?,
         lock_domain: field("lock_domain", 32)?.try_into().unwrap(),
         nullifier_domain: field("nullifier_domain", 32)?.try_into().unwrap(),
@@ -553,8 +555,8 @@ fn emit_settlement_b2(
         source_chain_id,
         vault: arr("vault", 20)?.try_into().unwrap(),
         asset,
-        token_type: token_type(&chain_id_str, &asset_evm_hex),
-        coin_id: coin_id(&chain_id_str, &asset_evm_hex),
+        token_type: token_type(chain_family(&json), &chain_id_str, &asset_evm_hex),
+        coin_id: coin_id(chain_family(&json), &chain_id_str, &asset_evm_hex),
         reason_tag: u64f("reason_tag")?,
         lock_domain: arr("lock_domain", 32)?.try_into().unwrap(),
         nullifier_domain: arr("nullifier_domain", 32)?.try_into().unwrap(),
@@ -621,6 +623,11 @@ fn emit_settlement_b2(
 
 // The trust-base hash the vault's `setTrustBaseAllowed` must allow — the SDK
 // `canonical_hash` of a trust-base JSON (SHA-256/CBOR, 00 §1).
+/// The CAIP-2 namespace the asset lives in; the Nile records predate the field.
+fn chain_family(config: &serde_json::Value) -> &str {
+    config["chain_family"].as_str().unwrap_or("tron")
+}
+
 fn emit_trust_base_hash(path: Option<String>) -> bridge_return_host::Result<()> {
     let path = path.ok_or_else(|| {
         bridge_return_host::HostError::Check("missing trust-base.json".to_string())
