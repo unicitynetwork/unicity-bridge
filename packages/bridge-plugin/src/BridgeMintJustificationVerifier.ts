@@ -11,7 +11,7 @@ import type { LockMintJustificationVerifier } from './LockMintJustificationVerif
 const RULE = 'BridgeMintJustificationVerifier';
 
 export class BridgeMintJustificationVerifier implements IMintJustificationVerifier {
-  public constructor(private readonly verifiers: readonly LockMintJustificationVerifier[]) {}
+  public constructor(public readonly lockVerifiers: readonly LockMintJustificationVerifier[]) {}
 
   public get tag(): bigint {
     return BRIDGE_LOCK_JUSTIFICATION_TAG;
@@ -31,7 +31,7 @@ export class BridgeMintJustificationVerifier implements IMintJustificationVerifi
     } catch (e) {
       return fail(`Malformed justification: ${(e as Error).message}`);
     }
-    const owner = this.verifiers.find((v) => v.accepts(j.data));
+    const owner = this.lockVerifiers.find((v) => v.accepts(j.data));
     if (!owner) {
       return fail(`No bridge verifies chain ${j.data.chainId} vault 0x${toHex(j.data.lockContract)}.`);
     }

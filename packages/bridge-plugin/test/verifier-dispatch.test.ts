@@ -43,3 +43,12 @@ test('a mint whose lock names a chain no bridge serves is refused, naming the ch
   assert.equal(result.status, VerificationStatus.FAIL);
   assert.match(result.message ?? '', /No bridge verifies chain 999/);
 });
+
+test('a mint whose lock names an unapproved vault is refused, although it carries the bridged token type and coin', async () => {
+  const unapproved = new Uint8Array(20).fill(0x77);
+  const scenario = await buildScenario({ justification: (d) => ({ ...d, lockContract: unapproved }) });
+  const verifier = new BridgeMintJustificationVerifier([scenario.plugin.verifier]);
+  const result = await verifier.verify(scenario.certifiedTx, noNestedTokens);
+  assert.equal(result.status, VerificationStatus.FAIL);
+  assert.match(result.message ?? '', /No bridge verifies chain \d+ vault 0x(77){20}/);
+});
