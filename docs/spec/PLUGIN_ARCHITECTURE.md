@@ -95,14 +95,29 @@ never assume validity.
 
 ## Adding another bridged asset later
 
-- Same chain, same family (e.g. Tron USDC): new config (its own `cborTag`,
-  `tokenTypeHex`, `assetContract`), reuse `bridge-plugin` code.
-- New chain of an existing family (an Ethereum L2, Tron mainnet): a manifest
-  with that chain's id and RPC, and a chain-name entry in the wallet's asset
-  folder; the same vault ABI, lock justification and verifier.
-- New chain family: a `ChainFamilyAdapter` in `packages/bridge-plugin/src/<family>/`
-  (chain reference, address normalization, `SourceChainRpc` + `ConstantCaller`
-  over its node, presentation), a `SourceSigner` for its wallets, a manifest
-  variant in the `BridgeManifest` union, and an asset folder in the wallet. The
-  lock justification, verifier, source adapter and manifest loader stay as they
-  are; the vault is the same Solidity as long as the family runs the EVM.
+A bridged asset's identity is its token type and coin id, both derived from the
+chain family, the chain id and the asset contract (`deriveTokenType`,
+`deriveCoinId`). The vault is not part of it. That decides what each addition
+needs:
+
+| Adding | New token type and coin id | Bridge code | Wallet |
+|---|---|---|---|
+| A new vault for an asset already bridged (a redeploy) | No | None: the manifest names the new vault and lists the old one in `replacedVaults`, which keeps verifying | The updated manifest |
+| Another asset on a supported chain | Yes | None: a new manifest | An asset entry |
+| A chain of a supported family (an Ethereum L2, Tron mainnet) | Yes | None: a manifest with that chain's id and RPC | An asset entry with the chain name |
+| A new chain family (for example Solana) | Yes | A `ChainFamilyAdapter` in `packages/bridge-plugin/src/<family>/` (chain reference, address normalization, `SourceChainRpc` and `ConstantCaller` over its node, presentation), a `SourceSigner` for its wallets, and a manifest variant in the `BridgeManifest` union | An asset folder and its wallet connectors |
+
+Every bridged asset uses the lock reason tag 1330002. A wallet registers one
+merged plugin (`mergeBridgeTokenPlugins`) whose verifier dispatches on the
+lock's chain id and vault, next to one issuance policy per bridged token type.
+sphere-sdk needs no change for any row above. The vault is the same Solidity as
+long as the family runs the EVM.
+
+A wallet trusts exactly the vaults in the manifests it ships, one active vault
+per asset and chain plus the replaced ones. A token whose lock names any other
+chain or vault fails verification ("No bridge verifies chain ... vault ..."), and
+a token of a bridged type without a lock or split reason fails the type's
+issuance policy. Because an asset's identity does not include the vault, tokens
+locked in two different vaults for the same asset are the same asset in the
+wallet; a wallet that trusts one party's vault and not another's lists only the
+vault it trusts.
