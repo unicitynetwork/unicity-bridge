@@ -15,6 +15,7 @@ export class BridgedTokenIssuancePolicy implements WalletIssuancePolicy {
   public constructor(
     public readonly tokenType: TokenType,
     public readonly coinIds: readonly string[],
+    public readonly revision?: string,
   ) {}
 
   public verify(transaction: CertifiedMintTransaction): Promise<VerificationResult<VerificationStatus>> {

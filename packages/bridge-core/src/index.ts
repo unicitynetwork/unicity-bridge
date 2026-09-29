@@ -181,6 +181,7 @@ export interface BridgeManifestBase {
 
 export interface WalletIssuancePolicy extends ITokenIssuanceVerifier {
   readonly coinIds: readonly string[];
+  readonly revision?: string;
 }
 
 export interface WalletTokenPlugin {

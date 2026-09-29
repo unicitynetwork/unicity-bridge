@@ -62,6 +62,11 @@ export class LockMintJustificationVerifier implements IMintJustificationVerifier
     return BRIDGE_LOCK_JUSTIFICATION_TAG;
   }
 
+  public get trustAnchor(): string {
+    const c = this.config;
+    return `${c.chainId}:${c.lockContractHex}:${c.assetContractHex}:${c.confirmations}`;
+  }
+
   public accepts(j: BridgeLockJustificationData): boolean {
     return j.chainId === this.config.chainId && toHex(j.lockContract).toLowerCase() === this.config.lockContractHex;
   }
