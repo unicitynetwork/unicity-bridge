@@ -24,7 +24,13 @@
     "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     "vkey": "0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5",
     "pull_payments": true,
-    "admin": "0x2B00d708fc777F174A248B9bE01c8E8379d69Caf",
+    "admin": "0xa67ec71Aac7E51c693b42Ee26e97d070c321e85b",
+    "admin_transfer": {
+      "from": "0x2B00d708fc777F174A248B9bE01c8E8379d69Caf",
+      "txid": "0x63955a7a828c7db5feafdbe5bf5cccff321972ab118dff9220e6d9564265b28c",
+      "block": 11821797,
+      "at": "2026-10-01"
+    },
     "asset_symbol": "USDC",
     "asset_decimals": 6,
     "guest_elf_sha256": "ce8b6ddb882c5da2f7fb995ddcd9193e289c5b195a22f994841d4601b125f1d8",

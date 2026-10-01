@@ -100,8 +100,9 @@ From `contracts/tron`, after `npm run build`. The repo-root `.env` holds the
 
 The deployer key was generated on 2026-09-23 into the gitignored `.env`
 (`ETH_SK`); its address is `0x2B00d708fc777F174A248B9bE01c8E8379d69Caf`.
-It is the vault admin. The steps above need roughly 1.8M gas, so 0.05 Sepolia
-ETH covers them with room for a settlement.
+It was the vault admin until 2026-10-01 and remains the relayer's gas account.
+The steps above need roughly 1.8M gas, so 0.05 Sepolia ETH covers them with
+room for a settlement.
 
 ## What is unchanged and what is not
 
@@ -237,7 +238,7 @@ used the `tron` derivation label and was superseded within the hour.
 | token type | `0x2ccbf3157add2b9a2dcc10e772abf5cf328e2723f9f290a9d2b6c4a42a132d6c` |
 | coin id | `0xeae954053183b9d1836d6b5c892867014bcc1571fcc6813f5b56b16a78d0497f` |
 | trust base allowed | `0x72a67260…` in tx `0x533f90406fb1015764d3edaddfafe91e2956455f3d0e344f929f3fffc27f794c`, 47,825 gas |
-| admin | the deployer |
+| admin | `0xa67ec71Aac7E51c693b42Ee26e97d070c321e85b` since 2026-10-01, tx `0x63955a7a828c7db5feafdbe5bf5cccff321972ab118dff9220e6d9564265b28c`, block 11821797, 28,448 gas; the deployer before that |
 
 `bridge-return-host emit-config` reproduces the on-chain `CONFIG_HASH`, token
 type, coin id and domain tag from the frozen fields.
