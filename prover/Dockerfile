@@ -1,23 +1,30 @@
 # syntax=docker/dockerfile:1.7
 
 ARG SP1_VERSION=v6.3.1
+ARG SP1_IMAGE_DIGEST=sha256:0942a27dbe8e38f4b14f3732e779df4027b17bde93e9fbc9e8c773c15eb63400
+ARG CARGO_PROVE_SHA256=c9d6ee7667fa9e0a2302324a6bb0295c55f6acf0e17a242ad11ee45767bb08df
 
-# ---- guest ELF from source, for a new vault ---------------------------------
-FROM ghcr.io/succinctlabs/sp1:${SP1_VERSION} AS guest-build
+# ---- guest ELF from source --------------------------------------------------
+FROM ghcr.io/succinctlabs/sp1:${SP1_VERSION}@${SP1_IMAGE_DIGEST} AS guest-build
 ARG SP1_VERSION
-ADD https://github.com/succinctlabs/sp1/releases/download/${SP1_VERSION}/cargo_prove_${SP1_VERSION}_linux_amd64.tar.gz /tmp/cargo-prove.tar.gz
+ARG CARGO_PROVE_SHA256
+ADD --checksum=sha256:${CARGO_PROVE_SHA256} https://github.com/succinctlabs/sp1/releases/download/${SP1_VERSION}/cargo_prove_${SP1_VERSION}_linux_amd64.tar.gz /tmp/cargo-prove.tar.gz
 RUN mkdir -p /root/.sp1/bin && tar -xzf /tmp/cargo-prove.tar.gz -C /root/.sp1/bin && chmod +x /root/.sp1/bin/cargo-prove
 ENV PATH=/root/.sp1/bin:$PATH
 WORKDIR /src/prover
 COPY prover/ /src/prover/
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
-    cargo prove build -p bridge-return-guest --binaries bridge-return-sp1-guest --features sp1 \
+    cargo prove build -p bridge-return-guest --binaries bridge-return-sp1-guest --features sp1 --locked \
       --output-directory /out --elf-name bridge-return-sp1-guest \
  && cd /out && sha256sum bridge-return-sp1-guest > bridge-return-sp1-guest.sha256 && ls -la /out
 
 FROM scratch AS guest-from-source
 COPY --from=guest-build /out/ /
+
+# ---- the source builds the pinned guest ELF ---------------------------------
+FROM guest-build AS guest-check
+RUN cd /out && sha256sum -c /src/prover/guest-elf/bridge-return-sp1-guest.sha256
 
 # ---- host + service --------------------------------------------------------
 FROM rust:1-bookworm AS host

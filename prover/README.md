@@ -82,6 +82,7 @@ context; `/.dockerignore` keeps the sibling checkouts and build output out):
 # from the repository root
 docker build -f prover/Dockerfile -t bridge-return-service .
 docker build -f prover/Dockerfile --target vkey -o prover/target/docker .   # ELF + vkey only
+docker build -f prover/Dockerfile --target guest-check .                          # the source still builds the pinned ELF
 docker build -f prover/Dockerfile --target guest-from-source -o prover/guest-elf .   # a new guest, for a new vault
 docker compose up return-service                                           # port 8787
 ```
@@ -104,11 +105,21 @@ files. The `vkey` stage is the ELF and key alone, for `--output`.
 SP1 release and outputs the ELF with its `sha256` file; committing that output
 to `prover/guest-elf/` changes the key and needs a new vault.
 
+The guest-side crates (`crates/guest`, `crates/core`, `crates/sdk-ext`),
+`Cargo.toml` and `Cargo.lock` are the source of the pinned ELF, and every line
+of them is part of the program: panic locations carry line numbers, so removing
+a comment above one changes the binary and its key. The `guest-check` target
+rebuilds the guest from source and fails unless the result equals the pinned ELF
+byte for byte; the `Guest ELF` workflow runs it on every change to those paths.
+The SP1 image and `cargo-prove` are pinned by digest and `cargo prove build`
+runs `--locked`, which is what makes the rebuild deterministic.
+
 At start in `sp1_groth16` mode the service derives the key of the ELF at
 `SP1_GUEST_ELF` and compares it with `deployment.vkey` in
 `BRIDGE_DEPLOYMENT_CONFIG`. On a mismatch, a missing ELF or a build without
 the `sp1` feature it exits with the reason instead of producing proofs the
-vault would reject.
+vault would reject. Deriving the key is the SP1 program setup and takes one to
+two minutes before the service listens.
 
 The container starts in `precheck_only`. For real proofs set
 `BRIDGE_RETURN_PROVE_MODE=sp1_groth16`; the first proof downloads the Groth16
