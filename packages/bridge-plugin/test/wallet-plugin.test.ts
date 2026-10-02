@@ -26,7 +26,7 @@ import {
 import { MintJustificationVerifierService } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/MintJustificationVerifierService.js';
 
 import { BridgeMintJustificationVerifier, fromHex } from '../src/index.js';
-import { buildScenario, CONFIG } from './helpers.js';
+import { buildScenario, CONFIG, makeLockLog } from './helpers.js';
 
 const deps = () => ({ rpc: new MockTronRpc(null, 0n) });
 const noNestedTokens = (): void => {};
@@ -104,7 +104,7 @@ test('the adapter mint request carries the wallet-format value, the lock reason,
   const req = adapter.buildMintRequest({
     saltHex: 'a5'.repeat(32),
     amount: 1_000_000n,
-    commit: { nonce: 19n, blockNumber: 71_070_991n, logIndex: 0 },
+    commit: { nonce: 19n, blockNumber: 71_070_991n, logIndex: 0, amount: 1_000_000n, tokenIdHex: '11'.repeat(32), recipientCommitmentHex: '22'.repeat(32) },
     commitTxid: 'e7'.repeat(32),
   });
 
@@ -115,6 +115,31 @@ test('the adapter mint request carries the wallet-format value, the lock reason,
   assert.equal(req.mintJustificationVerifiers.length, 1);
   assert.equal(req.mintJustificationVerifiers[0]!.tag, BRIDGE_LOCK_JUSTIFICATION_TAG);
   assert.notEqual(req.mintJustificationVerifiers[0], loaded!.plugin.verifier, 'the self verifier is a separate, weaker instance');
+});
+
+test('decodeCommit reads the lock it finds: its position and the deposit it was made for', () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  const wallet = { getAddress: async () => 'TAddr', sendCall: async () => 'txid' };
+  const adapter = createSourceAdapter(loaded!, wallet, { allowance: async () => 0n } as never, deps());
+  const lock = makeLockLog(loaded!.plugin.resolvedConfig.lockContractHex, {
+    nonce: 19n,
+    fromEvmHex: 'ab'.repeat(20),
+    amount: 1_000_000n,
+    unicityTokenId: new Uint8Array(32).fill(0x11),
+    recipientCommitment: new Uint8Array(32).fill(0x22),
+  });
+  const other = { address: 'cd'.repeat(20), topics: [], data: '' };
+
+  const commit = adapter.decodeCommit({ blockNumber: 71_070_991n, success: true, logs: [other, lock] });
+
+  assert.deepEqual(commit, {
+    nonce: 19n,
+    blockNumber: 71_070_991n,
+    logIndex: 1,
+    amount: 1_000_000n,
+    tokenIdHex: '11'.repeat(32),
+    recipientCommitmentHex: '22'.repeat(32),
+  });
 });
 
 test('the self verifier accepts a lock that is in a block but not final; the strict one is not ready to answer', async () => {
@@ -133,7 +158,7 @@ test('mintBridgedToken maps the adapter request onto the wallet custom mint 1:1'
   const req = adapter.buildMintRequest({
     saltHex: 'a5'.repeat(32),
     amount: 5n,
-    commit: { nonce: 1n, blockNumber: 2n, logIndex: 0 },
+    commit: { nonce: 1n, blockNumber: 2n, logIndex: 0, amount: 7n, tokenIdHex: '00'.repeat(32), recipientCommitmentHex: '00'.repeat(32) },
     commitTxid: 'e7'.repeat(32),
   });
   const calls: unknown[] = [];

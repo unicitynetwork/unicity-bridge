@@ -73,11 +73,14 @@ export interface PreparedDeposit {
   readonly commitIndex: number;
 }
 
-/** Decoded commit (lock) facts the mint justification binds to. */
+/** Decoded commit (lock) facts the mint justification binds to, and the deposit the lock was made for. */
 export interface CommitInfo {
   readonly nonce: bigint;
   readonly blockNumber: bigint;
   readonly logIndex: number;
+  readonly amount: bigint;
+  readonly tokenIdHex: string;
+  readonly recipientCommitmentHex: string;
 }
 
 /** A chain-neutral Unicity mint request (the orchestrator hands this to the wallet via {mintBridgedToken}). */

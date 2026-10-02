@@ -15,7 +15,7 @@ import type { BridgeSourceAdapter, CommitInfo, DepositRecovery, DepositStep } fr
 
 import { BridgeLockJustification } from '../BridgeLockJustification.js';
 import type { ContractCall } from '../contract-call.js';
-import { fromHex } from '../hex.js';
+import { fromHex, toHex } from '../hex.js';
 import type { CreateBridgePluginDeps } from '../index.js';
 import { decodeLockEvent } from '../lock-event.js';
 import type { ConstantCaller, SourceTxInfo } from '../source-chain.js';
@@ -117,7 +117,14 @@ export function createSourceAdapter(
       const logIndex = info.logs.findIndex((l) => l.address.toLowerCase() === vaultHex);
       const decoded = logIndex >= 0 ? decodeLockEvent(info.logs[logIndex]) : null;
       if (!decoded) return null;
-      return { nonce: decoded.nonce, blockNumber: info.blockNumber, logIndex };
+      return {
+        nonce: decoded.nonce,
+        blockNumber: info.blockNumber,
+        logIndex,
+        amount: decoded.amount,
+        tokenIdHex: toHex(decoded.unicityTokenId),
+        recipientCommitmentHex: toHex(decoded.recipientCommitment),
+      };
     },
 
     buildMintRequest({ saltHex, amount, commit, commitTxid }) {
