@@ -6,7 +6,7 @@ export BRIDGE_DEPLOYMENT_CONFIG="${BRIDGE_DEPLOYMENT_CONFIG:-$ROOT/deployments/s
 RELAYER="${BRIDGE_RELAYER:-relayer-eth.js}"
 export TRUST_BASE_PATH="$ROOT/bft-trustbase.testnet2.json"
 export BRIDGE_RETURN_PROVE_MODE=sp1_groth16
-export SP1_GUEST_ELF="$ROOT/prover/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/bridge-return-sp1-guest"
+export SP1_GUEST_ELF="${SP1_GUEST_ELF:-$ROOT/prover/guest-elf/bridge-return-sp1-guest}"
 export SP1_PROVER=cpu
 export SP1_CIRCUIT_MODE=release
 export BRIDGE_RETURN_SUBMIT_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER settle --stdin"

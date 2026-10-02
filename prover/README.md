@@ -82,17 +82,33 @@ context; `/.dockerignore` keeps the sibling checkouts and build output out):
 # from the repository root
 docker build -f prover/Dockerfile -t bridge-return-service .
 docker build -f prover/Dockerfile --target vkey -o prover/target/docker .   # ELF + vkey only
+docker build -f prover/Dockerfile --target guest-from-source -o prover/guest-elf .   # a new guest, for a new vault
 docker compose up return-service                                           # port 8787
 ```
 
-Stages: `guest` builds the SP1 guest ELF inside Succinct's own image for the
-pinned SP1 release, which is the reproducible build a vault's verifying key
-must match; `host` builds the host and service binaries with the SP1 host SDK
-(needs `protoc` and Go 1.24 for the native Groth16 library) and derives the
-vkey from the ELF (`vkey.json` / `vkey.txt`, no proving involved), then runs
-`check-vectors`; `contracts` compiles the vault artifact the Node relayer
+The image proves with the guest ELF committed in `prover/guest-elf/`, the exact
+program whose verifying key the deployed vaults hold; the image does not compile
+the guest. A build of the same guest source on another day produced a different
+ELF and so a different key, which no deployed vault accepts, so the binary is
+pinned and the source build is kept only for cutting the guest of a new vault.
+
+Stages: `host` builds the host and service binaries with the SP1 host SDK
+(needs `protoc` and Go 1.24 for the native Groth16 library), checks the pinned
+ELF against its `sha256` file, derives the vkey from it (`vkey.json` /
+`vkey.txt`, no proving involved), fails the build unless that key is the one
+the `GUEST_DEPLOYMENT` record pins (default `sepolia/sepolia-usdc.json`), then
+runs `check-vectors`; `contracts` compiles the vault artifact the Node relayer
 reads; `runtime` carries the service, the relayer and the frozen deployment
 files. The `vkey` stage is the ELF and key alone, for `--output`.
+`guest-from-source` compiles the guest inside Succinct's image for the pinned
+SP1 release and outputs the ELF with its `sha256` file; committing that output
+to `prover/guest-elf/` changes the key and needs a new vault.
+
+At start in `sp1_groth16` mode the service derives the key of the ELF at
+`SP1_GUEST_ELF` and compares it with `deployment.vkey` in
+`BRIDGE_DEPLOYMENT_CONFIG`. On a mismatch, a missing ELF or a build without
+the `sp1` feature it exits with the reason instead of producing proofs the
+vault would reject.
 
 The container starts in `precheck_only`. For real proofs set
 `BRIDGE_RETURN_PROVE_MODE=sp1_groth16`; the first proof downloads the Groth16
