@@ -24,7 +24,9 @@ COPY --from=guest-build /out/ /
 
 # ---- the source builds the pinned guest ELF ---------------------------------
 FROM guest-build AS guest-check
-RUN cd /out && sha256sum -c /src/prover/guest-elf/bridge-return-sp1-guest.sha256
+RUN cd /src/prover/guest-elf && sha256sum -c bridge-return-sp1-guest.sha256 \
+ && cmp /out/bridge-return-sp1-guest bridge-return-sp1-guest \
+ && echo "the source builds the pinned guest ELF"
 
 # ---- host + service --------------------------------------------------------
 FROM rust:1-bookworm AS host
