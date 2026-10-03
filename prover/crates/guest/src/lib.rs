@@ -123,6 +123,9 @@ fn validate_bridge_burns(
     sorted_lock_refs: &[SourceLockRef],
     burns: &[BridgeBurnWitness],
 ) -> Result<()> {
+    // Every leaf is backed by exactly one verified burn; a batch with leaves and
+    // no burns is not a relation instance (BRIDGING_ANALYSIS.md §9). The public
+    // values already refuse an empty batch, so this also refuses zero burns.
     if burns.is_empty() || burns.len() != leaves.len() {
         return Err(BridgeCoreError::WrongBatchSize);
     }
@@ -444,6 +447,8 @@ mod tests {
 
     #[test]
     fn execute_rejects_leaves_without_burns() {
+        // Two release leaves, valid accumulator witnesses, zero burn witnesses:
+        // the relation must refuse rather than release unbacked value.
         let input = input(alloc::vec![leaf([0x01; 32], 3), leaf([0x02; 32], 4)]);
         assert_eq!(execute(&input), Err(BridgeCoreError::WrongBatchSize));
     }

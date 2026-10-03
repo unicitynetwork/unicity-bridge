@@ -1,9 +1,17 @@
 use std::net::SocketAddr;
 
 use bridge_return_service::{
-    clock::Clock, config::ServiceConfig, domain::policy::BatchPolicy, load_intake,
-    orchestrator::Orchestrator, prover::Prover, router, sequencer::ChainEvents, store::ReturnStore,
-    submitter::Submitter, AppState,
+    clock::Clock,
+    config::ServiceConfig,
+    domain::policy::BatchPolicy,
+    load_intake,
+    orchestrator::Orchestrator,
+    prover::{GuestCheck, Prover},
+    router,
+    sequencer::ChainEvents,
+    store::ReturnStore,
+    submitter::Submitter,
+    AppState,
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -60,10 +68,25 @@ async fn main() {
         vault = config.vault.as_deref().unwrap_or("(none)"),
         "service configuration",
     );
+    let prover = Prover::new(config.clone());
+    match prover.check_guest().await {
+        Ok(GuestCheck::NotProving) => {}
+        Ok(GuestCheck::Admitted { vkey }) => {
+            tracing::info!(%vkey, "the guest ELF is the program the vault holds");
+        }
+        Ok(GuestCheck::Unpinned { vkey }) => tracing::warn!(
+            %vkey,
+            "no deployment record names the vault's verifying key — the guest ELF is unchecked",
+        ),
+        Err(err) => {
+            eprintln!("refusing to start: {err}");
+            std::process::exit(2);
+        }
+    }
     tokio::spawn(
         Orchestrator::new(
             store.clone(),
-            Prover::new(config.clone()),
+            prover,
             submitter,
             chain_events.clone(),
             BatchPolicy::from(&config),

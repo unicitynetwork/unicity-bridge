@@ -22,12 +22,18 @@ const BRIDGE_LOCK_JUSTIFICATION_VERSION: u64 = 1;
 
 pub const TRON_USDT_LOCK_JUSTIFICATION_TAG: u64 = 1_330_002;
 
+/// CBOR tag of the network's fungible value payload (the wallet's
+/// `SpherePaymentData`; `protocol/interop.md` §2.1, `BRIDGING_ANALYSIS.md` §11).
 pub const WALLET_VALUE_TAG: u64 = 39050;
+/// Payload version this decoder accepts.
 pub const WALLET_VALUE_VERSION: u64 = 1;
 
 /// [`PaymentDataDecoder`] for a bridged token's `data` field: the wallet's
 /// value payload, `tag(39050) [ version = 1, PaymentAssetCollection, memo ]`,
-/// with the collection inline and the memo a byte string or null.
+/// with the collection inline and the memo a byte string or null. The bridge
+/// defines no value format of its own; it reads the network's. A bare
+/// `PaymentAssetCollection` (the `BRIDGE_PROTO_VERSION = 1` dialect) decodes as
+/// "no value" and fails here, as it does in the wallet.
 pub fn decode_bridged_payment_data(
     bytes: &[u8],
 ) -> core::result::Result<PaymentAssetCollection, unicity_token::Error> {
@@ -41,10 +47,13 @@ pub fn decode_bridged_payment_data(
         ));
     }
     let assets = PaymentAssetCollection::from_cbor(items[1])?;
+    // The memo is opaque to every reader; it only has to be well-formed.
     items[2].nullable(|d| d.bytes_value().map(|_| ()).map_err(Into::into))?;
     Ok(assets)
 }
 
+/// Encode a value collection in the wallet's payload, no memo: what the bridge
+/// writes at mint (and what fixtures mint with). Byte-for-byte the wallet's encoder.
 pub fn encode_bridged_payment_data(assets: &PaymentAssetCollection) -> Vec<u8> {
     encode_tag(
         WALLET_VALUE_TAG,
@@ -484,6 +493,7 @@ mod value_payload_tests {
 
     #[test]
     fn encodes_the_wallets_bytes() {
+        // Pinned against sphere-sdk's encoder (bridge-plugin-tron-usdt test/value.test.ts).
         let mut expected = vec![0xd9, 0x98, 0x8a, 0x83, 0x01, 0x81, 0x82, 0x58, 0x20];
         expected.extend_from_slice(&[0xab; 32]);
         expected.extend_from_slice(&[0x43, 0x0f, 0x42, 0x40, 0xf6]);
@@ -503,6 +513,7 @@ mod value_payload_tests {
 
     #[test]
     fn rejects_the_bare_collection_and_other_versions() {
+        // The BRIDGE_PROTO_VERSION 1 dialect: a bare collection is "no value".
         assert!(decode_bridged_payment_data(&assets().to_cbor()).is_err());
         let v2 = encode_tag(39050, &encode_array(&[&encode_uint(2), &assets().to_cbor(), &encode_null()]));
         assert!(decode_bridged_payment_data(&v2).is_err());

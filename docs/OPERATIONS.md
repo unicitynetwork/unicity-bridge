@@ -90,7 +90,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
 | `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
-| `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds |
+| `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
 | `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, unset | settlement, event scan and transfer pre-simulation hooks; replaceable by any program with the same stdin/stdout contract |
@@ -243,8 +243,10 @@ network table and needs a release.
 token format, changes the verifying key, and the key is immutable in the vault.
 The paper's procedure, followed on 2026-09-21:
 
-1. Build the program in `prover/Dockerfile` (the guest stage is the
-   reproducible build), derive the key, and record the program hash.
+1. Build the program with the `guest-from-source` target of
+   `prover/Dockerfile`, commit its output to `prover/guest-elf/`, derive the
+   key, and record the program hash. The source build is not reproducible, so
+   the committed ELF is the program from then on.
 2. Deploy a new vault with `contracts/tron/scripts/deploy-nile.js real-vault
    <asset> <vkey>`; the same verifier contract is reused. Freeze
    `deployments/<net>/<asset>-vN.json` with the config the host derives
@@ -262,9 +264,11 @@ the same procedure as a program change.
 
 **Admin hand-over.** `transferAdmin(newAdmin)`, once, from the current admin.
 
-**Service upgrade.** Rebuild the image; the key must not change unless a vault
-redeploy is intended, so compare `/app/sp1/vkey.txt` in the new image with the
-deployment file before starting it against a live vault.
+**Service upgrade.** Rebuild the image. It carries the guest ELF committed in
+`prover/guest-elf/`, and the build fails unless that ELF's key is the one the
+deployment file pins. In `sp1_groth16` mode the service makes the same
+comparison at start against `BRIDGE_DEPLOYMENT_CONFIG` and exits on a mismatch.
+`/app/sp1/vkey.txt` in the image shows the key.
 
 ## 10. Known gaps before real value
 

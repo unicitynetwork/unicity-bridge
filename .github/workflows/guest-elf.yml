@@ -1,0 +1,34 @@
+name: Guest ELF
+
+on:
+  pull_request:
+    paths:
+      - prover/crates/guest/**
+      - prover/crates/core/**
+      - prover/crates/sdk-ext/**
+      - prover/Cargo.toml
+      - prover/Cargo.lock
+      - prover/Dockerfile
+      - prover/guest-elf/**
+      - .github/workflows/guest-elf.yml
+  push:
+    branches: [main]
+    paths:
+      - prover/crates/guest/**
+      - prover/crates/core/**
+      - prover/crates/sdk-ext/**
+      - prover/Cargo.toml
+      - prover/Cargo.lock
+      - prover/Dockerfile
+      - prover/guest-elf/**
+      - .github/workflows/guest-elf.yml
+
+jobs:
+  guest-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: The source builds the pinned guest ELF
+        run: docker build -f prover/Dockerfile --target guest-check .
