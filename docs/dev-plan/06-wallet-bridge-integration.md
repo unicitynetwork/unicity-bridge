@@ -108,7 +108,7 @@ spendable immediately; reload mid-flow resumes the mint.
 
 **Sphere:**
 - `BridgeModal` **Bridge out** tab: pick a returnable bridged balance, Tron dest +
-  amount (+ deadline; fee=0 subsidized); partial ⇒ split first then burn the child.
+  amount (+ the fee terms the service quotes at `/fees`); partial ⇒ split first then burn the child.
 - `createBridgeBackBurnTransfer` (user signs the Unicity burn) → **persist burned
   blob** (`BridgeStore`, recovery-critical) → `previewReturn` shows nullifier/leaf →
   `postReturn`.

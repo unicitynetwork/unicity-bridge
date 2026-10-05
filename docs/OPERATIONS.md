@@ -353,25 +353,25 @@ The cost model is `docs/dev-plan/05-cost-analysis.md`: gas per settlement, how
 batching divides it, and proving. It was measured on Tron; the first Sepolia
 settlement used 324,439 gas (`docs/dev-plan/09-ethereum-sepolia.md`).
 
-**Today the operator pays everything and charges nothing.** Fees are deferred
-(`docs/dev-plan/integration.md` §B8). Sphere writes a zero fee into every burn,
-the service does not read the fee fields, and the settlement account pays the
-gas of every `fulfillBatch` in the chain's native currency.
+**The operator fronts the gas.** The settlement account pays for every
+`fulfillBatch` in the chain's native currency, and proving runs on the
+operator's hardware. Nothing on chain refunds either.
 
-**Charging a fee in the bridged asset** needs configuration and two small code
-changes, and no change to the vault or the proof program. A burn already
-carries a fee recipient, a fee amount and a deadline, and the vault takes the
-fee out of the owner's payout when the batch settles on or before the deadline
-(`docs/spec/ZK_BACK3.md` §4).
+**The token owner can be charged a fee in the bridged asset.** The service
+quotes a flat fee per burn at `GET /fees` and refuses a burn that pays less
+than its floor (§5). Sphere shows the fee before the burn and writes it into
+the burn; the vault takes it out of the owner's payout and pays the operator's
+account when the batch settles on or before the burn's deadline
+(`docs/spec/ZK_BACK3.md` §4). The fee is off until `BRIDGE_RETURN_FEE_AMOUNT`
+is set, and until then the operator pays everything and charges nothing. Only
+the service can enforce a minimum: the vault and the proof program check only
+that the fee does not exceed the amount.
 
-- Sphere writes the operator's address and fee instead of zero.
-- The service refuses a burn that pays less than the configured fee. Nothing
-  else can enforce a minimum: the vault and the proof program only check that
-  the fee does not exceed the amount.
-
-The fee arrives in the bridged asset (USDC on Sepolia), so the settlement
-account still needs native currency for gas. On a pull-payment vault the
-operator collects the fee with `withdraw`.
+The fee arrives in the bridged asset (USDC on Sepolia), so it reimburses the
+operator but does not replace gas: the settlement account still needs native
+currency. It is a flat amount, so set it against the gas price and the batch
+sizes actually seen. On a pull-payment vault the operator collects it with
+`withdraw`.
 
 **Letting the user pay the gas** is possible and needs larger changes.
 `fulfillBatch` accepts any sender and the service publishes each proof at

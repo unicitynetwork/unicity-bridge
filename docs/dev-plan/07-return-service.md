@@ -181,8 +181,8 @@ quorum per distinct seal; in-circuit public values unchanged; saving reported.
   `bridge-vectors/deployment`.
 - **Monitoring:** SYNCED flag, queue depth, last-proof duration, last `fulfillBatch`
   txid + energy, gas balance (`/health`).
-- **Fees (deferred):** `feeAmount = 0` subsidized; wire the `BridgeBackReason` fee
-  fields through; `GET /fees` schedule + `feeRecipient` later (§B8).
+- **Fees:** a flat fee in the bridged asset, off by default (`BRIDGE_RETURN_FEE_*`,
+  quoted at `GET /fees`, enforced at intake); a gas-derived schedule later (§B8).
 
 **Exit:** a fresh box recovers to SYNCED purely from chain; a live round trip uses
 the real Nile faucet USDT; metrics exposed.
