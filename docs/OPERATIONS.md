@@ -38,10 +38,19 @@ prover is untrusted: anyone may run one, and a wrong proof fails on chain.
 - **Settlement account.** A source-chain account with enough native currency
   for gas. One settlement costs about 287,000 energy on Tron (verify plus
   transfer); price it with `docs/dev-plan/05-cost-analysis.md`.
-- **The wallet.** Sphere's image needs the service URL as a runtime setting
-  (today it is a build-time variable, `VITE_BRIDGE_RETURN_SERVICE_URL`; wire it
-  through `deploy/runtime-config.sh` like the other URLs before a production
-  build).
+- **The wallet.** Sphere posts each deployment's burns to the service its own
+  deployment config names, and offers an asset for bridging in only when none is
+  set. For Sepolia USDC (`https://bridge-usdce.testnet.unicity.network`):
+  - Sphere's containers read `BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC` from the
+    task definition (unicity-sphere/sphere-infra, `aws/sphere-site/`);
+  - Pages previews and local builds read
+    `VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC`;
+  - the container adds the service's origin to its CSP `connect-src`.
+
+  Set it only once the settlement account is funded. Tron Nile USDT has no
+  deployed service; a local build names one with
+  `VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT`. A new deployment's service needs a
+  Sphere change for its variable.
 
 ## 3. Keys
 
