@@ -346,3 +346,39 @@ comparison at start against `BRIDGE_DEPLOYMENT_CONFIG` and exits on a mismatch.
 - The repository's `.env` holds throwaway testnet keys for the scripts
   (`TRON_SK`, `ETH_SK`); they must not reach a production host. The wallet
   signs only through browser wallets.
+
+## 11. Cost analysis
+
+The cost model is `docs/dev-plan/05-cost-analysis.md`: gas per settlement, how
+batching divides it, and proving. It was measured on Tron; the first Sepolia
+settlement used 324,439 gas (`docs/dev-plan/09-ethereum-sepolia.md`).
+
+**Today the operator pays everything and charges nothing.** Fees are deferred
+(`docs/dev-plan/integration.md` §B8). Sphere writes a zero fee into every burn,
+the service does not read the fee fields, and the settlement account pays the
+gas of every `fulfillBatch` in the chain's native currency.
+
+**Charging a fee in the bridged asset** needs configuration and two small code
+changes, and no change to the vault or the proof program. A burn already
+carries a fee recipient, a fee amount and a deadline, and the vault takes the
+fee out of the owner's payout when the batch settles on or before the deadline
+(`docs/spec/ZK_BACK3.md` §4).
+
+- Sphere writes the operator's address and fee instead of zero.
+- The service refuses a burn that pays less than the configured fee. Nothing
+  else can enforce a minimum: the vault and the proof program only check that
+  the fee does not exceed the amount.
+
+The fee arrives in the bridged asset (USDC on Sepolia), so the settlement
+account still needs native currency for gas. On a pull-payment vault the
+operator collects the fee with `withdraw`.
+
+**Letting the user pay the gas** is possible and needs larger changes.
+`fulfillBatch` accepts any sender and the service publishes each proof at
+`GET /batches/:id`, so the token owner can submit the settlement from their own
+wallet. The docs describe this only as the self-settle fallback that keeps
+funds from being stuck (`docs/spec/ZK_BACK3.md` §4 and §13,
+`prover/crates/service/README.md` under "S4 submitter"). Making it the normal
+path needs a wallet step that submits the proof and a service started without
+its relayer, which the container entrypoint and `run-return-service.sh` always
+set. Whoever submits a batch pays for every burn in it.
