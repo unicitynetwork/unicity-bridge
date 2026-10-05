@@ -204,9 +204,10 @@ with a constant call of the asset's `transfer` from the vault.
    TRUST_BASE_PATH=$PWD/bft-trustbase.testnet2.json \
    cargo run -p bridge-return-service
    ```
-2. Point the wallet at it: set `VITE_BRIDGE_RETURN_SERVICE_URL=http://localhost:8787`
-   in `sphere/.env` (or override the manifest's `returnServiceUrl`). The plugin's
-   `ReturnServiceClient` is typed to this API.
+2. Point the wallet at it: set `VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT=http://localhost:8787`
+   in `sphere/.env` (`VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC` for a service
+   running the Sepolia deployment), or override the manifest's `returnServiceUrl`.
+   The plugin's `ReturnServiceClient` is typed to this API.
 3. Bridge out in the UI → the wallet POSTs the envelope → tracks
    `queued→proving→…→settled` and shows the settle txid.
 
