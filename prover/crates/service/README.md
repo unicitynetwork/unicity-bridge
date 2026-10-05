@@ -103,6 +103,10 @@ cargo run -p bridge-return-service --features sp1 --release
 | `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8388608` | Cap on the summed wire inputs of a batch; a single larger burn still proves alone. |
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | Collection window before the first proof when the service is idle. |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | Retry backoff (doubling from the base), attempts before a return is parked, rebases before a batch fails. |
+| `BRIDGE_RETURN_FEE_AMOUNT` | `0` | Fee quoted to wallets, in the asset's smallest unit. `0` settles for free. |
+| `BRIDGE_RETURN_FEE_FLOOR` | the amount | Least fee a burn must pay to be accepted. `0` quotes the fee without enforcing it. Must not exceed the amount. |
+| `BRIDGE_RETURN_FEE_RECIPIENT` | — | Source-chain account (20-byte hex) the fee is paid to. Required with a fee. |
+| `BRIDGE_RETURN_FEE_WINDOW_SECS` | `86400` | Time the service wants between accepting a burn and the burn's fee deadline. |
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
 | `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer-eth.js events` or `relayer.js events`). Unset assumes a pristine vault. |
 | `BRIDGE_RETURN_SIMULATE_CMD` | — | Transfer pre-simulation command (see below). Unset = no simulation. |
@@ -124,6 +128,7 @@ operator fixes the configuration).
 | `GET` | `/returns/:id` | Rich status record (below). |
 | `GET` | `/returns?nullifier=` | Lookup by nullifier (wallet idempotency); `null` if unknown. |
 | `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `settleTxid`) — anyone can self-submit it. |
+| `GET` | `/fees` | The fee terms a wallet writes into a burn: `feeRecipient`, `feeAmount` (decimal string) and `deadline` (unix seconds, service clock). A burn paying less than the floor, to another account, or with too little time before its deadline is refused with `fee_not_paid`. |
 | `GET` | `/accumulator` | Rebuilt `spentRoot` + SYNCED flag. |
 | `GET` | `/health` | `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
 

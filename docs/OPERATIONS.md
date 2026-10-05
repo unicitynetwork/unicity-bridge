@@ -99,6 +99,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
 | `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
+| `BRIDGE_RETURN_FEE_AMOUNT`, `BRIDGE_RETURN_FEE_FLOOR`, `BRIDGE_RETURN_FEE_RECIPIENT`, `BRIDGE_RETURN_FEE_WINDOW_SECS` | `0`, the amount, none, `86400` | the fee quoted to wallets, in the asset's smallest unit; the least a burn must pay to be accepted; the source-chain account that receives it; the time the service wants between accepting a burn and the burn's fee deadline |
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
@@ -148,6 +149,41 @@ vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
 (Tron, TronWeb over `TRON_RPC_URL`). Both live in `contracts/tron/scripts`. The
 all-Rust submitter the plan calls for is not built; until it is, the container
 carries Node for this.
+
+The service settles for free unless `BRIDGE_RETURN_FEE_AMOUNT` is set. The fee
+is a flat amount of the bridged asset per burn. The owner's burn names it, the
+vault takes it out of the owner's payout and pays it to
+`BRIDGE_RETURN_FEE_RECIPIENT` when the batch settles on or before the burn's
+deadline; a return that settles later pays the owner in full and the service
+nothing. The fee does not replace gas: the settlement account still pays in the
+chain's native currency.
+
+Wallets read the terms from `GET /fees`: the recipient, the amount, and a
+deadline dated by the service clock, `BRIDGE_RETURN_FEE_WINDOW_SECS` plus seven
+days ahead. A burn is accepted when it names the recipient, pays at least
+`BRIDGE_RETURN_FEE_FLOOR` and still has the window left before its deadline, so
+a wallet has seven days to submit a burn it built from a quote. Any other burn
+is refused with `fee_not_paid`, after the token is already burned; it stays
+unreleased until the floor is lowered, and the wallet keeps the burned token
+and can resubmit it. A return the service already holds is not checked again.
+Set the window above the longest a return may wait in the queue, since a burn
+may carry a deadline only that far ahead.
+
+Use the floor to change the fee without stranding burns already made:
+
+- First start: deploy the service, then a wallet that reads `/fees`, then set
+  the amount with `BRIDGE_RETURN_FEE_FLOOR=0`. Wallets pay the fee and burns
+  from older wallets are still taken. Remove the floor setting once the older
+  wallets are gone, and the amount is enforced.
+- Raising: raise the amount and keep the floor at the old amount for a week,
+  then raise the floor.
+- Lowering: lower both at once.
+
+The recipient must be an account that can send a transaction to the vault: on a
+pull-payment vault the fee accrues in `owed` and only the recipient can collect
+it, with `withdraw`. The settlement account is the natural choice; do not use
+the vault admin, whose key should stay out of routine use. A burn whose fee
+lapsed shows as a `Released` event with a zero fee.
 
 A settlement counts as settled only once it is final, because the service
 records it in its journal and rebuilds the accumulator from that record when

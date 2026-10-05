@@ -437,7 +437,10 @@ cycle/quorum-count saving like the existing §11 dedup.
 Self-run and **subsidized** initially: `feeAmount = 0`, operator funds Tron gas (or
 **stakes TRX** → ~$0 recurring, refundable; §05). Mechanism already in-protocol:
 `BridgeBackReason.{feeRecipient, feeAmount}`, vault enforces `feeAmount ≤ amount`
-and pays the fee only if the deadline holds. Later: a `GET /fees` schedule covering
+and pays the fee only if the deadline holds. A flat fee is in place and off by
+default: `BRIDGE_RETURN_FEE_AMOUNT` and `BRIDGE_RETURN_FEE_RECIPIENT` set it, `GET /fees`
+quotes it, and intake refuses a burn that pays less than `BRIDGE_RETURN_FEE_FLOOR`
+(`docs/OPERATIONS.md` §5). Later: a schedule covering
 `(267,779/N + 19,347)·Pe·Ptrx + proof_$/N + margin`; permissionless competition +
 self-settle keep it honest.
 

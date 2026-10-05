@@ -3,6 +3,7 @@ use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
+    fee::FeePolicy,
     policy::{BatchPolicy, Limits},
     retry::RetryPolicy,
 };
@@ -25,6 +26,7 @@ pub struct ServiceConfig {
     pub command_timeout: Duration,
     pub state_dir: Option<PathBuf>,
     pub retry: RetryPolicy,
+    pub fee: FeePolicy,
     pub elf_path: Option<PathBuf>,
     pub proof_dir: PathBuf,
     pub prove_mode: ProveMode,
@@ -53,6 +55,7 @@ impl Default for ServiceConfig {
             command_timeout: Duration::from_secs(600),
             state_dir: None,
             retry: RetryPolicy::default(),
+            fee: FeePolicy::default(),
             elf_path: None,
             proof_dir: PathBuf::from("target/bridge-return-service/proofs"),
             prove_mode: ProveMode::PrecheckOnly,
@@ -104,6 +107,23 @@ impl ServiceConfig {
         if let Some(rebases) = env_parsed("BRIDGE_RETURN_MAX_REBASES")? {
             cfg.retry.max_rebases = rebases;
         }
+        if let Some(amount) = env_parsed("BRIDGE_RETURN_FEE_AMOUNT")? {
+            cfg.fee.amount = amount;
+        }
+        cfg.fee.floor = env_parsed("BRIDGE_RETURN_FEE_FLOOR")?.unwrap_or(cfg.fee.amount);
+        if let Some(v) = env_opt("BRIDGE_RETURN_FEE_RECIPIENT") {
+            cfg.fee.recipient =
+                address(&v).ok_or(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"))?;
+        }
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_FEE_WINDOW_SECS")? {
+            cfg.fee.settle_window = Duration::from_secs(secs);
+        }
+        if !cfg.fee.is_collectable() {
+            return Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"));
+        }
+        if !cfg.fee.floor_within_amount() {
+            return Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_FLOOR"));
+        }
         if let Some(v) = env_opt("BRIDGE_CONFIG_HASH") {
             cfg.config_hash = Some(
                 crate::store::parse_hex32(&v).ok_or(ConfigError::Invalid("BRIDGE_CONFIG_HASH"))?,
@@ -148,6 +168,13 @@ fn env_parsed<T: std::str::FromStr>(key: &'static str) -> Result<Option<T>, Conf
     env_opt(key)
         .map(|v| v.parse().map_err(|_| ConfigError::Invalid(key)))
         .transpose()
+}
+
+fn address(text: &str) -> Option<[u8; 20]> {
+    hex::decode(text.strip_prefix("0x").unwrap_or(text))
+        .ok()?
+        .try_into()
+        .ok()
 }
 
 fn positive(value: usize, key: &'static str) -> Result<usize, ConfigError> {

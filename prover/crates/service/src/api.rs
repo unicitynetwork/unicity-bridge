@@ -14,8 +14,8 @@ use sha2::Digest;
 use tower_http::cors::CorsLayer;
 
 use crate::{
-    domain::burn::Burn,
-    store::{ReturnRecord, ReturnStatus},
+    domain::{burn::Burn, fee::FeeQuote},
+    store::{hex32, ReturnRecord, ReturnStatus},
     AppState,
 };
 
@@ -26,6 +26,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/returns", post(create_return).get(get_return_by_nullifier))
         .route("/returns/:id", get(get_return))
         .route("/batches/:id", get(get_batch))
+        .route("/fees", get(fees))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -149,8 +150,17 @@ async fn create_return(
             ));
         }
     }
-    let nullifier = input.return_leaves[0].nullifier;
+    let leaf = &input.return_leaves[0];
+    let nullifier = leaf.nullifier;
     let return_id = return_id(&report.public_values_digest, &nullifier);
+    let now_secs = state.clock.now_secs();
+    let held = state.store.get_by_nullifier(&hex32(&nullifier)).is_some();
+    if !held && !state.config.fee.is_paid_by(leaf, now_secs) {
+        return Err(ApiError::BadRequest(
+            "fee_not_paid",
+            state.config.fee.demand(now_secs),
+        ));
+    }
     let burn = Burn::from_input(return_id.clone(), &input, wire_input);
     let record = ReturnRecord::queued(
         return_id,
@@ -204,6 +214,10 @@ async fn get_batch(
         .get_batch(&id)
         .map(Json)
         .ok_or(ApiError::NotFound(id))
+}
+
+async fn fees(State(state): State<Arc<AppState>>) -> Json<FeeQuote> {
+    Json(state.config.fee.quote(state.clock.now_secs()))
 }
 
 #[derive(Debug, thiserror::Error)]

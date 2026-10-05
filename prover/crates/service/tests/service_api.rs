@@ -10,7 +10,7 @@ use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_br
 use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
-    domain::{event::Event, policy::BatchPolicy, retry::RetryPolicy},
+    domain::{event::Event, fee::FeePolicy, policy::BatchPolicy, retry::RetryPolicy},
     orchestrator::Orchestrator,
     prover::Prover,
     router,
@@ -66,6 +66,99 @@ fn app_with(
         chain_events: ChainEvents::none(),
     });
     (app, store)
+}
+
+fn charging(fee: FeePolicy, store: ReturnStore) -> axum::Router {
+    router(AppState {
+        config: ServiceConfig {
+            fee,
+            ..ServiceConfig::default()
+        },
+        store,
+        clock: Clock::default(),
+        intake: None,
+        chain_events: ChainEvents::none(),
+    })
+}
+
+fn fixture_fee() -> FeePolicy {
+    FeePolicy {
+        recipient: [0xC3; 20],
+        amount: 1_000,
+        floor: 1_000,
+        settle_window: Duration::from_secs(3600),
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn memory_store() -> ReturnStore {
+    ReturnStore::memory(RetryPolicy::default())
+}
+
+#[tokio::test]
+async fn fees_quotes_the_policy_the_service_charges() {
+    let quote = get_json(&charging(fixture_fee(), memory_store()), "/fees").await;
+    assert_eq!(quote["feeRecipient"], format!("0x{}", "c3".repeat(20)));
+    assert_eq!(quote["feeAmount"], "1000");
+    let lifetime = quote["deadline"].as_u64().unwrap() - unix_now();
+    let quoted = 3600 + 7 * 24 * 3600;
+    assert!((quoted - 60..=quoted).contains(&lifetime), "{lifetime}");
+}
+
+#[tokio::test]
+async fn a_quoted_fee_with_a_zero_floor_still_takes_a_burn_without_a_fee() {
+    let rollout = FeePolicy {
+        floor: 0,
+        ..fixture_fee()
+    };
+    let app = charging(rollout, memory_store());
+    assert_eq!(get_json(&app, "/fees").await["feeAmount"], "1000");
+    let (status, created) = submit(&app, member(11, 0x61)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["status"], "queued");
+}
+
+#[tokio::test]
+async fn a_free_service_quotes_a_zero_fee() {
+    let quote = get_json(&app(Duration::from_secs(60), 1), "/fees").await;
+    assert_eq!(quote["feeRecipient"], format!("0x{}", "00".repeat(20)));
+    assert_eq!(quote["feeAmount"], "0");
+}
+
+#[tokio::test]
+async fn a_burn_that_pays_the_fee_is_queued() {
+    let app = charging(fixture_fee(), memory_store());
+    let (status, created) = submit(&app, build_b1_direct_bridge_fixture().input).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["status"], "queued");
+}
+
+#[tokio::test]
+async fn a_burn_that_does_not_pay_the_fee_is_refused() {
+    let app = charging(fixture_fee(), memory_store());
+    let (status, error) = submit(&app, member(11, 0x61)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "fee_not_paid");
+    assert_eq!(error["error"]["recoverable"], false);
+    assert!(error["error"]["message"].as_str().unwrap().contains("1000"));
+}
+
+#[tokio::test]
+async fn a_return_the_service_already_holds_is_not_charged() {
+    let store = memory_store();
+    let free = charging(FeePolicy::default(), store.clone());
+    let (_, accepted) = submit(&free, member(11, 0x61)).await;
+
+    let (status, again) = submit(&charging(fixture_fee(), store), member(11, 0x61)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["returnId"], accepted["returnId"]);
+    assert_eq!(again["duplicate"], true);
 }
 
 #[tokio::test]
@@ -326,6 +419,12 @@ async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -
 }
 
 async fn post_return(app: &axum::Router, input: bridge_return_guest::GuestInput) -> Value {
+    let (status, body) = submit(app, input).await;
+    assert_eq!(status, StatusCode::OK);
+    body
+}
+
+async fn submit(app: &axum::Router, input: bridge_return_guest::GuestInput) -> (StatusCode, Value) {
     let wire = bridge_return_guest::wire::encode_guest_input(&input);
     let body = serde_json::json!({ "wireInput": format!("0x{}", hex::encode(wire)) }).to_string();
     let response = app
@@ -336,6 +435,19 @@ async fn post_return(app: &axum::Router, input: bridge_return_guest::GuestInput)
                 .body(Body::from(body))
                 .unwrap(),
         )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn get_json(app: &axum::Router, path: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

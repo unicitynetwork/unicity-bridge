@@ -25,6 +25,10 @@ impl Clock {
         self.epoch_ms + self.started.elapsed().as_millis()
     }
 
+    pub fn now_secs(&self) -> u64 {
+        (self.now_ms() / 1000) as u64
+    }
+
     pub async fn sleep_until_ms(&self, at_ms: u128) {
         let now = self.now_ms();
         if at_ms > now {
