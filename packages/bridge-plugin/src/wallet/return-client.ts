@@ -7,6 +7,7 @@
  */
 import { toHex } from '../hex.js';
 import type { WitnessRequest } from '../bridge-back/burn.js';
+import type { FeeQuote } from './fees.js';
 
 /** Lifecycle of a submitted return (07 §B4 — matches the service's status enum). */
 export type ReturnStatus =
@@ -130,6 +131,10 @@ export class ReturnServiceClient {
   /** Service health (queue depth, prover busy, gas) for batch-ETA + ops UI. */
   public getHealth(): Promise<ReturnServiceHealth> {
     return this.json<ReturnServiceHealth>('GET', '/health');
+  }
+
+  public getFees(): Promise<FeeQuote> {
+    return this.json<FeeQuote>('GET', '/fees');
   }
 
   private async json<T>(method: string, path: string, body?: unknown): Promise<T> {

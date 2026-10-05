@@ -124,3 +124,29 @@ test('buildWitnessRequest assembles the prover hand-off envelope (02 §2c)', () 
   const withHint = buildWitnessRequest({ tokenCbor, configHash, reasonBytes, anchorHint: 42n });
   assert.equal(withHint.anchorHint, 42n);
 });
+
+const provable: BridgeBackReason = {
+  version: 1n,
+  recipient: new Uint8Array(20).fill(0xb2),
+  amount: 1_000_000n,
+  feeRecipient: new Uint8Array(20).fill(0xc3),
+  feeAmount: 50_000n,
+  deadline: 1_900_000_000n,
+};
+
+test('buildBridgeBackBurnReason refuses a reason no proof can be made for', () => {
+  const config = configFromVector();
+  const unprovable: Record<string, Partial<BridgeBackReason>> = {
+    'unknown version': { version: 2n },
+    'short recipient': { recipient: new Uint8Array(19) },
+    'long fee recipient': { feeRecipient: new Uint8Array(21) },
+    'fee above the amount': { feeAmount: 1_000_001n },
+    'negative fee': { feeAmount: -1n },
+    'deadline past 64 bits': { deadline: 2n ** 64n },
+    'negative deadline': { deadline: -1n },
+  };
+  for (const [name, change] of Object.entries(unprovable)) {
+    assert.throws(() => buildBridgeBackBurnReason(config, { ...provable, ...change }), /BridgeBackReason/, name);
+  }
+  assert.equal(buildBridgeBackBurnReason(config, { ...provable, feeAmount: provable.amount, deadline: 2n ** 64n - 1n }).reasonHash.length, 32);
+});

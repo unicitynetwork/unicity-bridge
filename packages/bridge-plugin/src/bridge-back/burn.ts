@@ -42,6 +42,7 @@ export interface BridgeBackBurnReason {
  * needed) so a wallet can preview the exact bytes before committing the burn.
  */
 export function buildBridgeBackBurnReason(c: BridgeConfig, r: BridgeBackReason): BridgeBackBurnReason {
+  assertProvable(r);
   const reasonBytes = encodeBridgeBackReason(c, r);
   const reasonHash = deriveReasonHash(reasonBytes);
   return {
@@ -49,6 +50,23 @@ export function buildBridgeBackBurnReason(c: BridgeConfig, r: BridgeBackReason):
     reasonHash,
     burnPredicate: BurnPredicate.create(reasonHash),
   };
+}
+
+const MAX_U64 = 2n ** 64n - 1n;
+
+function assertProvable(r: BridgeBackReason): void {
+  if (r.version !== 1n) {
+    throw new Error('BridgeBackReason: version must be 1');
+  }
+  if (r.recipient.length !== 20 || r.feeRecipient.length !== 20) {
+    throw new Error('BridgeBackReason: recipient and feeRecipient must be 20 bytes');
+  }
+  if (r.feeAmount < 0n || r.feeAmount > r.amount) {
+    throw new Error('BridgeBackReason: feeAmount must be between 0 and amount');
+  }
+  if (r.deadline < 0n || r.deadline > MAX_U64) {
+    throw new Error('BridgeBackReason: deadline must fit 64 bits');
+  }
 }
 
 /**

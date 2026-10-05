@@ -18,6 +18,7 @@ export * from '../evm/presentation.js';
 export * from './allowance.js';
 export * from './source-adapter.js';
 export * from './return-client.js';
+export * from './fees.js';
 export * from './self-mint-verifier.js';
 export * from './token-plugin.js';
 export * from './backing.js';
