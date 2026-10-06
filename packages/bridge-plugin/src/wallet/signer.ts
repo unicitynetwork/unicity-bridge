@@ -15,6 +15,8 @@ export interface WalletChange {
 export interface SourceWalletProvider {
   readonly id: string;
   readonly name: string;
+  /** Image URI the wallet announces for itself, when it has one. */
+  readonly icon?: string;
   /** True when this wallet can be used in the current environment (extension present, etc.). */
   isAvailable(): boolean;
   create(chainId: number): SourceSigner;

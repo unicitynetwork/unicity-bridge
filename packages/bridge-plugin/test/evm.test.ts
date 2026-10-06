@@ -16,6 +16,7 @@ import {
 import {
   bridgePresentation,
   buildBridgeInPlan,
+  evmWallets,
   InjectedEvmSigner,
   injectedEvmProvider,
   isValidEvmAddress,
@@ -23,6 +24,7 @@ import {
   ManagedEvmSigner,
   SEPOLIA_USDC_BRIDGE,
   type Eip1193Provider,
+  type Eip6963ProviderInfo,
 } from '../src/wallet/index.js';
 
 function frozen(): any {
@@ -134,7 +136,7 @@ function fakeProvider(chainIdHex: string) {
 
 test('the injected signer connects, switches chain, reports the network and sends encoded calls', async () => {
   const { provider, requests } = fakeProvider('0x1');
-  const signer = new InjectedEvmSigner({ ethereum: provider }, 11155111);
+  const signer = new InjectedEvmSigner(provider, 11155111);
   assert.equal(await signer.connect(), '0xAbCd000000000000000000000000000000000001');
   assert.ok(requests.some((r) => r.method === 'wallet_switchEthereumChain'), 'asks the wallet to switch to the bridge chain');
   assert.equal(await signer.getNetwork(), 11155111);
@@ -149,13 +151,80 @@ test('the injected signer connects, switches chain, reports the network and send
   assert.equal(sent.data.length, 2 + 8 + 3 * 64);
 });
 
-test('the injected provider is offered only when a wallet is injected', () => {
+test('the browser wallet is offered only when a wallet is injected', () => {
   assert.equal(injectedEvmProvider({}).isAvailable(), false);
+  assert.throws(() => injectedEvmProvider({}).create(11155111), /No Ethereum wallet found/);
   const { provider } = fakeProvider('0xaa36a7');
   const p = injectedEvmProvider({ ethereum: provider });
   assert.equal(p.isAvailable(), true);
   assert.equal(p.id, 'injected-evm');
+  assert.equal(p.name, 'Browser wallet');
   assert.ok(p.create(11155111) instanceof InjectedEvmSigner);
+});
+
+function fakeWindow(ethereum?: Eip1193Provider) {
+  return Object.assign(new EventTarget(), { ethereum });
+}
+
+function walletInfo(rdns: string, uuid = rdns): Eip6963ProviderInfo {
+  return { uuid, name: rdns.split('.').at(-1)!, icon: `data:image/svg+xml,${rdns}`, rdns };
+}
+
+function announce(win: EventTarget, info: Eip6963ProviderInfo, provider: Eip1193Provider): void {
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info, provider } }));
+}
+
+test('wallets announced through eip-6963 are listed by rdns with name and icon, once per uuid', async () => {
+  const win = fakeWindow();
+  const wallets = evmWallets(win);
+  const rabby = fakeProvider('0xaa36a7');
+  const metamask = fakeProvider('0x1');
+  announce(win, walletInfo('io.rabby'), rabby.provider);
+  announce(win, walletInfo('io.rabby'), rabby.provider);
+  announce(win, walletInfo('io.metamask'), metamask.provider);
+
+  const listed = wallets.list();
+  assert.deepEqual(listed.map((w) => [w.id, w.name, w.icon, w.isAvailable()]), [
+    ['io.rabby', 'rabby', 'data:image/svg+xml,io.rabby', true],
+    ['io.metamask', 'metamask', 'data:image/svg+xml,io.metamask', true],
+  ]);
+  assert.equal(await listed[1].create(11155111).getNetwork(), 1);
+  assert.deepEqual(metamask.requests.map((r) => r.method), ['eth_chainId']);
+  assert.equal(rabby.requests.length, 0);
+});
+
+test('a wallet already on the page answers the request for providers', () => {
+  const win = fakeWindow();
+  const { provider } = fakeProvider('0xaa36a7');
+  win.addEventListener('eip6963:requestProvider', () => announce(win, walletInfo('io.metamask'), provider));
+  assert.deepEqual(evmWallets(win).list().map((w) => w.id), ['io.metamask']);
+});
+
+test('a wallet that announces itself later is listed from then on', () => {
+  const win = fakeWindow();
+  const wallets = evmWallets(win);
+  assert.deepEqual(wallets.list().map((w) => w.id), ['injected-evm']);
+  announce(win, walletInfo('io.metamask'), fakeProvider('0x1').provider);
+  assert.deepEqual(wallets.list().map((w) => w.id), ['io.metamask']);
+});
+
+test('the browser wallet is listed when nothing announced owns window.ethereum', () => {
+  const nothing = evmWallets(fakeWindow()).list();
+  assert.deepEqual(nothing.map((w) => [w.id, w.isAvailable()]), [['injected-evm', false]]);
+
+  const { provider: legacy } = fakeProvider('0x1');
+  const only = evmWallets(fakeWindow(legacy)).list();
+  assert.deepEqual(only.map((w) => [w.id, w.isAvailable()]), [['injected-evm', true]]);
+
+  const same = fakeWindow(legacy);
+  const sameWallets = evmWallets(same);
+  announce(same, walletInfo('io.metamask'), legacy);
+  assert.deepEqual(sameWallets.list().map((w) => w.id), ['io.metamask']);
+
+  const other = fakeWindow(legacy);
+  const otherWallets = evmWallets(other);
+  announce(other, walletInfo('io.rabby'), fakeProvider('0x1').provider);
+  assert.deepEqual(otherWallets.list().map((w) => w.id), ['io.rabby', 'injected-evm']);
 });
 
 test('the managed signer signs through a key-holding sender and knows its chain', async () => {
