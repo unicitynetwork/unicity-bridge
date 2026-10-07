@@ -14,7 +14,10 @@ use sha2::Digest;
 use tower_http::cors::CorsLayer;
 
 use crate::{
-    domain::{burn::Burn, fee::FeeQuote},
+    domain::{
+        burn::Burn,
+        fee::{FeeQuote, FeeRefusal},
+    },
     store::{hex32, ReturnRecord, ReturnStatus},
     AppState,
 };
@@ -155,11 +158,14 @@ async fn create_return(
     let return_id = return_id(&report.public_values_digest, &nullifier);
     let now_secs = state.clock.now_secs();
     let held = state.store.get_by_nullifier(&hex32(&nullifier)).is_some();
-    if !held && !state.config.fee.is_paid_by(leaf, now_secs) {
-        return Err(ApiError::BadRequest(
-            "fee_not_paid",
-            state.config.fee.demand(now_secs),
-        ));
+    if !held {
+        match state.config.fee.refusal(leaf, now_secs) {
+            Some(FeeRefusal::Unpaid(why)) => return Err(ApiError::FeeRefused("fee_not_paid", why)),
+            Some(FeeRefusal::Late(why)) => {
+                return Err(ApiError::FeeRefused("fee_deadline_passed", why))
+            }
+            None => {}
+        }
     }
     let burn = Burn::from_input(return_id.clone(), &input, wire_input);
     let record = ReturnRecord::queued(
@@ -224,6 +230,9 @@ async fn fees(State(state): State<Arc<AppState>>) -> Json<FeeQuote> {
 pub enum ApiError {
     #[error("{1}")]
     BadRequest(&'static str, String),
+    /// Refused by the fee policy of the moment, which an operator can change: recoverable.
+    #[error("{1}")]
+    FeeRefused(&'static str, String),
     #[error("{0}")]
     PrecheckRejected(String),
     #[error("{0}")]
@@ -239,16 +248,17 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self {
-            ApiError::BadRequest(_, _) | ApiError::PrecheckRejected(_) | ApiError::Host(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            ApiError::BadRequest(_, _)
+            | ApiError::FeeRefused(_, _)
+            | ApiError::PrecheckRejected(_)
+            | ApiError::Host(_) => StatusCode::BAD_REQUEST,
             ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
         };
         let code = match &self {
-            ApiError::BadRequest(code, _) => *code,
+            ApiError::BadRequest(code, _) | ApiError::FeeRefused(code, _) => *code,
             ApiError::PrecheckRejected(_) => "precheck_rejected",
             ApiError::Host(_) => "host_error",
             ApiError::ChainUnsynced(_) => "chain_unsynced",
@@ -257,7 +267,10 @@ impl IntoResponse for ApiError {
         };
         let recoverable = matches!(
             &self,
-            ApiError::Host(_) | ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured
+            ApiError::FeeRefused(_, _)
+                | ApiError::Host(_)
+                | ApiError::ChainUnsynced(_)
+                | ApiError::IntakeUnconfigured
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves

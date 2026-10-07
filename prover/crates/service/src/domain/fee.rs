@@ -21,6 +21,12 @@ pub struct FeeQuote {
     pub deadline: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FeeRefusal {
+    Unpaid(String),
+    Late(String),
+}
+
 impl Default for FeePolicy {
     fn default() -> Self {
         Self {
@@ -46,10 +52,27 @@ impl FeePolicy {
     }
 
     pub fn is_paid_by(&self, leaf: &ReturnLeaf, now_secs: u64) -> bool {
-        !self.is_enforced()
-            || (leaf.fee_recipient == self.recipient
-                && leaf.fee_amount >= word(self.floor)
-                && leaf.deadline >= self.earliest_deadline(now_secs))
+        self.refusal(leaf, now_secs).is_none()
+    }
+
+    /// Why this policy refuses a burn, if it does: it pays less than the floor or another
+    /// account, or its deadline no longer leaves the service its settle window. The latter is
+    /// what a burn built from a quote and submitted late looks like.
+    pub fn refusal(&self, leaf: &ReturnLeaf, now_secs: u64) -> Option<FeeRefusal> {
+        if !self.is_enforced() {
+            return None;
+        }
+        if leaf.fee_recipient != self.recipient || leaf.fee_amount < word(self.floor) {
+            return Some(FeeRefusal::Unpaid(self.demand(now_secs)));
+        }
+        if leaf.deadline < self.earliest_deadline(now_secs) {
+            return Some(FeeRefusal::Late(format!(
+                "the burn's fee deadline {} leaves less than the {} seconds this service wants to settle; an operator can take it by lowering the floor",
+                leaf.deadline,
+                self.settle_window.as_secs(),
+            )));
+        }
+        None
     }
 
     pub fn quote(&self, now_secs: u64) -> FeeQuote {
@@ -127,6 +150,22 @@ mod tests {
             fee_amount: u256_from_u64(fee_amount),
             deadline,
         }
+    }
+
+    #[test]
+    fn a_late_burn_is_refused_as_late_and_an_underpaid_one_as_unpaid() {
+        assert!(matches!(
+            policy().refusal(&leaf(COLLECTOR, 1_000, NOW + DAY - 1), NOW),
+            Some(FeeRefusal::Late(_))
+        ));
+        assert!(matches!(
+            policy().refusal(&leaf(COLLECTOR, 999, NOW + DAY - 1), NOW),
+            Some(FeeRefusal::Unpaid(_))
+        ));
+        assert_eq!(
+            policy().refusal(&leaf(COLLECTOR, 1_000, NOW + DAY), NOW),
+            None
+        );
     }
 
     #[test]

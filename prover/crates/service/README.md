@@ -104,7 +104,7 @@ cargo run -p bridge-return-service --features sp1 --release
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | Collection window before the first proof when the service is idle. |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | Retry backoff (doubling from the base), attempts before a return is parked, rebases before a batch fails. |
 | `BRIDGE_RETURN_FEE_AMOUNT` | `0` | Fee quoted to wallets, in the asset's smallest unit. `0` settles for free. |
-| `BRIDGE_RETURN_FEE_FLOOR` | the amount | Least fee a burn must pay to be accepted. `0` quotes the fee without enforcing it. Must not exceed the amount. |
+| `BRIDGE_RETURN_FEE_FLOOR` | `0` | Least fee a burn must pay to be accepted. `0` quotes the fee without enforcing it. Must not exceed the amount. |
 | `BRIDGE_RETURN_FEE_RECIPIENT` | — | Source-chain account (20-byte hex) the fee is paid to. Required with a fee. |
 | `BRIDGE_RETURN_FEE_WINDOW_SECS` | `86400` | Time the service wants between accepting a burn and the burn's fee deadline. |
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
