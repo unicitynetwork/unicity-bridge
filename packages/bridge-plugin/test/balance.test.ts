@@ -18,7 +18,8 @@ test('queryBalance reads balanceOf(address) off the asset for the owner', async 
   assert.equal(calls[0].parameterHex, OWNER.slice(2).toLowerCase().padStart(64, '0'));
 });
 
-test('queryBalance reads an empty word as nothing held', async () => {
-  const rpc = { constantCall: async () => '' };
-  assert.equal(await queryBalance(rpc, { assetAddress: SEPOLIA_USDC_BRIDGE.asset, owner: OWNER }), 0n);
+test('queryBalance refuses an answer that is not one word, which is what a wrong asset address or chain gives', async () => {
+  for (const word of ['', '0x', 'ab'.repeat(33)]) {
+    await assert.rejects(queryBalance({ constantCall: async () => word }, { assetAddress: SEPOLIA_USDC_BRIDGE.asset, owner: OWNER }), /balanceOf/);
+  }
 });

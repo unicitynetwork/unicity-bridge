@@ -17,5 +17,8 @@ export async function queryBalance(rpc: ConstantCaller, q: BalanceQuery): Promis
     functionSignature: 'balanceOf(address)',
     parameterHex: ownerHex.padStart(64, '0'),
   });
-  return word ? BigInt(`0x${word}`) : 0n;
+  if (!/^[0-9a-fA-F]{64}$/.test(word)) {
+    throw new Error(`balanceOf did not answer with one word (${word || 'empty'}); is the asset address right for this chain?`);
+  }
+  return BigInt(`0x${word}`);
 }
