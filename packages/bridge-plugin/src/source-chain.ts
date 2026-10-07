@@ -12,6 +12,24 @@ export interface SourceTxInfo {
   readonly logs: SourceLog[];
 }
 
+/** A log as a node's log query returns it: the receipt log plus where it was emitted. */
+export interface SourceLogEntry extends SourceLog {
+  readonly blockNumber: bigint;
+  readonly transactionHash: string;
+}
+
+export interface LogFilter {
+  readonly address: string;
+  /** Topic per position; `null` matches any value at that position. */
+  readonly topics: readonly (string | null)[];
+  readonly fromBlock: bigint;
+  readonly toBlock: bigint;
+}
+
+export interface LogReader {
+  getLogs(filter: LogFilter): Promise<SourceLogEntry[]>;
+}
+
 export interface ConstantCallInput {
   readonly ownerHex: string;
   readonly contractHex: string;

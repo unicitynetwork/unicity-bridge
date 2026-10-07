@@ -131,6 +131,8 @@ export interface BridgeSourceAdapter {
 export interface BridgePresentation {
   /** Block-explorer URL for a source-chain transaction. */
   explorerTxUrl(txid: string): string;
+  /** Block-explorer URL for a source-chain address, in any of the chain's address forms. */
+  explorerAddressUrl(address: string): string;
   /** Structural validity of a destination address on this bridge's source chain. */
   validateAddress(addr: string): boolean;
 }

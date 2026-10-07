@@ -1,5 +1,5 @@
 import { selectorHex } from '../contract-call.js';
-import type { ConstantCallInput, ConstantCaller, SourceChainRpc, SourceLog, SourceTxInfo } from '../source-chain.js';
+import type { ConstantCallInput, ConstantCaller, LogFilter, LogReader, SourceChainRpc, SourceLog, SourceLogEntry, SourceTxInfo } from '../source-chain.js';
 
 type FetchLike = (
   input: string,
@@ -12,17 +12,40 @@ export interface EvmJsonRpcClientOptions {
   readonly fetchFn?: FetchLike;
 }
 
+interface RpcLog {
+  readonly address: string;
+  readonly topics: string[];
+  readonly data: string;
+}
+
 interface RpcReceipt {
   readonly blockNumber: string;
   readonly status: string;
-  readonly logs: readonly { address: string; topics: string[]; data: string }[];
+  readonly logs: readonly RpcLog[];
+}
+
+interface RpcLogEntry extends RpcLog {
+  readonly blockNumber: string;
+  readonly transactionHash: string;
 }
 
 function strip0x(h: string): string {
   return h.startsWith('0x') || h.startsWith('0X') ? h.slice(2) : h;
 }
 
-export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller {
+function quantity(n: bigint): string {
+  return `0x${n.toString(16)}`;
+}
+
+function shapeLog(l: RpcLog): SourceLog {
+  return {
+    address: strip0x(l.address).toLowerCase(),
+    topics: l.topics.map((t) => strip0x(t).toLowerCase()),
+    data: strip0x(l.data).toLowerCase(),
+  };
+}
+
+export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller, LogReader {
   private readonly rpcUrl: string;
   private readonly fetchFn: FetchLike;
 
@@ -56,12 +79,19 @@ export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller {
     if (!receipt) {
       return null;
     }
-    const logs: SourceLog[] = receipt.logs.map((l) => ({
-      address: strip0x(l.address).toLowerCase(),
-      topics: l.topics.map((t) => strip0x(t).toLowerCase()),
-      data: strip0x(l.data).toLowerCase(),
-    }));
-    return { blockNumber: BigInt(receipt.blockNumber), success: receipt.status === '0x1', logs };
+    return { blockNumber: BigInt(receipt.blockNumber), success: receipt.status === '0x1', logs: receipt.logs.map(shapeLog) };
+  }
+
+  public async getLogs(filter: LogFilter): Promise<SourceLogEntry[]> {
+    const entries = await this.call<RpcLogEntry[]>('eth_getLogs', [
+      {
+        address: `0x${strip0x(filter.address)}`,
+        topics: filter.topics.map((t) => (t === null ? null : `0x${strip0x(t)}`)),
+        fromBlock: quantity(filter.fromBlock),
+        toBlock: quantity(filter.toBlock),
+      },
+    ]);
+    return entries.map((l) => ({ ...shapeLog(l), blockNumber: BigInt(l.blockNumber), transactionHash: strip0x(l.transactionHash).toLowerCase() }));
   }
 
   public async getNowBlockNumber(): Promise<bigint> {

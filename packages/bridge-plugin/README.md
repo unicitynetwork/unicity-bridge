@@ -101,6 +101,9 @@ over any EIP-1193 provider, `TronLinkSigner`), the adapter signers and the explo
 presentation live under `@unicitylabs/bridge-plugin/wallet`. `evmWallets()` lists the
 Ethereum wallets on the page: those announcing themselves through EIP-6963, by name and
 icon, plus the legacy `window.ethereum` as "Browser wallet" when no announced wallet owns it.
+`findLockTxid()` finds the transaction that locked a deposit from the vault's `Lock` events for
+the signer since the deposit started (a log read, nothing is sent), for a wallet that lost track
+of a lock it asked the user to sign.
 
 ## CLI
 

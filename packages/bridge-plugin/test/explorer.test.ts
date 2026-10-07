@@ -37,6 +37,7 @@ test('isValidTronAddress rejects non-Tron / malformed input', () => {
 test('tronPresentation bundles explorer + address validation for a chainId (no chainId at call site)', () => {
   const pres = tronPresentation(TRON_NILE_CHAIN_ID);
   assert.equal(pres.explorerTxUrl('abc123'), 'https://nile.tronscan.org/#/transaction/abc123');
+  assert.equal(pres.explorerAddressUrl('TMckEpYxv8QA7oL36FvFRR7Gg1bL5DHsbt'), 'https://nile.tronscan.org/#/address/TMckEpYxv8QA7oL36FvFRR7Gg1bL5DHsbt');
   assert.equal(pres.validateAddress('TMckEpYxv8QA7oL36FvFRR7Gg1bL5DHsbt'), true);
   assert.equal(pres.validateAddress('0xdeadbeef'), false);
 });
