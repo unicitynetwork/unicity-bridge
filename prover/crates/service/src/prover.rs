@@ -1,4 +1,12 @@
+use std::{
+    fs,
+    os::unix::process::ExitStatusExt,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
+
 use bridge_return_host::s1;
+use tokio::process::Command;
 
 use crate::{
     config::{ProveMode, ServiceConfig},
@@ -80,42 +88,116 @@ impl Prover {
         }
     }
 
-    #[cfg(feature = "sp1")]
+    /// Proves in a child process, files in and files out, so the memory a proof takes goes back
+    /// to the OS when it exits and a kill ends the attempt, not the service.
     async fn prove_sp1(
         &self,
         batch_id: String,
         wire_input: Vec<u8>,
     ) -> Result<ProofBundle, ProverError> {
-        use std::fs;
-
         let elf = self
             .config
             .elf_path
             .clone()
             .ok_or(ProverError::MissingSp1Elf)?;
-        let proof_path = proof_path(&self.config.proof_dir, &batch_id);
-        let proof_dir = self.config.proof_dir.clone();
-        let info = tokio::task::spawn_blocking(move || {
-            fs::create_dir_all(&proof_dir)?;
-            bridge_return_host::sp1::real_groth16(&elf, wire_input, &proof_path)
-        })
-        .await
-        .map_err(|err| ProverError::Join(err.to_string()))??;
-        Ok(ProofBundle {
-            mode: info.proof_mode.to_string(),
-            public_values: info.public_values,
-            proof_bytes: info.proof_bytes,
-            vkey_hash: info.vkey_hash,
+        let paths = ProofPaths::new(&self.config.proof_dir, &batch_id);
+        fs::create_dir_all(&self.config.proof_dir)?;
+        fs::write(&paths.wire, &wire_input)?;
+        let outcome = self.run_prove_command(&elf, &paths).await;
+        let _ = fs::remove_file(&paths.wire);
+        outcome?;
+        let info = fs::read(&paths.info).map_err(|err| {
+            ProverError::Command(format!(
+                "the proving command for {batch_id} exited 0 without writing {}: {err}",
+                paths.info.display()
+            ))
+        })?;
+        ProofBundle::from_info_json(&info).map_err(|err| {
+            ProverError::Command(format!(
+                "{} of {batch_id} is not a proof info: {err}",
+                paths.info.display()
+            ))
         })
     }
 
-    #[cfg(not(feature = "sp1"))]
-    async fn prove_sp1(
-        &self,
-        _batch_id: String,
-        _wire_input: Vec<u8>,
-    ) -> Result<ProofBundle, ProverError> {
-        Err(ProverError::Sp1FeatureDisabled)
+    async fn run_prove_command(&self, elf: &Path, paths: &ProofPaths) -> Result<(), ProverError> {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} \"$@\"", self.config.prove_cmd))
+            .arg("sh")
+            .arg(elf)
+            .arg(&paths.wire)
+            .arg(&paths.proof)
+            .arg(&paths.info)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| {
+                ProverError::Command(format!("could not start the proving command: {err}"))
+            })?;
+        let status = tokio::time::timeout(self.config.prove_timeout, child.wait())
+            .await
+            .map_err(|_| {
+                ProverError::Command(format!(
+                    "proving {} timed out after {}s",
+                    paths.batch_id,
+                    self.config.prove_timeout.as_secs()
+                ))
+            })??;
+        if status.success() {
+            return Ok(());
+        }
+        let ended = match status.code() {
+            Some(code) => format!("exited with status {code}"),
+            None => format!("was killed by signal {}", status.signal().unwrap_or(0)),
+        };
+        Err(ProverError::Command(format!(
+            "the proving command for {} {ended}; see the log above for its output",
+            paths.batch_id
+        )))
+    }
+}
+
+impl ProofBundle {
+    /// The info file the host's `sp1-groth16-files` command writes: `0x` hex for the bytes.
+    fn from_info_json(bytes: &[u8]) -> Result<Self, String> {
+        let info: ProofInfoFile = serde_json::from_slice(bytes).map_err(|err| err.to_string())?;
+        Ok(Self {
+            mode: info.proof_mode,
+            public_values: hex_field(&info.public_values)?,
+            proof_bytes: hex_field(&info.proof_bytes)?,
+            vkey_hash: info.vkey,
+        })
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ProofInfoFile {
+    proof_mode: String,
+    vkey: Option<String>,
+    public_values: String,
+    proof_bytes: String,
+}
+
+fn hex_field(value: &str) -> Result<Vec<u8>, String> {
+    hex::decode(value.strip_prefix("0x").unwrap_or(value)).map_err(|err| err.to_string())
+}
+
+struct ProofPaths {
+    batch_id: String,
+    wire: PathBuf,
+    proof: PathBuf,
+    info: PathBuf,
+}
+
+impl ProofPaths {
+    fn new(root: &Path, batch_id: &str) -> Self {
+        Self {
+            batch_id: batch_id.to_string(),
+            wire: root.join(format!("{batch_id}.wire")),
+            proof: root.join(format!("{batch_id}.bin")),
+            info: root.join(format!("{batch_id}.json")),
+        }
     }
 }
 
@@ -125,7 +207,9 @@ pub enum ProverError {
     Host(#[from] bridge_return_host::HostError),
     #[error("prover task join failed: {0}")]
     Join(String),
-    #[error("SP1 proving requested but bridge-return-service was built without --features sp1")]
+    #[error("{0}")]
+    Command(String),
+    #[error("the guest key check needs bridge-return-service built with --features sp1")]
     Sp1FeatureDisabled,
     #[error("SP1_GUEST_ELF must be set for sp1_groth16 mode")]
     MissingSp1Elf,
@@ -133,11 +217,6 @@ pub enum ProverError {
     Guest(#[from] GuestKeyError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-}
-
-#[cfg(feature = "sp1")]
-fn proof_path(root: &std::path::Path, batch_id: &str) -> std::path::PathBuf {
-    root.join(format!("{batch_id}.bin"))
 }
 
 #[cfg(feature = "sp1")]
@@ -156,7 +235,7 @@ async fn program_vkey(_elf: std::path::PathBuf) -> Result<String, ProverError> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Duration};
 
     use super::*;
 
@@ -173,6 +252,97 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../deployments")
             .join(name)
+    }
+
+    /// A prover whose proving command is a shell snippet, run as `sh -c "<snippet> \"$@\"" sh elf wire proof info`.
+    fn proving_with(dir: &tempfile::TempDir, prove_cmd: &str, timeout: Duration) -> Prover {
+        Prover::new(ServiceConfig {
+            prove_mode: ProveMode::Sp1Groth16,
+            elf_path: Some(dir.path().join("guest.elf")),
+            proof_dir: dir.path().join("proofs"),
+            prove_cmd: prove_cmd.to_string(),
+            prove_timeout: timeout,
+            ..ServiceConfig::default()
+        })
+    }
+
+    // The command gets the ELF, wire, proof and info paths as its arguments, so a snippet is a function of them.
+    const WRITES_INFO: &str = r#"f() { cmp -s "$2" "$3.expected" || exit 9; printf '{"proof_mode":"groth16","sp1_version":"6.3.1","vkey":"0x00aa","public_values":"0x0102","proof_bytes":"0xdeadbeef","proof_bytes_len":4}' > "$4"; : > "$3"; }; f"#;
+
+    #[tokio::test]
+    async fn a_proof_is_made_by_the_command_from_files_and_read_back_from_its_info_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("proofs")).unwrap();
+        std::fs::write(dir.path().join("proofs/b-1.bin.expected"), b"wire bytes").unwrap();
+        let prover = proving_with(&dir, WRITES_INFO, Duration::from_secs(5));
+
+        let bundle = prover
+            .prove("b-1".into(), b"wire bytes".to_vec())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            bundle,
+            ProofBundle {
+                mode: "groth16".into(),
+                public_values: vec![1, 2],
+                proof_bytes: vec![0xde, 0xad, 0xbe, 0xef],
+                vkey_hash: Some("0x00aa".into()),
+            }
+        );
+        assert!(dir.path().join("proofs/b-1.bin").exists());
+        assert!(dir.path().join("proofs/b-1.json").exists());
+        assert!(
+            !dir.path().join("proofs/b-1.wire").exists(),
+            "the wire file is cleaned up"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_that_exits_with_an_error_fails_the_proof_and_names_the_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = proving_with(&dir, "f() { exit 1; }; f", Duration::from_secs(5))
+            .prove("b-2".into(), vec![1])
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("exited with status 1") && message.contains("b-2"),
+            "{message}"
+        );
+        assert!(!dir.path().join("proofs/b-2.wire").exists());
+    }
+
+    #[tokio::test]
+    async fn a_command_killed_by_a_signal_fails_the_proof_with_the_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = proving_with(&dir, "f() { kill -9 $$; }; f", Duration::from_secs(5))
+            .prove("b-3".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("signal 9"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_command_that_runs_past_the_proving_timeout_is_cut_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let err = proving_with(&dir, "f() { sleep 5; }; f", Duration::from_millis(200))
+            .prove("b-4".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn a_command_that_succeeds_without_an_info_file_fails_the_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = proving_with(&dir, "f() { exit 0; }; f", Duration::from_secs(5))
+            .prove("b-5".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("b-5.json"), "{err}");
     }
 
     #[tokio::test]

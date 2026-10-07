@@ -38,8 +38,10 @@ anyone could resubmit.
    distinct deposits; burns arriving during a proof form the next batch. The
    members' inputs are merged into one `GuestInput` chained onto the vault's
    current `spentRoot`.
-4. **S3** runs SP1 → Groth16 (`prove_mode=sp1_groth16`) or stops at the precheck
-   (`prove_mode=precheck_only`, the default — fast, no proof). The published bundle
+4. **S3** runs SP1 → Groth16 (`prove_mode=sp1_groth16`, in a child process that runs
+   `bridge-return-host sp1-groth16-files`, so a proof's memory goes back to the OS when it
+   ends) or stops at the precheck (`prove_mode=precheck_only`, the default — fast, no
+   proof). The published bundle
    (`vkey`, `publicValues`, `proofBytes`) is exposed at `GET /batches/:id`.
 5. **S4** submits `fulfillBatch` to the vault via the configured submitter, then
    every return in the batch reads `settled` with the settle txid. With **no**
@@ -75,7 +77,8 @@ and the `sp1-real-proving` notes). Prerequisites:
   (must match the vault's vkey — currently `0x002b42fa…`).
 - Lots of RAM (≥ 64–128 GB to lift `SP1_WORKER_NUM_*` and cut the ~50–60 min
   wall-clock; a single proof saturates the machine, hence the **single-flight**
-  queue — never run parallel proofs).
+  queue — never run parallel proofs). Size it for one proof's peak plus the
+  service: each proof is a child process and returns its memory when it ends.
 
 ```bash
 SP1_PROVER=cpu SP1_CIRCUIT_MODE=release \
@@ -98,6 +101,8 @@ cargo run -p bridge-return-service --features sp1 --release
 | `BRIDGE_RETURN_PROVE_MODE` | `precheck_only` | `precheck_only` or `sp1_groth16`. |
 | `SP1_GUEST_ELF` | — | Guest ELF path (required for `sp1_groth16`). |
 | `BRIDGE_RETURN_PROOF_DIR` | `target/bridge-return-service/proofs` | Where proof bundles are written. |
+| `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. |
+| `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt. |
 | `BRIDGE_RETURN_STATE_DIR` | — (in memory) | Journal directory. Unset, every restart forgets the queue. |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE` | `8` | Most burns in one proof. |
 | `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8388608` | Cap on the summed wire inputs of a batch; a single larger burn still proves alone. |
