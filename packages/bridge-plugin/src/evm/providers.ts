@@ -48,7 +48,7 @@ export function evmWallets(win: EvmDiscoveryWindow = globalThis as unknown as Ev
   const announced = new Map<string, Eip6963ProviderDetail>();
   win.addEventListener('eip6963:announceProvider', (e) => {
     const { detail } = e as CustomEvent<Eip6963ProviderDetail>;
-    announced.set(detail.info.uuid, detail);
+    announced.set(detail.info.rdns, detail);
   });
   win.dispatchEvent(new Event('eip6963:requestProvider'));
   return {

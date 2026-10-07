@@ -174,13 +174,13 @@ function announce(win: EventTarget, info: Eip6963ProviderInfo, provider: Eip1193
   win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info, provider } }));
 }
 
-test('wallets announced through eip-6963 are listed by rdns with name and icon, once per uuid', async () => {
+test('wallets announced through eip-6963 are listed by rdns with name and icon, once per rdns with the latest announcement', async () => {
   const win = fakeWindow();
   const wallets = evmWallets(win);
   const rabby = fakeProvider('0xaa36a7');
   const metamask = fakeProvider('0x1');
-  announce(win, walletInfo('io.rabby'), rabby.provider);
-  announce(win, walletInfo('io.rabby'), rabby.provider);
+  announce(win, walletInfo('io.rabby', 'rabby-first-uuid'), fakeProvider('0x5').provider);
+  announce(win, walletInfo('io.rabby', 'rabby-second-uuid'), rabby.provider);
   announce(win, walletInfo('io.metamask'), metamask.provider);
 
   const listed = wallets.list();
@@ -190,7 +190,8 @@ test('wallets announced through eip-6963 are listed by rdns with name and icon, 
   ]);
   assert.equal(await listed[1].create(11155111).getNetwork(), 1);
   assert.deepEqual(metamask.requests.map((r) => r.method), ['eth_chainId']);
-  assert.equal(rabby.requests.length, 0);
+  assert.equal(await listed[0].create(11155111).getNetwork(), 11155111);
+  assert.deepEqual(rabby.requests.map((r) => r.method), ['eth_chainId']);
 });
 
 test('a wallet already on the page answers the request for providers', () => {
