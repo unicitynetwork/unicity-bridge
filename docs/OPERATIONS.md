@@ -160,24 +160,36 @@ chain's native currency.
 
 Wallets read the terms from `GET /fees`: the recipient, the amount, and a
 deadline dated by the service clock, `BRIDGE_RETURN_FEE_WINDOW_SECS` plus seven
-days ahead. A burn is accepted when it names the recipient, pays at least
-`BRIDGE_RETURN_FEE_FLOOR` and still has the window left before its deadline, so
-a wallet has seven days to submit a burn it built from a quote. Any other burn
-is refused with `fee_not_paid`, after the token is already burned; it stays
-unreleased until the floor is lowered, and the wallet keeps the burned token
-and can resubmit it. A return the service already holds is not checked again.
-Set the window above the longest a return may wait in the queue, since a burn
-may carry a deadline only that far ahead.
+days ahead. The floor is what the service enforces, and it is `0` unless set:
+quoting a fee and enforcing it are two separate steps, because a burn refused
+at intake is already burned. With a floor, a burn is accepted when it names
+the recipient, pays at least the floor and still has the window left before its
+deadline, so a wallet has seven days to submit a burn it built from a quote.
+A burn that pays less or names another account is refused with `fee_not_paid`;
+one submitted so late that its deadline no longer leaves the window, because
+the service was down or the wallet was away, is refused with
+`fee_deadline_passed`. Both refusals are recoverable: the wallet keeps the
+burned token and resubmits it on its own, and the burn is taken once the floor
+is lowered, at `0` for a late one. The vault still pays a late burn's owner in
+full and the service nothing, so taking one is the operator's call, and the
+service does not take it unasked: a wallet could otherwise skip the fee by
+dating its deadline in the past. A return the service already holds is not
+checked again. Set the window above the longest a return may wait in the queue,
+since a burn may carry a deadline only that far ahead.
 
-Use the floor to change the fee without stranding burns already made:
+Use the floor to change the terms without stranding burns already made. Quotes
+live seven days, so a change the floor does not cover needs the floor at `0`
+for seven days first:
 
 - First start: deploy the service, then a wallet that reads `/fees`, then set
-  the amount with `BRIDGE_RETURN_FEE_FLOOR=0`. Wallets pay the fee and burns
-  from older wallets are still taken. Remove the floor setting once the older
-  wallets are gone, and the amount is enforced.
+  the amount. Wallets pay the fee and burns from older wallets are still taken.
+  Set the floor to the amount once the older wallets are gone.
 - Raising: raise the amount and keep the floor at the old amount for a week,
   then raise the floor.
 - Lowering: lower both at once.
+- A new recipient, or a longer window: set it together with the floor at `0`,
+  and raise the floor a week later. Burns from the old quotes are taken
+  meanwhile and pay the account they name.
 
 The recipient must be an account that can send a transaction to the vault: on a
 pull-payment vault the fee accrues in `owed` and only the recipient can collect
@@ -264,6 +276,7 @@ Worth alerting on:
 | Wallet shows a return as `burned` that never becomes `queued` | service unreachable | fix the service; the wallet resubmits on its own |
 | Service refuses a burn with a config-hash mismatch | the token was minted against another vault (a v1 token after the v2 redeploy) | nothing to do here; only that vault's program can release it. The wallet does not offer such tokens for a burn; a blob that reaches the service anyway is refused as final |
 | Return `failed` with a non-recoverable message | the burn will never be accepted (wrong config, malformed reason) | the funds stay on Unicity as a burned token; investigate before telling the user |
+| Return `failed` with `fee_not_paid` or `fee_deadline_passed` | the burn pays less than the floor, names another account, or came in too late for its deadline | lower the floor (to `0` for a late burn), and the wallet's own resubmit is accepted; raise it again afterwards |
 | Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
 | Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
 | Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
