@@ -194,13 +194,13 @@ function announce(win: EventTarget, info: Eip6963ProviderInfo, provider: Eip1193
   win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info, provider } }));
 }
 
-test('wallets announced through eip-6963 are listed by rdns with name and icon, once per rdns with the latest announcement', async () => {
+test('wallets announced through eip-6963 are listed by rdns with name and icon, and a later announcement cannot replace a listed wallet', async () => {
   const win = fakeWindow();
   const wallets = evmWallets(win);
   const rabby = fakeProvider('0xaa36a7');
   const metamask = fakeProvider('0x1');
-  announce(win, walletInfo('io.rabby', 'rabby-first-uuid'), fakeProvider('0x5').provider);
-  announce(win, walletInfo('io.rabby', 'rabby-second-uuid'), rabby.provider);
+  announce(win, walletInfo('io.rabby', 'rabby-first-uuid'), rabby.provider);
+  announce(win, walletInfo('io.rabby', 'rabby-second-uuid'), fakeProvider('0x5').provider);
   announce(win, walletInfo('io.metamask'), metamask.provider);
 
   const listed = wallets.list();
@@ -229,7 +229,7 @@ test('a wallet that announces itself later is listed from then on', () => {
   assert.deepEqual(wallets.list().map((w) => w.id), ['io.metamask']);
 });
 
-test('the browser wallet is listed when nothing announced owns window.ethereum', () => {
+test('the browser wallet is listed only when nothing announced itself', () => {
   const nothing = evmWallets(fakeWindow()).list();
   assert.deepEqual(nothing.map((w) => [w.id, w.isAvailable()]), [['injected-evm', false]]);
 
@@ -237,15 +237,29 @@ test('the browser wallet is listed when nothing announced owns window.ethereum',
   const only = evmWallets(fakeWindow(legacy)).list();
   assert.deepEqual(only.map((w) => [w.id, w.isAvailable()]), [['injected-evm', true]]);
 
-  const same = fakeWindow(legacy);
-  const sameWallets = evmWallets(same);
-  announce(same, walletInfo('io.metamask'), legacy);
-  assert.deepEqual(sameWallets.list().map((w) => w.id), ['io.metamask']);
-
   const other = fakeWindow(legacy);
   const otherWallets = evmWallets(other);
   announce(other, walletInfo('io.rabby'), fakeProvider('0x1').provider);
-  assert.deepEqual(otherWallets.list().map((w) => w.id), ['io.rabby', 'injected-evm']);
+  assert.deepEqual(otherWallets.list().map((w) => w.id), ['io.rabby']);
+});
+
+test('an announcement without a usable provider, name or rdns is ignored', () => {
+  const win = fakeWindow();
+  const wallets = evmWallets(win);
+  const { provider } = fakeProvider('0x1');
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: null }));
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info: walletInfo('io.noprovider') } }));
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info: { ...walletInfo('io.badrdns'), rdns: '' }, provider } }));
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info: { ...walletInfo('io.noname'), name: '' }, provider } }));
+  win.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: { info: walletInfo('io.notafunction'), provider: { request: 'nope' } } }));
+  assert.deepEqual(wallets.list().map((w) => w.id), ['injected-evm']);
+});
+
+test('where nothing can announce itself, as under node, only the browser wallet is considered', () => {
+  const wallets = evmWallets({} as never);
+  assert.deepEqual(wallets.list().map((w) => [w.id, w.isAvailable()]), [['injected-evm', false]]);
+  const { provider } = fakeProvider('0x1');
+  assert.deepEqual(evmWallets({ ethereum: provider } as never).list().map((w) => [w.id, w.isAvailable()]), [['injected-evm', true]]);
 });
 
 test('the managed signer signs through a key-holding sender and knows its chain', async () => {
