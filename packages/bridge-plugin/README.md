@@ -103,7 +103,8 @@ Ethereum wallets on the page: those announcing themselves through EIP-6963, by n
 icon, plus the legacy `window.ethereum` as "Browser wallet" when no announced wallet owns it.
 `findLockTxid()` finds the transaction that locked a deposit from the vault's `Lock` events for
 the signer since the deposit started (a log read, nothing is sent), for a wallet that lost track
-of a lock it asked the user to sign.
+of a lock it asked the user to sign. `queryBalance()` reads what an account holds of the asset,
+so a deposit above it is refused before anything is signed.
 
 ## CLI
 
