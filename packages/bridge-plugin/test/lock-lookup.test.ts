@@ -64,17 +64,16 @@ test('searches only the blocks since the deposit started, with some slack, and n
   assert.equal(young.filters[0].fromBlock, 0n);
 });
 
-test('walks a long range in windows of ten thousand blocks, newest first, and stops at the first hit', async () => {
+test('walks a long range in windows of ten thousand blocks from where the deposit started, and stops at the first hit', async () => {
   const twoDays = 2 * 24 * 60 * MINUTE;
-  const { rpc, filters } = fakeRpc(100_000n, [lockAt(93_000n, 'cc'.repeat(32), COMMITMENT)]);
+  const earliest = 100_000n - 14_400n - 300n;
+  const { rpc, filters } = fakeRpc(100_000n, [lockAt(earliest + 50n, 'cc'.repeat(32), COMMITMENT)]);
   assert.equal(await findLockTxid(bridge(), rpc, search(twoDays)), 'cc'.repeat(32));
-  assert.deepEqual(filters.map((f) => [f.fromBlock, f.toBlock]), [[90_001n, 100_000n]]);
+  assert.deepEqual(filters.map((f) => [f.fromBlock, f.toBlock]), [[earliest, earliest + 9_999n]]);
 
   const miss = fakeRpc(100_000n, []);
   assert.equal(await findLockTxid(bridge(), miss.rpc, search(twoDays)), null);
-  const first = miss.filters[0];
-  const last = miss.filters.at(-1)!;
-  assert.equal(first.toBlock, 100_000n);
+  assert.equal(miss.filters[0].fromBlock, earliest);
   assert.ok(miss.filters.every((f) => f.toBlock - f.fromBlock < 10_000n));
-  assert.equal(last.fromBlock, 100_000n - 14_400n - 300n);
+  assert.equal(miss.filters.at(-1)!.toBlock, 100_000n);
 });

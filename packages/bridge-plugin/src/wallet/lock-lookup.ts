@@ -19,15 +19,16 @@ const WINDOW = 10_000n;
 /**
  * The transaction that locked a deposit, found from the vault's `Lock` events for the signer
  * since the deposit started, or `null` when none carries its commitment. A read of the chain,
- * nothing is sent. Newest blocks first, in windows a public node serves.
+ * nothing is sent. From the blocks around the start onwards, in windows a public node serves:
+ * a lock that went out did so within minutes of the deposit, so the first window usually has it.
  */
 export async function findLockTxid(bridge: LoadedBridge, rpc: LogReader & SourceChainRpc, search: LockSearch): Promise<string | null> {
   const tip = await rpc.getNowBlockNumber();
   const since = BigInt(Math.ceil(Math.max(0, search.nowMs - search.startedAtMs) / ETHEREUM_BLOCK_MS));
   const earliest = later(tip - since - BLOCKS_OF_SLACK, 0n);
   const commitment = search.recipientCommitmentHex.toLowerCase();
-  for (let toBlock = tip; toBlock >= earliest; toBlock -= WINDOW) {
-    const fromBlock = later(toBlock - WINDOW + 1n, earliest);
+  for (let fromBlock = earliest; fromBlock <= tip; fromBlock += WINDOW) {
+    const toBlock = earlier(fromBlock + WINDOW - 1n, tip);
     const logs = await rpc.getLogs({
       address: bridge.plugin.resolvedConfig.lockContractHex,
       topics: [LOCK_EVENT_TOPIC0, null, search.fromAddressHex.toLowerCase().padStart(64, '0')],
@@ -42,4 +43,8 @@ export async function findLockTxid(bridge: LoadedBridge, rpc: LogReader & Source
 
 function later(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
+}
+
+function earlier(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
 }
