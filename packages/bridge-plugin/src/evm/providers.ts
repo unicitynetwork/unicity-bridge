@@ -40,24 +40,34 @@ export function injectedEvmProvider(win: EvmWindow = globalThis as unknown as Ev
 
 /**
  * Listens for the wallets announcing themselves (EIP-6963) and asks the ones already on the
- * page to do so. `window.ethereum` is listed as the browser wallet when no announced wallet
- * owns it, and alone when nothing announced itself, so a page without a wallet still has an
- * option to show as unavailable.
+ * page to do so. The first announcement under an rdns stays: a later one, from any script on
+ * the page, cannot take over a wallet already listed. `window.ethereum` is listed as the
+ * browser wallet only when nothing announced itself, so an older wallet is still reachable and
+ * a page without a wallet still has an option to show as unavailable. Where nothing can
+ * announce itself, as under Node, only the browser wallet is considered.
  */
 export function evmWallets(win: EvmDiscoveryWindow = globalThis as unknown as EvmDiscoveryWindow): EvmWallets {
   const announced = new Map<string, Eip6963ProviderDetail>();
-  win.addEventListener('eip6963:announceProvider', (e) => {
-    const { detail } = e as CustomEvent<Eip6963ProviderDetail>;
-    announced.set(detail.info.rdns, detail);
-  });
-  win.dispatchEvent(new Event('eip6963:requestProvider'));
+  if (typeof win.addEventListener === 'function' && typeof win.dispatchEvent === 'function') {
+    win.addEventListener('eip6963:announceProvider', (e) => {
+      const detail = announcedDetail((e as CustomEvent<unknown>).detail);
+      if (detail && !announced.has(detail.info.rdns)) announced.set(detail.info.rdns, detail);
+    });
+    win.dispatchEvent(new Event('eip6963:requestProvider'));
+  }
   return {
     list: () => {
-      const details = [...announced.values()];
-      const wallets = details.map(announcedEvmProvider);
-      return offersBrowserWallet(details, win.ethereum) ? [...wallets, injectedEvmProvider(win)] : wallets;
+      const wallets = [...announced.values()].map(announcedEvmProvider);
+      return wallets.length === 0 ? [injectedEvmProvider(win)] : wallets;
     },
   };
+}
+
+function announcedDetail(detail: unknown): Eip6963ProviderDetail | null {
+  const { info, provider } = (detail ?? {}) as { info?: Partial<Eip6963ProviderInfo>; provider?: Partial<Eip1193Provider> };
+  const named = [info?.uuid, info?.rdns, info?.name].every((v) => typeof v === 'string' && v.length > 0);
+  if (!named || typeof provider?.request !== 'function') return null;
+  return { info: info as Eip6963ProviderInfo, provider: provider as Eip1193Provider };
 }
 
 function announcedEvmProvider({ info, provider }: Eip6963ProviderDetail): SourceWalletProvider {
@@ -68,11 +78,6 @@ function announcedEvmProvider({ info, provider }: Eip6963ProviderDetail): Source
     isAvailable: () => true,
     create: (chainId) => new InjectedEvmSigner(provider, chainId),
   };
-}
-
-function offersBrowserWallet(announced: readonly Eip6963ProviderDetail[], ethereum: Eip1193Provider | undefined): boolean {
-  if (announced.length === 0) return true;
-  return ethereum !== undefined && !announced.some((d) => d.provider === ethereum);
 }
 
 function requireEthereum(win: EvmWindow): Eip1193Provider {

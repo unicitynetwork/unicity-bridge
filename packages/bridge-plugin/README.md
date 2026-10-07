@@ -100,7 +100,7 @@ RPC clients for both families are exported from the package root
 over any EIP-1193 provider, `TronLinkSigner`), the adapter signers and the explorer
 presentation live under `@unicitylabs/bridge-plugin/wallet`. `evmWallets()` lists the
 Ethereum wallets on the page: those announcing themselves through EIP-6963, by name and
-icon, plus the legacy `window.ethereum` as "Browser wallet" when no announced wallet owns it.
+icon, or the legacy `window.ethereum` as "Browser wallet" when nothing announced itself.
 
 ## CLI
 
