@@ -145,8 +145,28 @@ async fn a_burn_that_does_not_pay_the_fee_is_refused() {
     let (status, error) = submit(&app, member(11, 0x61)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"]["code"], "fee_not_paid");
-    assert_eq!(error["error"]["recoverable"], false);
+    assert_eq!(error["error"]["recoverable"], true);
     assert!(error["error"]["message"].as_str().unwrap().contains("1000"));
+}
+
+#[tokio::test]
+async fn a_burn_submitted_too_late_for_its_deadline_is_refused_as_late_and_recoverable() {
+    let slow = FeePolicy {
+        settle_window: Duration::from_secs(1_900_000_000 - unix_now() + 1),
+        ..fixture_fee()
+    };
+    let (status, error) = submit(
+        &charging(slow, memory_store()),
+        build_b1_direct_bridge_fixture().input,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "fee_deadline_passed");
+    assert_eq!(error["error"]["recoverable"], true);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("lowering the floor"));
 }
 
 #[tokio::test]

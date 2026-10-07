@@ -110,7 +110,7 @@ impl ServiceConfig {
         if let Some(amount) = env_parsed("BRIDGE_RETURN_FEE_AMOUNT")? {
             cfg.fee.amount = amount;
         }
-        cfg.fee.floor = env_parsed("BRIDGE_RETURN_FEE_FLOOR")?.unwrap_or(cfg.fee.amount);
+        cfg.fee.floor = env_parsed("BRIDGE_RETURN_FEE_FLOOR")?.unwrap_or(0);
         if let Some(v) = env_opt("BRIDGE_RETURN_FEE_RECIPIENT") {
             cfg.fee.recipient =
                 address(&v).ok_or(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"))?;
@@ -182,4 +182,67 @@ fn positive(value: usize, key: &'static str) -> Result<usize, ConfigError> {
         return Err(ConfigError::Invalid(key));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FEE_VARS: [&str; 4] = [
+        "BRIDGE_RETURN_FEE_AMOUNT",
+        "BRIDGE_RETURN_FEE_FLOOR",
+        "BRIDGE_RETURN_FEE_RECIPIENT",
+        "BRIDGE_RETURN_FEE_WINDOW_SECS",
+    ];
+
+    fn with_fee_env(vars: &[(&str, &str)]) -> Result<FeePolicy, ConfigError> {
+        for key in FEE_VARS {
+            env::remove_var(key);
+        }
+        for (key, value) in vars {
+            env::set_var(key, value);
+        }
+        let result = ServiceConfig::from_env().map(|cfg| cfg.fee);
+        for key in FEE_VARS {
+            env::remove_var(key);
+        }
+        result
+    }
+
+    // One test, since the process environment is shared between test threads.
+    #[test]
+    fn the_fee_settings_are_read_with_a_floor_of_zero_unless_set() {
+        let recipient = (
+            "BRIDGE_RETURN_FEE_RECIPIENT",
+            "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        );
+
+        let quoted = with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000"), recipient]).unwrap();
+        assert_eq!((quoted.amount, quoted.floor), (50_000, 0));
+        assert!(!quoted.is_enforced());
+
+        let enforced = with_fee_env(&[
+            ("BRIDGE_RETURN_FEE_AMOUNT", "50000"),
+            ("BRIDGE_RETURN_FEE_FLOOR", "40000"),
+            recipient,
+        ])
+        .unwrap();
+        assert_eq!((enforced.amount, enforced.floor), (50_000, 40_000));
+
+        let window = with_fee_env(&[("BRIDGE_RETURN_FEE_WINDOW_SECS", "7200")]).unwrap();
+        assert_eq!(window.settle_window, Duration::from_secs(7200));
+
+        assert!(matches!(
+            with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000")]),
+            Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"))
+        ));
+        assert!(matches!(
+            with_fee_env(&[
+                ("BRIDGE_RETURN_FEE_AMOUNT", "50000"),
+                ("BRIDGE_RETURN_FEE_FLOOR", "50001"),
+                recipient
+            ]),
+            Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_FLOOR"))
+        ));
+    }
 }
