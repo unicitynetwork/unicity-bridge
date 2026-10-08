@@ -102,7 +102,7 @@ cargo run -p bridge-return-service --features sp1 --release
 | `SP1_GUEST_ELF` | — | Guest ELF path (required for `sp1_groth16`). |
 | `BRIDGE_RETURN_PROOF_DIR` | `target/bridge-return-service/proofs` | Where proof bundles are written. |
 | `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. |
-| `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt. |
+| `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt; set it well above the slowest proof, or `0` for no limit. |
 | `BRIDGE_RETURN_STATE_DIR` | — (in memory) | Journal directory. Unset, every restart forgets the queue. |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE` | `8` | Most burns in one proof. |
 | `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8388608` | Cap on the summed wire inputs of a batch; a single larger burn still proves alone. |

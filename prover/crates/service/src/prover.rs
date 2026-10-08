@@ -3,9 +3,15 @@ use std::{
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use bridge_return_host::s1;
+use nix::{
+    sys::signal::{killpg, Signal},
+    unistd::Pid,
+};
 use tokio::process::Command;
 
 use crate::{
@@ -16,6 +22,8 @@ use crate::{
 #[derive(Clone)]
 pub struct Prover {
     config: ServiceConfig,
+    /// The process group of the proof in flight, so a shutdown can take it down with the service.
+    active: Arc<Mutex<Option<Pid>>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,7 +43,18 @@ pub enum GuestCheck {
 
 impl Prover {
     pub fn new(config: ServiceConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            active: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Kill the proof in flight, if any: the service is going down and a restart would otherwise
+    /// prove the same batch next to the orphan.
+    pub fn abandon(&self) {
+        if let Some(group) = self.active.lock().expect("prover state").take() {
+            let _ = killpg(group, Signal::SIGKILL);
+        }
     }
 
     pub async fn check_guest(&self) -> Result<GuestCheck, ProverError> {
@@ -120,7 +139,10 @@ impl Prover {
         })
     }
 
+    /// The child leads its own process group, so a timeout or a shutdown kills everything the
+    /// command started, not only the shell in front of it.
     async fn run_prove_command(&self, elf: &Path, paths: &ProofPaths) -> Result<(), ProverError> {
+        let _ = fs::remove_file(&paths.info);
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(format!("{} \"$@\"", self.config.prove_cmd))
@@ -130,20 +152,32 @@ impl Prover {
             .arg(&paths.proof)
             .arg(&paths.info)
             .stdin(Stdio::null())
+            .process_group(0)
             .kill_on_drop(true)
             .spawn()
             .map_err(|err| {
                 ProverError::Command(format!("could not start the proving command: {err}"))
             })?;
-        let status = tokio::time::timeout(self.config.prove_timeout, child.wait())
-            .await
-            .map_err(|_| {
-                ProverError::Command(format!(
+        let group = child.id().map(|pid| Pid::from_raw(pid as i32));
+        *self.active.lock().expect("prover state") = group;
+        let waited = match self.config.prove_timeout {
+            Duration::ZERO => Ok(child.wait().await),
+            limit => tokio::time::timeout(limit, child.wait()).await,
+        };
+        self.active.lock().expect("prover state").take();
+        let status = match waited {
+            Ok(status) => status?,
+            Err(_) => {
+                if let Some(group) = group {
+                    let _ = killpg(group, Signal::SIGKILL);
+                }
+                return Err(ProverError::Command(format!(
                     "proving {} timed out after {}s",
                     paths.batch_id,
                     self.config.prove_timeout.as_secs()
-                ))
-            })??;
+                )));
+            }
+        };
         if status.success() {
             return Ok(());
         }
@@ -235,7 +269,7 @@ async fn program_vkey(_elf: std::path::PathBuf) -> Result<String, ProverError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, time::Duration};
+    use std::path::PathBuf;
 
     use super::*;
 
@@ -333,6 +367,62 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("timed out"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Whether a process is still alive, by the null signal.
+    fn alive(pid: i32) -> bool {
+        nix::sys::signal::kill(Pid::from_raw(pid), None).is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_command_is_gone_with_its_own_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let prover = proving_with(
+            &dir,
+            r#"f() { echo $$ > "$4.sh"; sleep 30 & echo $! > "$4.child"; wait; }; f"#,
+            Duration::from_millis(300),
+        );
+        let err = prover.prove("b-6".into(), vec![1]).await.unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        let pid = |name: &str| {
+            std::fs::read_to_string(dir.path().join(format!("proofs/b-6.json.{name}")))
+                .unwrap()
+                .trim()
+                .parse::<i32>()
+                .unwrap()
+        };
+        let (sh, child) = (pid("sh"), pid("child"));
+        for _ in 0..20 {
+            if !alive(sh) && !alive(child) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("sh alive: {}, its child alive: {}", alive(sh), alive(child));
+    }
+
+    #[tokio::test]
+    async fn an_info_file_left_by_an_earlier_attempt_is_not_mistaken_for_this_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("proofs")).unwrap();
+        std::fs::write(dir.path().join("proofs/b-7.json"), b"{}").unwrap();
+        let err = proving_with(&dir, "f() { exit 0; }; f", Duration::from_secs(5))
+            .prove("b-7".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("b-7.json"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_timeout_of_zero_means_no_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("proofs")).unwrap();
+        let slow = r#"f() { sleep 0.5; printf '{"proof_mode":"groth16","vkey":null,"public_values":"0x","proof_bytes":"0x"}' > "$4"; }; f"#;
+        let bundle = proving_with(&dir, slow, Duration::ZERO)
+            .prove("b-8".into(), b"w".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(bundle.mode, "groth16");
     }
 
     #[tokio::test]

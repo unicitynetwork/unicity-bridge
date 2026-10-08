@@ -32,6 +32,7 @@ pub struct ServiceConfig {
     pub prove_mode: ProveMode,
     /// The command that proves one batch in a child process, given the ELF, wire, proof and info paths.
     pub prove_cmd: String,
+    /// The most a proof may take before it is killed; zero means no limit.
     pub prove_timeout: Duration,
 }
 
@@ -137,9 +138,8 @@ impl ServiceConfig {
         if let Some(v) = env_opt("BRIDGE_RETURN_PROVE_CMD") {
             cfg.prove_cmd = v;
         }
-        if let Some(secs) = env_parsed("BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? {
-            cfg.prove_timeout =
-                Duration::from_secs(positive(secs, "BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? as u64);
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? {
+            cfg.prove_timeout = Duration::from_secs(secs);
         }
         if env_opt("BRIDGE_RETURN_PROVE_MODE").as_deref() == Some("sp1_groth16") {
             cfg.prove_mode = ProveMode::Sp1Groth16;
@@ -253,6 +253,8 @@ mod tests {
         );
         env::set_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS", "900");
         let proving = ServiceConfig::from_env().unwrap();
+        env::set_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS", "0");
+        let unlimited = ServiceConfig::from_env().unwrap();
         env::remove_var("BRIDGE_RETURN_PROVE_CMD");
         env::remove_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS");
         assert_eq!(
@@ -260,6 +262,7 @@ mod tests {
             "/app/bin/bridge-return-host sp1-groth16-files"
         );
         assert_eq!(proving.prove_timeout, Duration::from_secs(900));
+        assert_eq!(unlimited.prove_timeout, Duration::ZERO);
 
         assert!(matches!(
             with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000")]),
