@@ -125,6 +125,13 @@ fn main() {
             let proof = args.next().map(PathBuf::from);
             sp1_real_groth16(elf, wire, proof)
         }
+        "sp1-groth16-files" => {
+            let elf = args.next().map(PathBuf::from);
+            let wire = args.next().map(PathBuf::from);
+            let proof = args.next().map(PathBuf::from);
+            let info = args.next().map(PathBuf::from);
+            sp1_real_groth16_files(elf, wire, proof, info)
+        }
         "sp1-vkey" => {
             let elf = args.next().map(PathBuf::from);
             sp1_vkey(elf)
@@ -141,7 +148,9 @@ fn main() {
         }
         _ => {
             usage();
-            Ok(())
+            Err(bridge_return_host::HostError::Check(format!(
+                "unknown command {cmd:?}"
+            )))
         }
     };
 
@@ -169,6 +178,7 @@ fn usage() {
     eprintln!("       bridge-return-host sp1-execute <guest.elf> <wire_hex>                 # --features sp1");
     eprintln!("       bridge-return-host sp1-mock-groth16 <guest.elf> <wire_hex> <proof.bin> # --features sp1");
     eprintln!("       bridge-return-host sp1-groth16 <guest.elf> <wire_hex> <proof.bin>      # --features sp1 (real CPU prove)");
+    eprintln!("       bridge-return-host sp1-groth16-files <guest.elf> <wire.bin> <proof.bin> <info.json>");
     eprintln!("       bridge-return-host sp1-vkey <guest.elf>                                # --features sp1");
     eprintln!("       bridge-return-host sp1-export <guest.elf> <proof.bin> <bundle.json>    # --features sp1");
     eprintln!("       bridge-return-host sp1-proof-info <proof.bin>                         # --features sp1");
@@ -749,6 +759,49 @@ fn sp1_real_groth16(
     ))
 }
 
+/// The same proof with the wire read from a file and the result written to one, for a caller
+/// that runs this as a child process: a batch can be megabytes, over the argument size limit,
+/// and stdout carries SP1's log.
+#[cfg(feature = "sp1")]
+fn sp1_real_groth16_files(
+    elf: Option<PathBuf>,
+    wire: Option<PathBuf>,
+    proof: Option<PathBuf>,
+    info: Option<PathBuf>,
+) -> bridge_return_host::Result<()> {
+    let elf = require_arg(elf, "guest.elf")?;
+    let wire_path = require_arg(wire, "wire.bin")?;
+    let proof = require_arg(proof, "proof.bin")?;
+    let info_path = require_arg(info, "info.json")?;
+    let wire = std::fs::read(&wire_path).map_err(|err| {
+        bridge_return_host::HostError::Check(format!("read {}: {err}", wire_path.display()))
+    })?;
+    sp1_sdk::utils::setup_logger();
+    let info = bridge_return_host::sp1::real_groth16(&elf, wire, &proof)?;
+    let json = proof_info_json(&info);
+    std::fs::write(
+        &info_path,
+        serde_json::to_vec_pretty(&json).expect("serialize SP1 proof info"),
+    )
+    .map_err(|err| {
+        bridge_return_host::HostError::Check(format!("write {}: {err}", info_path.display()))
+    })?;
+    print_proof_info(&info);
+    Ok(())
+}
+
+#[cfg(not(feature = "sp1"))]
+fn sp1_real_groth16_files(
+    _elf: Option<PathBuf>,
+    _wire: Option<PathBuf>,
+    _proof: Option<PathBuf>,
+    _info: Option<PathBuf>,
+) -> bridge_return_host::Result<()> {
+    Err(bridge_return_host::HostError::Check(
+        "rebuild bridge-return-host with --features sp1".to_string(),
+    ))
+}
+
 #[cfg(feature = "sp1")]
 fn sp1_vkey(elf: Option<PathBuf>) -> bridge_return_host::Result<()> {
     let elf = require_arg(elf, "guest.elf")?;
@@ -833,17 +886,21 @@ fn sp1_proof_info(_proof: Option<PathBuf>) -> bridge_return_host::Result<()> {
 }
 
 #[cfg(feature = "sp1")]
+fn proof_info_json(info: &bridge_return_host::sp1::Sp1ProofInfo) -> serde_json::Value {
+    serde_json::json!({
+        "proof_mode": info.proof_mode,
+        "sp1_version": info.sp1_version,
+        "vkey": info.vkey_hash,
+        "public_values": format!("0x{}", hex::encode(&info.public_values)),
+        "proof_bytes": format!("0x{}", hex::encode(&info.proof_bytes)),
+        "proof_bytes_len": info.proof_bytes.len(),
+    })
+}
+
+#[cfg(feature = "sp1")]
 fn print_proof_info(info: &bridge_return_host::sp1::Sp1ProofInfo) {
     println!(
         "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "proof_mode": info.proof_mode,
-            "sp1_version": info.sp1_version,
-            "vkey": info.vkey_hash,
-            "public_values": format!("0x{}", hex::encode(&info.public_values)),
-            "proof_bytes": format!("0x{}", hex::encode(&info.proof_bytes)),
-            "proof_bytes_len": info.proof_bytes.len(),
-        }))
-        .expect("serialize SP1 proof info")
+        serde_json::to_string_pretty(&proof_info_json(info)).expect("serialize SP1 proof info")
     );
 }

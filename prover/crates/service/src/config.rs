@@ -30,6 +30,12 @@ pub struct ServiceConfig {
     pub elf_path: Option<PathBuf>,
     pub proof_dir: PathBuf,
     pub prove_mode: ProveMode,
+    /// The command that proves one batch in a child process, given the ELF, wire, proof and info paths.
+    pub prove_cmd: String,
+    /// The command that prints the guest's verifying key as JSON, given the ELF path.
+    pub vkey_cmd: String,
+    /// The most a proof may take before it is killed; zero means no limit.
+    pub prove_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,6 +65,9 @@ impl Default for ServiceConfig {
             elf_path: None,
             proof_dir: PathBuf::from("target/bridge-return-service/proofs"),
             prove_mode: ProveMode::PrecheckOnly,
+            prove_cmd: "bridge-return-host sp1-groth16-files".to_string(),
+            vkey_cmd: "bridge-return-host sp1-vkey".to_string(),
+            prove_timeout: Duration::from_secs(7200),
         }
     }
 }
@@ -128,6 +137,15 @@ impl ServiceConfig {
             cfg.config_hash = Some(
                 crate::store::parse_hex32(&v).ok_or(ConfigError::Invalid("BRIDGE_CONFIG_HASH"))?,
             );
+        }
+        if let Some(v) = env_opt("BRIDGE_RETURN_PROVE_CMD") {
+            cfg.prove_cmd = v;
+        }
+        if let Some(v) = env_opt("BRIDGE_RETURN_VKEY_CMD") {
+            cfg.vkey_cmd = v;
+        }
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? {
+            cfg.prove_timeout = Duration::from_secs(secs);
         }
         if env_opt("BRIDGE_RETURN_PROVE_MODE").as_deref() == Some("sp1_groth16") {
             cfg.prove_mode = ProveMode::Sp1Groth16;
@@ -231,6 +249,36 @@ mod tests {
 
         let window = with_fee_env(&[("BRIDGE_RETURN_FEE_WINDOW_SECS", "7200")]).unwrap();
         assert_eq!(window.settle_window, Duration::from_secs(7200));
+
+        let defaults = ServiceConfig::from_env().unwrap();
+        assert_eq!(defaults.prove_cmd, "bridge-return-host sp1-groth16-files");
+        assert_eq!(defaults.vkey_cmd, "bridge-return-host sp1-vkey");
+        env::set_var(
+            "BRIDGE_RETURN_VKEY_CMD",
+            "/app/bin/bridge-return-host sp1-vkey",
+        );
+        assert_eq!(
+            ServiceConfig::from_env().unwrap().vkey_cmd,
+            "/app/bin/bridge-return-host sp1-vkey"
+        );
+        env::remove_var("BRIDGE_RETURN_VKEY_CMD");
+        assert_eq!(defaults.prove_timeout, Duration::from_secs(7200));
+        env::set_var(
+            "BRIDGE_RETURN_PROVE_CMD",
+            "/app/bin/bridge-return-host sp1-groth16-files",
+        );
+        env::set_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS", "900");
+        let proving = ServiceConfig::from_env().unwrap();
+        env::set_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS", "0");
+        let unlimited = ServiceConfig::from_env().unwrap();
+        env::remove_var("BRIDGE_RETURN_PROVE_CMD");
+        env::remove_var("BRIDGE_RETURN_PROVE_TIMEOUT_SECS");
+        assert_eq!(
+            proving.prove_cmd,
+            "/app/bin/bridge-return-host sp1-groth16-files"
+        );
+        assert_eq!(proving.prove_timeout, Duration::from_secs(900));
+        assert_eq!(unlimited.prove_timeout, Duration::ZERO);
 
         assert!(matches!(
             with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000")]),

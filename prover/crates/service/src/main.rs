@@ -70,6 +70,7 @@ async fn main() {
         "service configuration",
     );
     let prover = Prover::new(config.clone());
+    let proving = prover.clone();
     match prover.check_guest().await {
         Ok(GuestCheck::NotProving) => {}
         Ok(GuestCheck::Admitted { vkey }) => {
@@ -123,9 +124,15 @@ async fn main() {
         .await
         .expect("serve bridge-return-service");
     tracing::info!("shutting down; an in-flight proof is abandoned and re-run at start");
+    proving.abandon();
     std::process::exit(0);
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("listen for SIGTERM");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
 }

@@ -28,7 +28,11 @@ prover is untrusted: anyone may run one, and a wrong proof fails on chain.
   burn's execution length. The 921k-cycle fixture peaked at about 14 GB
   (`docs/dev-plan/04-deployment.md`); a live 10 USDT burn measured at
   3,393,715 cycles (`bridge-return-host sp1-execute`) exceeded 14.6 GB of RAM
-  plus 4 GB of swap inside Docker on a 16 GB Mac and was killed every time.
+  plus 4 GB of swap inside Docker on a 16 GB Mac and was killed every time,
+  and a live Sepolia USDC burn peaks at about 26 GiB. Each proof runs in a
+  child process (`BRIDGE_RETURN_PROVE_CMD`), so that memory goes back to the
+  OS when the proof ends and the service itself stays small between proofs:
+  size the memory limit for one proof's peak plus the service, not for two.
   Plan 32 GB or more for live tokens, and expect a proof to take longer than
   the fixture's hour. Precheck alone needs a fraction of that. 8 GB of disk
   for the artifacts and bundles.
@@ -98,6 +102,8 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_MAX_BATCH_SIZE`, `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8`, `8388608` | most burns, and most summed input bytes, in one proof |
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
 | `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
+| `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` (the image sets its full path) | the command that prints the guest's verifying key at start, in a child process like the proofs, so the service itself loads no SP1 code |
+| `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout and a shutdown of the service (`SIGTERM`, Ctrl-C) kill all of it, so a restart never proves next to an orphan |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
 | `BRIDGE_RETURN_FEE_AMOUNT`, `BRIDGE_RETURN_FEE_FLOOR`, `BRIDGE_RETURN_FEE_RECIPIENT`, `BRIDGE_RETURN_FEE_WINDOW_SECS` | `0`, the amount, none, `86400` | the fee quoted to wallets, in the asset's smallest unit; the least a burn must pay to be accepted; the source-chain account that receives it; the time the service wants between accepting a burn and the burn's fee deadline |
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
@@ -280,13 +286,14 @@ Worth alerting on:
 | Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
 | Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
 | Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
-| Service restarts while proving; the return says `Proof interrupted by a service restart` (`docker events` shows `die:137`, the Docker VM's `dmesg` an `oom-kill` of `bridge-return-s`) | the Groth16 wrap's Go prover outgrew the machine: 23 GB resident in a 24 GB WSL VM on 2026-09-23 | keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours); each interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever |
+| Return `failed` with `proving_failed` saying the proving command `was killed by signal 9` (the Docker VM's `dmesg` shows an `oom-kill` of `bridge-return-h`) | the proof outgrew the memory limit: a live Sepolia USDC burn peaks at about 26 GiB, 23 GB killed it in a 24 GB WSL VM on 2026-09-23 | the service keeps running and retries with backoff; each kill counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS`. Size the limit for one proof's peak plus the service; keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours) |
+| Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process itself was stopped or killed | each interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
 | A recipient's transfer would revert and take the batch with it | push payments, a hostile or blocked recipient | with `BRIDGE_RETURN_SIMULATE_CMD` set the service excludes the leaf before proving and fails that return recoverably; without it the batch reverts on chain and is retried with the same members; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |
 | First proof fails with a truncated proving key | interrupted download | delete the artifact volume and let it download again; verify the size against `docs/dev-plan/03-status.md` |
-| Proof out of memory | under 16 GB available | more memory; there is no smaller mode |
+| Proof out of memory | under one proof's peak available (about 26 GiB for a live burn on the current guest) | more memory; there is no smaller mode |
 
 ## 9. Procedures
 

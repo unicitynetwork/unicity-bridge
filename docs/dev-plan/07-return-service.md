@@ -118,9 +118,10 @@ root and produces a prove-ready `GuestInput`; `/accumulator` reports SYNCED.
   single-worker floor *within* one proof; never concurrent proofs):
 
   ```bash
+  cargo build --release -p bridge-return-host --features sp1  # proves in a child process
   SP1_PROVER=cpu SP1_CIRCUIT_MODE=release \
   SP1_WORKER_NUM_CORE_WORKERS=<cores> ... \
-  cargo run --release -p bridge-return-service --features sp1
+  cargo run --release -p bridge-return-service
   ```
 
 - Cache the v6.1.0 circuit + 5.86 GB `groth16_pk.bin` on disk (verify the SHA-256
