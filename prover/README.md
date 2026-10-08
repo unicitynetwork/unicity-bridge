@@ -87,6 +87,12 @@ docker build -f prover/Dockerfile --target guest-from-source -o prover/guest-elf
 docker compose up return-service                                           # port 8787
 ```
 
+The `Return service image` workflow builds the same image on every pull request
+that touches its inputs and publishes it from `main` (and `v*` tags) as
+`ghcr.io/unicitynetwork/bridge-return-service:<7-char commit sha>`, plus
+`latest` on `main`. A deployment pins the sha tag; `/app/sp1/vkey.txt` in the
+image shows the key it proves with.
+
 The image proves with the guest ELF committed in `prover/guest-elf/`, the exact
 program whose verifying key the deployed vaults hold; the image does not compile
 the guest. A build of the same guest source on another day produced a different

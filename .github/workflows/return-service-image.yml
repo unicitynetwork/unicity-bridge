@@ -1,0 +1,114 @@
+name: Return service image
+
+# Builds the return service image from prover/Dockerfile and publishes it to
+# ghcr.io/unicitynetwork/bridge-return-service, so a deployment pulls a pinned
+# image instead of building it on its own host.
+#
+# The build is the check: the host stage fails unless the pinned guest ELF has
+# its committed sha256 and derives the verifying key the GUEST_DEPLOYMENT record
+# pins, and it runs check-vectors. Pull requests build the image the same way
+# but do not push it.
+#
+# Tags: the 7-character commit sha (what a deployment pins), `latest` on main,
+# and the version for a v* tag.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - prover/**
+      - protocol/**
+      - deployments/**
+      - contracts/tron/**
+      - bft-trustbase.testnet2.json
+      - .dockerignore
+      - .github/workflows/return-service-image.yml
+  pull_request:
+    paths:
+      - prover/**
+      - protocol/**
+      - deployments/**
+      - contracts/tron/**
+      - bft-trustbase.testnet2.json
+      - .dockerignore
+      - .github/workflows/return-service-image.yml
+  workflow_dispatch:
+
+# A newer push to the same branch or pull request supersedes a build in
+# progress; tags and main each finish what they started.
+concurrency:
+  group: return-service-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/unicitynetwork/bridge-return-service
+
+jobs:
+  image:
+    # GitHub-hosted: the org's self-hosted pool does not take public repositories.
+    runs-on: ubuntu-latest
+    # A cold build compiles the SP1 host and service in release; the cache below
+    # shortens later ones.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # The SP1 image, the Rust and Go toolchains and a cold release target do not
+      # fit the runner's free disk otherwise.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # latest=auto would also put `latest` on a v* tag build; it stays main's.
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+
+      - name: Build (and push from main or a tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: prover/Dockerfile
+          # The guest stage downloads cargo-prove for linux_amd64.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The tags come in through the environment, not pasted into the script:
+      # a tag name is pushed by a user and is not shell-safe text.
+      - name: Report the published image
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$TAGS" | while IFS= read -r tag; do
+            [ -n "$tag" ] && printf -- '- %s\n' "$tag"
+          done >> "$GITHUB_STEP_SUMMARY"
