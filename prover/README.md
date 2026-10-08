@@ -87,6 +87,14 @@ docker build -f prover/Dockerfile --target guest-from-source -o prover/guest-elf
 docker compose up return-service                                           # port 8787
 ```
 
+The `Bridge-out service image` workflow builds the same image on every pull
+request that touches its inputs and publishes it from `main` as
+`ghcr.io/unicitynetwork/bridge-out-service:<7-char commit sha>`, plus `latest`;
+a `v*` tag publishes `:<version>` only. The sha tag is written once and never
+replaced (a re-run of a published commit builds but pushes nothing), so a
+deployment pins it; a manual run on any other ref only builds.
+`/app/sp1/vkey.txt` in the image shows the key it proves with.
+
 The image proves with the guest ELF committed in `prover/guest-elf/`, the exact
 program whose verifying key the deployed vaults hold; the image does not compile
 the guest. A build of the same guest source on another day produced a different
