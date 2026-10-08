@@ -36,21 +36,24 @@ const RATE_LIMITED = /\b429\b|\[-32005\]|rate limit|rate exceeded|too many reque
  * The vault records every token id it has locked, so that is asked first; it is exact and needs
  * no block window. A locked token id is then located in the vault's `Lock` events, among the
  * signer's first, then any account's, from the blocks around the deposit's start and further
- * back until found. A read of the chain, nothing is sent. A node that refuses a window gets it
+ * back until found or the vault's deployment. A read of the chain, nothing is sent. A node that refuses a window gets it
  * halved, down to a floor; a rate limit is retried once after a pause.
  */
 export async function findLock(bridge: LoadedBridge, rpc: LockSearchRpc, search: LockSearch): Promise<LockSearchResult> {
   const vault = bridge.plugin.resolvedConfig.lockContractHex;
   const tokenId = search.unicityTokenIdHex.toLowerCase();
-  if (!(await tokenIdUsed(rpc, vault, search.fromAddressHex, tokenId))) {
-    return (await inFlight(rpc, search.fromAddressHex))
-      ? { outcome: 'unknown', why: 'a transaction from the account is still pending' }
-      : { outcome: 'absent' };
+  const locked = () => tokenIdUsed(rpc, vault, search.fromAddressHex, tokenId);
+  if (!(await locked())) {
+    if (await inFlight(rpc, search.fromAddressHex)) {
+      return { outcome: 'unknown', why: 'a transaction from the account is still pending' };
+    }
+    if (!(await locked())) return { outcome: 'absent' };
   }
   const tip = await rpc.getNowBlockNumber();
   const since = BigInt(Math.ceil(Math.max(0, search.nowMs - search.startedAtMs) / ETHEREUM_BLOCK_MS));
+  const floor = BigInt(bridge.manifest.deployBlock ?? 0);
   const from = search.fromAddressHex.toLowerCase().padStart(64, '0');
-  const txid = await locate(rpc, vault, tokenId, from, later(tip - since - BLOCKS_OF_SLACK, 0n), tip);
+  const txid = await locate(rpc, vault, tokenId, from, later(tip - since - BLOCKS_OF_SLACK, floor), tip, floor);
   return txid === null
     ? { outcome: 'unknown', why: 'the vault has locked this token id, but its transaction was not found in the logs the node serves' }
     : { outcome: 'found', txid };
@@ -58,7 +61,10 @@ export async function findLock(bridge: LoadedBridge, rpc: LockSearchRpc, search:
 
 async function tokenIdUsed(rpc: ConstantCaller, vault: string, ownerHex: string, tokenIdHex: string): Promise<boolean> {
   const word = await rpc.constantCall({ ownerHex, contractHex: vault, functionSignature: 'tokenIdUsed(bytes32)', parameterHex: tokenIdHex });
-  return BigInt(`0x${word || '0'}`) !== 0n;
+  if (!/^[0-9a-fA-F]{64}$/.test(word)) {
+    throw new Error(`tokenIdUsed did not answer with one word (${word || 'empty'}); is the vault address right for this chain?`);
+  }
+  return BigInt(`0x${word}`) !== 0n;
 }
 
 async function inFlight(rpc: NonceReader, addressHex: string): Promise<boolean> {
@@ -66,15 +72,15 @@ async function inFlight(rpc: NonceReader, addressHex: string): Promise<boolean> 
   return pending > latest;
 }
 
-/** The lock's transaction: the signer's locks from `earliest` on, then anyone's, then further back. */
-async function locate(rpc: LogReader, vault: string, tokenId: string, from: string, earliest: bigint, tip: bigint): Promise<string | null> {
+/** The lock's transaction: the signer's locks from `earliest` on, then anyone's, then further back to `floor`. */
+async function locate(rpc: LogReader, vault: string, tokenId: string, from: string, earliest: bigint, tip: bigint, floor: bigint): Promise<string | null> {
   for (const topic of [from, null]) {
     const txid = await scan(rpc, { address: vault, topics: [LOCK_EVENT_TOPIC0, null, topic] }, tokenId, earliest, tip);
     if (txid) return txid;
   }
   let toBlock = earliest - 1n;
-  for (let span = tip - earliest + 1n; toBlock >= 0n; span *= 2n) {
-    const fromBlock = later(toBlock - span + 1n, 0n);
+  for (let span = tip - earliest + 1n; toBlock >= floor; span *= 2n) {
+    const fromBlock = later(toBlock - span + 1n, floor);
     const txid = await scan(rpc, { address: vault, topics: [LOCK_EVENT_TOPIC0, null, null] }, tokenId, fromBlock, toBlock);
     if (txid) return txid;
     toBlock = fromBlock - 1n;

@@ -63,6 +63,7 @@ export const SEPOLIA_USDC_BRIDGE: EvmBridgeManifest = {
   chainRef: 'eip155:11155111',
   chainId: 11155111,
   vault: '0x9C2BF4Ed5b85130fFD14BE8FA65c60F299Fc9a2E',
+  deployBlock: 11_764_672,
   asset: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
   confirmations: 12,
   decimals: 6,

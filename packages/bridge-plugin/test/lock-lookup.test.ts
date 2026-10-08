@@ -15,8 +15,9 @@ const OTHER_TOKEN_ID = new Uint8Array(32).fill(4);
 const MINUTE = 60_000;
 const NOW = 1_800_000_000_000;
 
-function bridge() {
-  return loadBridges(SEPOLIA_USDC_BRIDGE, { rpc: { getTransactionInfo: async () => null, getNowBlockNumber: async () => 0n } })[0];
+/** The Sepolia bridge on a chain that starts at block 0, so the small fake tips below are after its deployment. */
+function bridge(deployBlock = 0) {
+  return loadBridges({ ...SEPOLIA_USDC_BRIDGE, deployBlock }, { rpc: { getTransactionInfo: async () => null, getNowBlockNumber: async () => 0n } })[0];
 }
 
 function lockAt(blockNumber: bigint, txid: string, tokenId: Uint8Array, from = FROM): SourceLogEntry {
@@ -28,6 +29,10 @@ interface Chain {
   readonly locks?: readonly SourceLogEntry[];
   /** Which token ids the vault reports as locked; defaults to those of the mined locks. */
   readonly used?: readonly Uint8Array[];
+  /** What the vault answers instead of a word, to stand in for a wrong address or a bare node. */
+  readonly vaultAnswer?: string;
+  /** The vault reports the token id locked only from this call on: a lock mined mid-search. */
+  readonly usedFromCall?: number;
   readonly pending?: bigint;
   readonly latest?: bigint;
   readonly failing?: (filter: LogFilter, attempt: number) => Error | null;
@@ -56,7 +61,9 @@ function fakeRpc(chain: Chain) {
       },
       constantCall: async (input: ConstantCallInput) => {
         calls.push(input);
-        return word(used.includes(input.parameterHex ?? ''));
+        if (chain.vaultAnswer !== undefined) return chain.vaultAnswer;
+        const known = used.includes(input.parameterHex ?? '') && calls.length >= (chain.usedFromCall ?? 1);
+        return word(known);
       },
       getTransactionCount: async (_address: string, tag: 'latest' | 'pending') => (tag === 'pending' ? (chain.pending ?? 0n) : (chain.latest ?? 0n)),
     },
@@ -133,4 +140,23 @@ test('retries once after a rate limit, whether reported as HTTP 429 or as the no
     assert.deepEqual(await findLock(bridge(), limited.rpc, search(MINUTE)), { outcome: 'found', txid: 'ee'.repeat(32) });
     assert.equal(limited.filters.length, 2, message);
   }
+});
+
+test('asks the vault again after finding nothing pending, so a lock mined between the two reads is not called absent', async () => {
+  const { rpc, calls } = fakeRpc({ tip: 1_000n, locks: [lockAt(999n, 'ff'.repeat(32), TOKEN_ID)], usedFromCall: 2, pending: 3n, latest: 3n });
+  assert.deepEqual(await findLock(bridge(), rpc, search(MINUTE)), { outcome: 'found', txid: 'ff'.repeat(32) });
+  assert.equal(calls.length, 2);
+});
+
+test('refuses a vault answer that is not one word, which is what a wrong address or a bare node gives', async () => {
+  for (const vaultAnswer of ['', '0x', 'ab'.repeat(33)]) {
+    await assert.rejects(findLock(bridge(), fakeRpc({ tip: 1_000n, vaultAnswer }).rpc, search(MINUTE)), /tokenIdUsed/);
+  }
+});
+
+test('never searches before the vault was deployed', async () => {
+  const { rpc, filters } = fakeRpc({ tip: 100_000n, used: [TOKEN_ID] });
+  const result = await findLock(bridge(90_000), rpc, search(MINUTE));
+  assert.equal(result.outcome, 'unknown');
+  assert.ok(filters.every((f) => f.fromBlock >= 90_000n), JSON.stringify(filters.map((f) => f.fromBlock.toString())));
 });

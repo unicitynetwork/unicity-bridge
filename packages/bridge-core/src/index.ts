@@ -180,6 +180,8 @@ export interface BridgeManifestBase {
   readonly coinIdHex?: string;
   readonly disabledReason?: string;
   readonly replacedVaults?: readonly string[];
+  /** The block the vault was deployed in; nothing of it is on chain before, so searches stop there. */
+  readonly deployBlock?: number;
 }
 
 // ── Wallet-side contract ────────────────────────────────────────────────────
