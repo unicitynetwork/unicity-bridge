@@ -118,9 +118,9 @@ root and produces a prove-ready `GuestInput`; `/accumulator` reports SYNCED.
   single-worker floor *within* one proof; never concurrent proofs):
 
   ```bash
+  cargo build --release -p bridge-return-host --features sp1  # proves in a child process
   SP1_PROVER=cpu SP1_CIRCUIT_MODE=release \
   SP1_WORKER_NUM_CORE_WORKERS=<cores> ... \
-  cargo build --release -p bridge-return-host --features sp1  # proves in a child process
   cargo run --release -p bridge-return-service
   ```
 
