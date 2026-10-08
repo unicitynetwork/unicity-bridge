@@ -66,6 +66,7 @@ async fn main() {
         idle_wait_secs = config.idle_wait.as_secs(),
         state_dir = ?config.state_dir,
         vault = config.vault.as_deref().unwrap_or("(none)"),
+        fee = %config.fee,
         "service configuration",
     );
     let prover = Prover::new(config.clone());

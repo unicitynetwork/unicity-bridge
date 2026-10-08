@@ -113,7 +113,7 @@ service submits `fulfillBatch`).
 ```
  [Sphere UI]                                  [Part-B service]            [Tron / Nile vault]
      │  1. user picks "Bridge out", a bridged USDT balance, enters Tron dest + amount
-     │     (+ deadline, fee — §A2.4; fee=0 while subsidized)
+     │     (+ the fee and deadline the service quotes at /fees — §A2.4)
      │  2. if partial: split first (existing TokenSplit flow), burn the child == amount
      │  3. createBridgeBackBurnTransfer(token, cfg, reason) → burn to BurnPredicate(H(reasonBytes)),
      │     reasonBytes in aux data; certify on the gateway (user signs)
@@ -212,7 +212,7 @@ through the browser provider factory** the app calls (`createBrowserProviders` /
   independently watching the vault's `Released{nullifier}` over Tron RPC — never
   depend solely on the service to know a return settled (trustless display).
 - `BridgeBackReason` fields the UI collects: `recipient` (Tron dest), `amount`,
-  `feeRecipient`+`feeAmount` (service's Tron address + fee; **0 while subsidized**),
+  `feeRecipient`+`feeAmount` (the account and fee the service quotes at `GET /fees`; zero when it charges nothing),
   `deadline` ("claim guaranteed by"). The service applies **best-effort inclusion
   replacement + verification caching** when it proves (§B6) — transparent to the
   wallet, which always sends the same envelope.
@@ -432,12 +432,16 @@ cycle/quorum-count saving like the existing §11 dedup.
   high-RAM box); aggregator can't anchor ⇒ certified + seal-cache; TronGrid limits ⇒
   backoff + multiple endpoints.
 
-## B8. Fees & incentives (deferred; hooks in place)
+## B8. Fees & incentives (flat fee in place; schedule deferred)
 
-Self-run and **subsidized** initially: `feeAmount = 0`, operator funds Tron gas (or
-**stakes TRX** → ~$0 recurring, refundable; §05). Mechanism already in-protocol:
-`BridgeBackReason.{feeRecipient, feeAmount}`, vault enforces `feeAmount ≤ amount`
-and pays the fee only if the deadline holds. Later: a `GET /fees` schedule covering
+The mechanism is in-protocol: `BridgeBackReason.{feeRecipient, feeAmount}`, the
+vault enforces `feeAmount ≤ amount` and pays the fee only if the deadline holds.
+The service charges a flat fee in the bridged asset, off by default:
+`BRIDGE_RETURN_FEE_AMOUNT` and `BRIDGE_RETURN_FEE_RECIPIENT` set it, `GET /fees`
+quotes it with a deadline, and intake refuses a burn that pays less than
+`BRIDGE_RETURN_FEE_FLOOR` (`docs/OPERATIONS.md` §5 and §11). Unset, the service
+is subsidized: `feeAmount = 0` and the operator funds the gas (or **stakes TRX**
+→ ~$0 recurring, refundable; §05). Later: a schedule covering
 `(267,779/N + 19,347)·Pe·Ptrx + proof_$/N + margin`; permissionless competition +
 self-settle keep it honest.
 

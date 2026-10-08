@@ -3,6 +3,7 @@ use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
+    fee::FeePolicy,
     policy::{BatchPolicy, Limits},
     retry::RetryPolicy,
 };
@@ -25,6 +26,7 @@ pub struct ServiceConfig {
     pub command_timeout: Duration,
     pub state_dir: Option<PathBuf>,
     pub retry: RetryPolicy,
+    pub fee: FeePolicy,
     pub elf_path: Option<PathBuf>,
     pub proof_dir: PathBuf,
     pub prove_mode: ProveMode,
@@ -53,6 +55,7 @@ impl Default for ServiceConfig {
             command_timeout: Duration::from_secs(600),
             state_dir: None,
             retry: RetryPolicy::default(),
+            fee: FeePolicy::default(),
             elf_path: None,
             proof_dir: PathBuf::from("target/bridge-return-service/proofs"),
             prove_mode: ProveMode::PrecheckOnly,
@@ -104,6 +107,23 @@ impl ServiceConfig {
         if let Some(rebases) = env_parsed("BRIDGE_RETURN_MAX_REBASES")? {
             cfg.retry.max_rebases = rebases;
         }
+        if let Some(amount) = env_parsed("BRIDGE_RETURN_FEE_AMOUNT")? {
+            cfg.fee.amount = amount;
+        }
+        cfg.fee.floor = env_parsed("BRIDGE_RETURN_FEE_FLOOR")?.unwrap_or(0);
+        if let Some(v) = env_opt("BRIDGE_RETURN_FEE_RECIPIENT") {
+            cfg.fee.recipient =
+                address(&v).ok_or(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"))?;
+        }
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_FEE_WINDOW_SECS")? {
+            cfg.fee.settle_window = Duration::from_secs(secs);
+        }
+        if !cfg.fee.is_collectable() {
+            return Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"));
+        }
+        if !cfg.fee.floor_within_amount() {
+            return Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_FLOOR"));
+        }
         if let Some(v) = env_opt("BRIDGE_CONFIG_HASH") {
             cfg.config_hash = Some(
                 crate::store::parse_hex32(&v).ok_or(ConfigError::Invalid("BRIDGE_CONFIG_HASH"))?,
@@ -150,9 +170,79 @@ fn env_parsed<T: std::str::FromStr>(key: &'static str) -> Result<Option<T>, Conf
         .transpose()
 }
 
+fn address(text: &str) -> Option<[u8; 20]> {
+    hex::decode(text.strip_prefix("0x").unwrap_or(text))
+        .ok()?
+        .try_into()
+        .ok()
+}
+
 fn positive(value: usize, key: &'static str) -> Result<usize, ConfigError> {
     if value == 0 {
         return Err(ConfigError::Invalid(key));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FEE_VARS: [&str; 4] = [
+        "BRIDGE_RETURN_FEE_AMOUNT",
+        "BRIDGE_RETURN_FEE_FLOOR",
+        "BRIDGE_RETURN_FEE_RECIPIENT",
+        "BRIDGE_RETURN_FEE_WINDOW_SECS",
+    ];
+
+    fn with_fee_env(vars: &[(&str, &str)]) -> Result<FeePolicy, ConfigError> {
+        for key in FEE_VARS {
+            env::remove_var(key);
+        }
+        for (key, value) in vars {
+            env::set_var(key, value);
+        }
+        let result = ServiceConfig::from_env().map(|cfg| cfg.fee);
+        for key in FEE_VARS {
+            env::remove_var(key);
+        }
+        result
+    }
+
+    // One test, since the process environment is shared between test threads.
+    #[test]
+    fn the_fee_settings_are_read_with_a_floor_of_zero_unless_set() {
+        let recipient = (
+            "BRIDGE_RETURN_FEE_RECIPIENT",
+            "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        );
+
+        let quoted = with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000"), recipient]).unwrap();
+        assert_eq!((quoted.amount, quoted.floor), (50_000, 0));
+        assert!(!quoted.is_enforced());
+
+        let enforced = with_fee_env(&[
+            ("BRIDGE_RETURN_FEE_AMOUNT", "50000"),
+            ("BRIDGE_RETURN_FEE_FLOOR", "40000"),
+            recipient,
+        ])
+        .unwrap();
+        assert_eq!((enforced.amount, enforced.floor), (50_000, 40_000));
+
+        let window = with_fee_env(&[("BRIDGE_RETURN_FEE_WINDOW_SECS", "7200")]).unwrap();
+        assert_eq!(window.settle_window, Duration::from_secs(7200));
+
+        assert!(matches!(
+            with_fee_env(&[("BRIDGE_RETURN_FEE_AMOUNT", "50000")]),
+            Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_RECIPIENT"))
+        ));
+        assert!(matches!(
+            with_fee_env(&[
+                ("BRIDGE_RETURN_FEE_AMOUNT", "50000"),
+                ("BRIDGE_RETURN_FEE_FLOOR", "50001"),
+                recipient
+            ]),
+            Err(ConfigError::Invalid("BRIDGE_RETURN_FEE_FLOOR"))
+        ));
+    }
 }
