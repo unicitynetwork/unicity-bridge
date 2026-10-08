@@ -103,9 +103,10 @@ Ethereum wallets on the page: those announcing themselves through EIP-6963, by n
 icon, or the legacy `window.ethereum` as "Browser wallet" when nothing announced itself: a
 wallet that only sets `window.ethereum` is reachable until some other wallet announces itself,
 which every maintained wallet does.
-`findLockTxid()` finds the transaction that locked a deposit from the vault's `Lock` events for
-the signer since the deposit started (a log read, nothing is sent), for a wallet that lost track
-of a lock it asked the user to sign. `queryBalance()` reads what an account holds of the asset,
+`findLock()` tells a wallet that lost track of a lock it asked the user to sign what the chain
+knows: the vault's `tokenIdUsed` says whether the deposit's token id is locked, the `Lock` events
+give the transaction, and the account's pending nonce says whether one is still in flight; the
+answer is found, absent or unknown with a reason (reads only, nothing is sent). `queryBalance()` reads what an account holds of the asset,
 so a deposit above it is refused before anything is signed.
 
 ## CLI

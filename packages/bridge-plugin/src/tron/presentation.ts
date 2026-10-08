@@ -15,7 +15,7 @@ export function explorerTxUrl(chainId: number, txid: string): string {
   return `${tronscan(chainId)}/transaction/${txid}`;
 }
 
-/** Tronscan address URL for a Tron chainId (Nile testnet vs mainnet). */
+/** Tronscan address URL for a Tron chainId (Nile testnet vs mainnet); takes the base58 `T…` form Tronscan expects. */
 export function explorerAddressUrl(chainId: number, address: string): string {
   return `${tronscan(chainId)}/address/${address}`;
 }

@@ -30,6 +30,13 @@ export interface LogReader {
   getLogs(filter: LogFilter): Promise<SourceLogEntry[]>;
 }
 
+export type BlockTag = 'latest' | 'pending';
+
+export interface NonceReader {
+  /** The account's transaction count at the tag; `pending` above `latest` means one is in flight. */
+  getTransactionCount(addressHex: string, tag: BlockTag): Promise<bigint>;
+}
+
 export interface ConstantCallInput {
   readonly ownerHex: string;
   readonly contractHex: string;

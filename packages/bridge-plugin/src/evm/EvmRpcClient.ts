@@ -1,5 +1,16 @@
 import { selectorHex } from '../contract-call.js';
-import type { ConstantCallInput, ConstantCaller, LogFilter, LogReader, SourceChainRpc, SourceLog, SourceLogEntry, SourceTxInfo } from '../source-chain.js';
+import type {
+  BlockTag,
+  ConstantCallInput,
+  ConstantCaller,
+  LogFilter,
+  LogReader,
+  NonceReader,
+  SourceChainRpc,
+  SourceLog,
+  SourceLogEntry,
+  SourceTxInfo,
+} from '../source-chain.js';
 
 type FetchLike = (
   input: string,
@@ -45,7 +56,7 @@ function shapeLog(l: RpcLog): SourceLog {
   };
 }
 
-export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller, LogReader {
+export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller, LogReader, NonceReader {
   private readonly rpcUrl: string;
   private readonly fetchFn: FetchLike;
 
@@ -69,7 +80,7 @@ export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller, LogRead
     }
     const body = (await res.json()) as { result?: T; error?: { code: number; message: string; data?: unknown } };
     if (body.error) {
-      throw new Error(`Ethereum RPC ${method} failed: ${body.error.message}`);
+      throw new Error(`Ethereum RPC ${method} failed: [${body.error.code}] ${body.error.message}`);
     }
     return body.result as T;
   }
@@ -96,6 +107,10 @@ export class EvmJsonRpcClient implements SourceChainRpc, ConstantCaller, LogRead
 
   public async getNowBlockNumber(): Promise<bigint> {
     return BigInt(await this.call<string>('eth_blockNumber', []));
+  }
+
+  public async getTransactionCount(addressHex: string, tag: BlockTag): Promise<bigint> {
+    return BigInt(await this.call<string>('eth_getTransactionCount', [`0x${strip0x(addressHex)}`, tag]));
   }
 
   public async constantCall(input: ConstantCallInput): Promise<string> {

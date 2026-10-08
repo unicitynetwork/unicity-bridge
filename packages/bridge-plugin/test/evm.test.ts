@@ -97,7 +97,7 @@ test('the JSON-RPC client reads logs by address, topics and block range, shaped 
   });
 });
 
-test('a JSON-RPC error and an unknown receipt surface as expected', async () => {
+test('a JSON-RPC error and an unknown receipt surface as expected, the error with its code', async () => {
   const rpc = new EvmJsonRpcClient({
     rpcUrl: 'http://node',
     fetchFn: async (_url, init) => {
@@ -107,7 +107,20 @@ test('a JSON-RPC error and an unknown receipt surface as expected', async () => 
     },
   });
   assert.equal(await rpc.getTransactionInfo('00'.repeat(32)), null);
-  await assert.rejects(rpc.getNowBlockNumber(), /execution reverted/);
+  await assert.rejects(rpc.getNowBlockNumber(), /\[-32000\] execution reverted/);
+});
+
+test('the JSON-RPC client reads an account transaction count at a block tag', async () => {
+  const calls: { method: string; params: unknown[] }[] = [];
+  const rpc = new EvmJsonRpcClient({
+    rpcUrl: 'http://node',
+    fetchFn: async (_url, init) => {
+      calls.push(JSON.parse(init!.body));
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x2a' }) };
+    },
+  });
+  assert.equal(await rpc.getTransactionCount('aa'.repeat(20), 'pending'), 42n);
+  assert.deepEqual(calls[0], { jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: ['0x' + 'aa'.repeat(20), 'pending'] });
 });
 
 test('calldata encoding: selector plus static words', () => {
