@@ -67,7 +67,7 @@ impl Prover {
             .clone()
             .ok_or(ProverError::MissingSp1Elf)?;
         let vault = self.vault_guest_key()?;
-        let vkey = program_vkey(elf).await?;
+        let vkey = self.program_vkey(&elf).await?;
         match vault {
             None => Ok(GuestCheck::Unpinned { vkey }),
             Some(key) => {
@@ -75,6 +75,38 @@ impl Prover {
                 Ok(GuestCheck::Admitted { vkey })
             }
         }
+    }
+
+    /// The guest's verifying key, from the host binary in a child process, so the service never
+    /// loads SP1 itself: what the setup leaves resident goes with the child.
+    async fn program_vkey(&self, elf: &Path) -> Result<String, ProverError> {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} \"$@\"", self.config.vkey_cmd))
+            .arg("sh")
+            .arg(elf)
+            .stdin(Stdio::null())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .output();
+        let output = tokio::time::timeout(self.config.command_timeout, output)
+            .await
+            .map_err(|_| ProverError::Command("the guest key command timed out".to_string()))?
+            .map_err(|err| {
+                ProverError::Command(format!("could not start the guest key command: {err}"))
+            })?;
+        if !output.status.success() {
+            return Err(ProverError::Command(format!(
+                "the guest key command exited with {}; see the log above for its output",
+                output.status
+            )));
+        }
+        let answer: VkeyAnswer = serde_json::from_slice(&output.stdout).map_err(|err| {
+            ProverError::Command(format!(
+                "the guest key command did not answer with its key: {err}"
+            ))
+        })?;
+        Ok(answer.vkey)
     }
 
     fn vault_guest_key(&self) -> Result<Option<VaultGuestKey>, GuestKeyError> {
@@ -206,6 +238,11 @@ impl ProofBundle {
 }
 
 #[derive(serde::Deserialize)]
+struct VkeyAnswer {
+    vkey: String,
+}
+
+#[derive(serde::Deserialize)]
 struct ProofInfoFile {
     proof_mode: String,
     vkey: Option<String>,
@@ -243,28 +280,12 @@ pub enum ProverError {
     Join(String),
     #[error("{0}")]
     Command(String),
-    #[error("the guest key check needs bridge-return-service built with --features sp1")]
-    Sp1FeatureDisabled,
     #[error("SP1_GUEST_ELF must be set for sp1_groth16 mode")]
     MissingSp1Elf,
     #[error("{0}")]
     Guest(#[from] GuestKeyError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-}
-
-#[cfg(feature = "sp1")]
-async fn program_vkey(elf: std::path::PathBuf) -> Result<String, ProverError> {
-    Ok(
-        tokio::task::spawn_blocking(move || bridge_return_host::sp1::program_vkey(&elf))
-            .await
-            .map_err(|err| ProverError::Join(err.to_string()))??,
-    )
-}
-
-#[cfg(not(feature = "sp1"))]
-async fn program_vkey(_elf: std::path::PathBuf) -> Result<String, ProverError> {
-    Err(ProverError::Sp1FeatureDisabled)
 }
 
 #[cfg(test)]
@@ -462,67 +483,75 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "sp1"))]
-    #[tokio::test]
-    async fn a_build_without_sp1_cannot_derive_the_guest_key_and_says_so() {
-        let refused = proving(Some("guest"), Some(deployment("sepolia/sepolia-usdc.json")))
-            .check_guest()
-            .await
-            .unwrap_err();
-
-        assert!(matches!(refused, ProverError::Sp1FeatureDisabled));
+    /// A prover whose guest-key command is a shell snippet given the ELF path.
+    fn checking_with(vkey_cmd: &str, deployment: Option<PathBuf>) -> Prover {
+        Prover::new(ServiceConfig {
+            prove_mode: ProveMode::Sp1Groth16,
+            elf_path: Some(PathBuf::from("guest.elf")),
+            deployment_config_path: deployment,
+            vkey_cmd: vkey_cmd.to_string(),
+            ..ServiceConfig::default()
+        })
     }
 
-    #[cfg(feature = "sp1")]
-    mod with_sp1 {
-        use super::*;
+    const VAULT_KEY: &str = "0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5";
 
-        const PINNED_GUEST: &str = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../guest-elf/bridge-return-sp1-guest"
-        );
-        const VAULT_KEY: &str =
-            "0x0039a5424014e57caf45d3451053e6c014547837ae09c9eb724aa569389b90d5";
+    fn says(vkey: &str) -> String {
+        format!(
+            r#"f() {{ [ "$1" = guest.elf ] || exit 9; printf '{{"vkey":"%s","circuit_version":"v6.1.0"}}' "{vkey}"; }}; f"#
+        )
+    }
 
-        #[tokio::test]
-        async fn the_pinned_guest_is_the_program_the_sepolia_and_nile_v2_vaults_hold() {
-            for record in ["sepolia/sepolia-usdc.json", "nile/nile-usdt-v2.json"] {
-                let check = proving(Some(PINNED_GUEST), Some(deployment(record)))
-                    .check_guest()
-                    .await;
+    #[tokio::test]
+    async fn the_guest_key_comes_from_the_host_command_and_is_admitted_when_the_vault_holds_it() {
+        let check = checking_with(
+            &says(VAULT_KEY),
+            Some(deployment("sepolia/sepolia-usdc.json")),
+        )
+        .check_guest()
+        .await;
 
-                assert_eq!(
-                    check.unwrap(),
-                    GuestCheck::Admitted {
-                        vkey: VAULT_KEY.to_string()
-                    }
-                );
+        assert_eq!(
+            check.unwrap(),
+            GuestCheck::Admitted {
+                vkey: VAULT_KEY.to_string()
             }
-        }
+        );
+    }
 
-        #[tokio::test]
-        async fn the_pinned_guest_is_refused_for_a_vault_that_holds_another_key() {
-            let refused = proving(Some(PINNED_GUEST), Some(deployment("nile/nile-usdt.json")))
-                .check_guest()
-                .await
-                .unwrap_err();
+    #[tokio::test]
+    async fn a_guest_whose_key_the_vault_does_not_hold_is_refused() {
+        let refused = checking_with(
+            &says(&format!("0x{}", "11".repeat(32))),
+            Some(deployment("sepolia/sepolia-usdc.json")),
+        )
+        .check_guest()
+        .await
+        .unwrap_err();
 
-            assert!(matches!(
-                refused,
-                ProverError::Guest(GuestKeyError::Mismatch { .. })
-            ));
-        }
+        assert!(matches!(
+            refused,
+            ProverError::Guest(GuestKeyError::Mismatch { .. })
+        ));
+    }
 
-        #[tokio::test]
-        async fn without_a_deployment_record_the_guest_key_is_reported_unpinned() {
-            let check = proving(Some(PINNED_GUEST), None).check_guest().await;
+    #[tokio::test]
+    async fn without_a_deployment_record_the_guest_key_is_reported_unpinned() {
+        let check = checking_with(&says(VAULT_KEY), None).check_guest().await;
 
-            assert_eq!(
-                check.unwrap(),
-                GuestCheck::Unpinned {
-                    vkey: VAULT_KEY.to_string()
-                }
-            );
+        assert_eq!(
+            check.unwrap(),
+            GuestCheck::Unpinned {
+                vkey: VAULT_KEY.to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_guest_key_command_that_fails_or_answers_nonsense_refuses_the_start() {
+        for cmd in ["f() { exit 1; }; f", "f() { echo not json; }; f"] {
+            let refused = checking_with(cmd, None).check_guest().await.unwrap_err();
+            assert!(matches!(refused, ProverError::Command(_)), "{refused}");
         }
     }
 }

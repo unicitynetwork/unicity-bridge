@@ -68,7 +68,9 @@ cargo run -p bridge-return-service
 Reuses the proven CPU-only path (see [`../../../docs/dev-plan/03-status.md`](../../../docs/dev-plan/03-status.md)
 and the `sp1-real-proving` notes). Prerequisites:
 
-- **Rust** + the `sp1` feature: `cargo build -p bridge-return-service --features sp1 --release`.
+- **Rust**: `cargo build -p bridge-return-service --release`, and the host built with the
+  `sp1` feature, since the service runs `bridge-return-host` for the guest key and every proof:
+  `cargo build -p bridge-return-host --features sp1 --release`.
 - **Go** (for `native-gnark` — gnark runs locally, no Docker).
 - **SP1 toolchain + cached circuit artifacts**: the v6.1.0 circuit + the ~5.86 GB
   `groth16_pk.bin` on disk (downloaded once to `~/.sp1`). `SP1_PROVER=cpu`,
@@ -84,7 +86,7 @@ and the `sp1-real-proving` notes). Prerequisites:
 SP1_PROVER=cpu SP1_CIRCUIT_MODE=release \
 SP1_GUEST_ELF=/path/to/bridge-return-sp1-guest \
 BRIDGE_RETURN_PROVE_MODE=sp1_groth16 \
-cargo run -p bridge-return-service --features sp1 --release
+cargo run -p bridge-return-service --release
 ```
 
 ---
@@ -102,6 +104,7 @@ cargo run -p bridge-return-service --features sp1 --release
 | `SP1_GUEST_ELF` | — | Guest ELF path (required for `sp1_groth16`). |
 | `BRIDGE_RETURN_PROOF_DIR` | `target/bridge-return-service/proofs` | Where proof bundles are written. |
 | `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. |
+| `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` | The command that prints the guest's verifying key as JSON at start, given the ELF path; the service itself loads no SP1 code. |
 | `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt; set it well above the slowest proof, or `0` for no limit. |
 | `BRIDGE_RETURN_STATE_DIR` | — (in memory) | Journal directory. Unset, every restart forgets the queue. |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE` | `8` | Most burns in one proof. |

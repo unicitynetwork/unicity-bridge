@@ -32,6 +32,8 @@ pub struct ServiceConfig {
     pub prove_mode: ProveMode,
     /// The command that proves one batch in a child process, given the ELF, wire, proof and info paths.
     pub prove_cmd: String,
+    /// The command that prints the guest's verifying key as JSON, given the ELF path.
+    pub vkey_cmd: String,
     /// The most a proof may take before it is killed; zero means no limit.
     pub prove_timeout: Duration,
 }
@@ -64,6 +66,7 @@ impl Default for ServiceConfig {
             proof_dir: PathBuf::from("target/bridge-return-service/proofs"),
             prove_mode: ProveMode::PrecheckOnly,
             prove_cmd: "bridge-return-host sp1-groth16-files".to_string(),
+            vkey_cmd: "bridge-return-host sp1-vkey".to_string(),
             prove_timeout: Duration::from_secs(7200),
         }
     }
@@ -137,6 +140,9 @@ impl ServiceConfig {
         }
         if let Some(v) = env_opt("BRIDGE_RETURN_PROVE_CMD") {
             cfg.prove_cmd = v;
+        }
+        if let Some(v) = env_opt("BRIDGE_RETURN_VKEY_CMD") {
+            cfg.vkey_cmd = v;
         }
         if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? {
             cfg.prove_timeout = Duration::from_secs(secs);
@@ -246,6 +252,16 @@ mod tests {
 
         let defaults = ServiceConfig::from_env().unwrap();
         assert_eq!(defaults.prove_cmd, "bridge-return-host sp1-groth16-files");
+        assert_eq!(defaults.vkey_cmd, "bridge-return-host sp1-vkey");
+        env::set_var(
+            "BRIDGE_RETURN_VKEY_CMD",
+            "/app/bin/bridge-return-host sp1-vkey",
+        );
+        assert_eq!(
+            ServiceConfig::from_env().unwrap().vkey_cmd,
+            "/app/bin/bridge-return-host sp1-vkey"
+        );
+        env::remove_var("BRIDGE_RETURN_VKEY_CMD");
         assert_eq!(defaults.prove_timeout, Duration::from_secs(7200));
         env::set_var(
             "BRIDGE_RETURN_PROVE_CMD",

@@ -44,7 +44,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/go/pkg \
     --mount=type=cache,target=/src/prover/target \
     cargo build --release -p bridge-return-host -p bridge-return-service \
-      --features bridge-return-host/sp1,bridge-return-service/sp1 \
+      --features bridge-return-host/sp1 \
  && mkdir -p /out/bin && cp target/release/bridge-return-host target/release/bridge-return-service /out/bin/
 ARG GUEST_DEPLOYMENT=sepolia/sepolia-usdc.json
 COPY deployments/ /src/deployments/

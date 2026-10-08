@@ -44,6 +44,7 @@ export BRIDGE_RETURN_BIND BRIDGE_DEPLOYMENT_CONFIG TRUST_BASE_PATH BRIDGE_RETURN
 export BRIDGE_HOST_BIN=/app/bin/bridge-return-host
 # Each proof runs in a child process, so its memory goes back to the OS when it exits.
 export BRIDGE_RETURN_PROVE_CMD="${BRIDGE_RETURN_PROVE_CMD:-$BRIDGE_HOST_BIN sp1-groth16-files}"
+export BRIDGE_RETURN_VKEY_CMD="${BRIDGE_RETURN_VKEY_CMD:-$BRIDGE_HOST_BIN sp1-vkey}"
 : "${BRIDGE_RELAYER:=relayer-eth.js}"
 : "${BRIDGE_RETURN_SUBMIT_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} settle --stdin}"
 : "${BRIDGE_RETURN_EVENTS_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} events}"
