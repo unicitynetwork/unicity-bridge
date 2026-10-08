@@ -36,11 +36,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ADD https://go.dev/dl/go1.24.0.linux-amd64.tar.gz /tmp/go.tar.gz
 RUN tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
 ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+ENV GOPROXY=https://proxy.golang.org,https://goproxy.cn,direct
 WORKDIR /src/prover
 COPY prover/ /src/prover/
 COPY protocol/ /src/protocol/
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/root/go/pkg \
     --mount=type=cache,target=/src/prover/target \
     cargo build --release -p bridge-return-host -p bridge-return-service \
