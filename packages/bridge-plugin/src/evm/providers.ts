@@ -9,6 +9,7 @@ export interface EvmWindow {
 export interface Eip6963ProviderInfo {
   readonly uuid: string;
   readonly name: string;
+  /** An inline `data:image/…` URI by the standard; anything else is not shown. */
   readonly icon: string;
   readonly rdns: string;
 }
@@ -67,14 +68,14 @@ function announcedDetail(detail: unknown): Eip6963ProviderDetail | null {
   const { info, provider } = (detail ?? {}) as { info?: Partial<Eip6963ProviderInfo>; provider?: Partial<Eip1193Provider> };
   const named = [info?.uuid, info?.rdns, info?.name].every((v) => typeof v === 'string' && v.length > 0);
   if (!named || typeof provider?.request !== 'function') return null;
-  return { info: info as Eip6963ProviderInfo, provider: provider as Eip1193Provider };
+  return { info: { ...(info as Eip6963ProviderInfo), icon: String(info?.icon ?? '') }, provider: provider as Eip1193Provider };
 }
 
 function announcedEvmProvider({ info, provider }: Eip6963ProviderDetail): SourceWalletProvider {
   return {
     id: info.rdns,
     name: info.name,
-    icon: info.icon,
+    icon: info.icon.startsWith('data:image/') ? info.icon : undefined,
     isAvailable: () => true,
     create: (chainId) => new InjectedEvmSigner(provider, chainId),
   };

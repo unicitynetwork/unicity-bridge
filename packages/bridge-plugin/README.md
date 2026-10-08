@@ -100,7 +100,9 @@ RPC clients for both families are exported from the package root
 over any EIP-1193 provider, `TronLinkSigner`), the adapter signers and the explorer
 presentation live under `@unicitylabs/bridge-plugin/wallet`. `evmWallets()` lists the
 Ethereum wallets on the page: those announcing themselves through EIP-6963, by name and
-icon, or the legacy `window.ethereum` as "Browser wallet" when nothing announced itself.
+icon, or the legacy `window.ethereum` as "Browser wallet" when nothing announced itself: a
+wallet that only sets `window.ethereum` is reachable until some other wallet announces itself,
+which every maintained wallet does.
 `findLockTxid()` finds the transaction that locked a deposit from the vault's `Lock` events for
 the signer since the deposit started (a log read, nothing is sent), for a wallet that lost track
 of a lock it asked the user to sign. `queryBalance()` reads what an account holds of the asset,

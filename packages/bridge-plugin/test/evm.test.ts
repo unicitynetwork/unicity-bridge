@@ -255,6 +255,20 @@ test('an announcement without a usable provider, name or rdns is ignored', () =>
   assert.deepEqual(wallets.list().map((w) => w.id), ['injected-evm']);
 });
 
+test('an icon is kept only when it is an inline data image, as the standard requires', () => {
+  const win = fakeWindow();
+  const wallets = evmWallets(win);
+  const { provider } = fakeProvider('0x1');
+  announce(win, { ...walletInfo('io.inline'), icon: 'data:image/svg+xml;base64,PHN2Zy8+' }, provider);
+  announce(win, { ...walletInfo('io.remote'), icon: 'https://evil.example/icon.svg' }, provider);
+  announce(win, { ...walletInfo('io.none'), icon: '' }, provider);
+  assert.deepEqual(wallets.list().map((w) => [w.id, w.icon]), [
+    ['io.inline', 'data:image/svg+xml;base64,PHN2Zy8+'],
+    ['io.remote', undefined],
+    ['io.none', undefined],
+  ]);
+});
+
 test('where nothing can announce itself, as under node, only the browser wallet is considered', () => {
   const wallets = evmWallets({} as never);
   assert.deepEqual(wallets.list().map((w) => [w.id, w.isAvailable()]), [['injected-evm', false]]);
