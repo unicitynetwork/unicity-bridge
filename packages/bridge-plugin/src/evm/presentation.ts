@@ -16,6 +16,11 @@ export function evmExplorerTxUrl(chainId: number, txid: string): string {
   return `${base}/tx/${with0x(txid)}`;
 }
 
+export function evmExplorerAddressUrl(chainId: number, address: string): string {
+  const base = EXPLORERS[chainId] ?? 'https://blockscan.com';
+  return `${base}/address/${with0x(address)}`;
+}
+
 export function isValidEvmAddress(addr: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(addr.trim());
 }
@@ -23,6 +28,7 @@ export function isValidEvmAddress(addr: string): boolean {
 export function evmPresentation(chainId: number): BridgePresentation {
   return {
     explorerTxUrl: (txid) => evmExplorerTxUrl(chainId, txid),
+    explorerAddressUrl: (address) => evmExplorerAddressUrl(chainId, address),
     validateAddress: (addr) => isValidEvmAddress(addr),
   };
 }

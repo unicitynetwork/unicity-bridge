@@ -77,7 +77,27 @@ test('the JSON-RPC client shapes a receipt, the tip and a constant call', async 
   assert.equal(call.data, '0x' + selectorHex('allowance(address,address)') + '00'.repeat(64));
 });
 
-test('a JSON-RPC error and an unknown receipt surface as expected', async () => {
+test('the JSON-RPC client reads logs by address, topics and block range, shaped like receipt logs', async () => {
+  const calls: { method: string; params: unknown[] }[] = [];
+  const fetchFn = async (_url: string, init?: { body: string }) => {
+    const req = JSON.parse(init!.body);
+    calls.push(req);
+    const result = [{ address: '0x' + VAULT.toUpperCase(), topics: ['0x' + LOCK_EVENT_TOPIC0], data: '0xAB', blockNumber: '0xb3', transactionHash: '0x' + 'CD'.repeat(32) }];
+    return { ok: true, status: 200, json: async () => ({ jsonrpc: '2.0', id: 1, result }) };
+  };
+  const rpc = new EvmJsonRpcClient({ rpcUrl: 'http://node', fetchFn });
+  const logs = await rpc.getLogs({ address: VAULT, topics: [LOCK_EVENT_TOPIC0, null, 'aa'.repeat(20).padStart(64, '0')], fromBlock: 100n, toBlock: 255n });
+  assert.deepEqual(logs, [{ address: VAULT, topics: [LOCK_EVENT_TOPIC0], data: 'ab', blockNumber: 179n, transactionHash: 'cd'.repeat(32) }]);
+  assert.equal(calls[0].method, 'eth_getLogs');
+  assert.deepEqual(calls[0].params[0], {
+    address: '0x' + VAULT,
+    topics: ['0x' + LOCK_EVENT_TOPIC0, null, '0x' + 'aa'.repeat(20).padStart(64, '0')],
+    fromBlock: '0x64',
+    toBlock: '0xff',
+  });
+});
+
+test('a JSON-RPC error and an unknown receipt surface as expected, the error with its code', async () => {
   const rpc = new EvmJsonRpcClient({
     rpcUrl: 'http://node',
     fetchFn: async (_url, init) => {
@@ -87,7 +107,20 @@ test('a JSON-RPC error and an unknown receipt surface as expected', async () => 
     },
   });
   assert.equal(await rpc.getTransactionInfo('00'.repeat(32)), null);
-  await assert.rejects(rpc.getNowBlockNumber(), /execution reverted/);
+  await assert.rejects(rpc.getNowBlockNumber(), /\[-32000\] execution reverted/);
+});
+
+test('the JSON-RPC client reads an account transaction count at a block tag', async () => {
+  const calls: { method: string; params: unknown[] }[] = [];
+  const rpc = new EvmJsonRpcClient({
+    rpcUrl: 'http://node',
+    fetchFn: async (_url, init) => {
+      calls.push(JSON.parse(init!.body));
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x2a' }) };
+    },
+  });
+  assert.equal(await rpc.getTransactionCount('aa'.repeat(20), 'pending'), 42n);
+  assert.deepEqual(calls[0], { jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: ['0x' + 'aa'.repeat(20), 'pending'] });
 });
 
 test('calldata encoding: selector plus static words', () => {
@@ -235,6 +268,20 @@ test('an announcement without a usable provider, name or rdns is ignored', () =>
   assert.deepEqual(wallets.list().map((w) => w.id), ['injected-evm']);
 });
 
+test('an icon is kept only when it is an inline data image, as the standard requires', () => {
+  const win = fakeWindow();
+  const wallets = evmWallets(win);
+  const { provider } = fakeProvider('0x1');
+  announce(win, { ...walletInfo('io.inline'), icon: 'data:image/svg+xml;base64,PHN2Zy8+' }, provider);
+  announce(win, { ...walletInfo('io.remote'), icon: 'https://evil.example/icon.svg' }, provider);
+  announce(win, { ...walletInfo('io.none'), icon: '' }, provider);
+  assert.deepEqual(wallets.list().map((w) => [w.id, w.icon]), [
+    ['io.inline', 'data:image/svg+xml;base64,PHN2Zy8+'],
+    ['io.remote', undefined],
+    ['io.none', undefined],
+  ]);
+});
+
 test('where nothing can announce itself, as under node, only the browser wallet is considered', () => {
   const wallets = evmWallets({} as never);
   assert.deepEqual(wallets.list().map((w) => [w.id, w.isAvailable()]), [['injected-evm', false]]);
@@ -261,6 +308,8 @@ test('presentation: Etherscan links and 0x addresses', () => {
   const p = bridgePresentation(bridge);
   assert.equal(p.explorerTxUrl('ab'.repeat(32)), 'https://sepolia.etherscan.io/tx/0x' + 'ab'.repeat(32));
   assert.equal(p.explorerTxUrl('0x' + 'ab'.repeat(32)), 'https://sepolia.etherscan.io/tx/0x' + 'ab'.repeat(32));
+  assert.equal(p.explorerAddressUrl(VAULT), 'https://sepolia.etherscan.io/address/0x' + VAULT);
+  assert.equal(p.explorerAddressUrl('0x' + VAULT), 'https://sepolia.etherscan.io/address/0x' + VAULT);
   assert.equal(p.validateAddress('0x' + VAULT), true);
   assert.equal(isValidEvmAddress('T' + 'a'.repeat(33)), false);
   assert.equal(isValidEvmAddress('0x' + 'g'.repeat(40)), false);

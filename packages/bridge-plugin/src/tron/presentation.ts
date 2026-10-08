@@ -6,13 +6,18 @@ import type { BridgePresentation } from '@unicitylabs/bridge-core';
 
 import { TRON_NILE_CHAIN_ID } from './config.js';
 
+function tronscan(chainId: number): string {
+  return chainId === TRON_NILE_CHAIN_ID ? 'https://nile.tronscan.org/#' : 'https://tronscan.org/#';
+}
+
 /** Tronscan transaction URL for a Tron chainId (Nile testnet vs mainnet). */
 export function explorerTxUrl(chainId: number, txid: string): string {
-  const base =
-    chainId === TRON_NILE_CHAIN_ID
-      ? 'https://nile.tronscan.org/#/transaction/'
-      : 'https://tronscan.org/#/transaction/';
-  return base + txid;
+  return `${tronscan(chainId)}/transaction/${txid}`;
+}
+
+/** Tronscan address URL for a Tron chainId (Nile testnet vs mainnet); takes the base58 `T…` form Tronscan expects. */
+export function explorerAddressUrl(chainId: number, address: string): string {
+  return `${tronscan(chainId)}/address/${address}`;
 }
 
 /** Structural validity of a Tron base58 (`T…`) address (a bridge-out destination). */
@@ -23,6 +28,7 @@ export function isValidTronAddress(addr: string): boolean {
 export function tronPresentation(chainId: number): BridgePresentation {
   return {
     explorerTxUrl: (txid) => explorerTxUrl(chainId, txid),
+    explorerAddressUrl: (address) => explorerAddressUrl(chainId, address),
     validateAddress: (addr) => isValidTronAddress(addr),
   };
 }

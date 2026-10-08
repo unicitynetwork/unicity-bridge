@@ -24,3 +24,5 @@ export * from './token-plugin.js';
 export * from './backing.js';
 export * from './finality.js';
 export * from './payout.js';
+export * from './lock-lookup.js';
+export * from './balance.js';
