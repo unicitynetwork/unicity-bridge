@@ -83,7 +83,7 @@ function announcedEvmProvider({ info, provider }: Eip6963ProviderDetail): Source
 
 function requireEthereum(win: EvmWindow): Eip1193Provider {
   if (!win.ethereum) {
-    throw new Error('No Ethereum wallet found. Install MetaMask and reload.');
+    throw new Error('No Ethereum wallet found. Install a browser wallet and reload.');
   }
   return win.ethereum;
 }
