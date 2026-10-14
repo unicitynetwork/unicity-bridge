@@ -17,11 +17,14 @@ use bridge_return_host::{
     s2::{self, RebuiltAccumulator, SettledBatch, SettledLog},
 };
 use bridge_return_service::{
-    domain::{assembler::Rejected, burn::Burn},
+    domain::{
+        assembler::Rejected,
+        burn::{Burn, LeafToSettle},
+    },
     ports::{ChainLog, ProofBackend, Settler},
     prover::{ProofBundle, ProverError},
     sequencer::ChainSyncError,
-    store::{BatchBundle, LeafHex, ReturnRecord},
+    store::{BatchBundle, ReturnRecord},
     submitter::{SimulateError, SubmitOutcome},
 };
 
@@ -172,7 +175,7 @@ impl Settler for ScriptedSettler {
         }
     }
 
-    async fn simulate(&self, _leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
+    async fn simulate(&self, _leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {
         Ok(self.rejected.lock().unwrap().clone())
     }
 }

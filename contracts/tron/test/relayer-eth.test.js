@@ -113,3 +113,26 @@ describe("relayer-eth against the vault", () => {
     expect(rejected).to.deep.equal([]);
   });
 });
+
+describe("relayer-eth simulate checks the lock refs a leaf draws on", () => {
+  function leaf(recipient, label, lockRefs) {
+    return { nullifier: ethers.id(label), recipient: recipient.address, amount: AMOUNT.toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0", lockRefs };
+  }
+
+  it("rejects a leaf whose lock ref is not the digest the vault stored", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const lock = await lockOnce(vault, "d");
+    const fine = leaf(recipient, "n4", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]);
+    const forged = leaf(recipient, "n5", [{ nonce: "0x3e7", digest: ethers.id("no such lock") }]);
+    const { rejected } = await simulate(vault, [fine, forged]);
+    expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
+    expect(rejected[0].reason).to.include("lock");
+  });
+
+  it("checks lock refs for a pull-payment vault too", async () => {
+    const { recipient, vault } = await deployBridge(true);
+    const forged = leaf(recipient, "n6", [{ nonce: "0x0", digest: ethers.id("no such lock") }]);
+    const { rejected } = await simulate(vault, [forged]);
+    expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
+  });
+});

@@ -6,7 +6,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
+use std::sync::Arc;
+
+use bridge_return_host::{
+    fixture::{build_b1_direct_bridge_fixture, build_settlement_fixture, build_split_bridge_fixture},
+    s1::EnvelopeIntake,
+};
 use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
@@ -505,4 +510,36 @@ async fn wait_status(app: &axum::Router, id: &str, status: &str) {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("return {id} never reached {status}: {record}");
+}
+
+fn configured_for_sepolia() -> (axum::Router, ReturnStore, Arc<EnvelopeIntake>) {
+    let deployment = include_str!("../../../../deployments/sepolia/sepolia-usdc.json");
+    let trust_base = include_str!("../../../../bft-trustbase.testnet2.json");
+    let intake = Arc::new(EnvelopeIntake::from_json(deployment, trust_base, 1_330_002).unwrap());
+    let store = memory_store();
+    let app = router(AppState {
+        config: ServiceConfig {
+            config_hash: Some(intake.config_hash()),
+            ..ServiceConfig::default()
+        },
+        store: store.clone(),
+        clock: Clock::default(),
+        intake: Some(intake.clone()),
+        chain_events: ChainEvents::none(),
+    });
+    (app, store, intake)
+}
+
+#[tokio::test]
+async fn a_configured_service_refuses_a_raw_witness_even_one_built_for_its_deployment() {
+    let (app, store, intake) = configured_for_sepolia();
+    let self_certified =
+        build_settlement_fixture(intake.config(), [0x42; 20], 1_000_000, 999_999).input;
+    assert_eq!(self_certified.public_values.config_hash, intake.config_hash());
+    assert_ne!(self_certified.public_values.trust_base_hash, intake.trust_base_hash());
+    let (status, error) = submit(&app, self_certified).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "raw_witness_refused");
+    assert_eq!(error["error"]["recoverable"], false);
+    assert_eq!(store.health().queue_depth, 0);
 }

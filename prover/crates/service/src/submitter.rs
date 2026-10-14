@@ -4,8 +4,8 @@ use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    domain::assembler::Rejected,
-    store::{BatchBundle, LeafHex},
+    domain::{assembler::Rejected, burn::LeafToSettle},
+    store::BatchBundle,
 };
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ impl Submitter {
         }
     }
 
-    pub async fn simulate(&self, leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
+    pub async fn simulate(&self, leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {
         match &self.simulate_cmd {
             None => Ok(Vec::new()),
             Some(cmd) => run_simulate_command(cmd, leaves, self.timeout).await,
@@ -119,7 +119,7 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) 
 
 async fn run_simulate_command(
     cmd: &str,
-    leaves: &[LeafHex],
+    leaves: &[LeafToSettle],
     timeout: Duration,
 ) -> Result<Vec<Rejected>, SimulateError> {
     let payload = serde_json::json!({ "leaves": leaves }).to_string();
@@ -175,6 +175,7 @@ fn snippet(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{LeafHex, LockRefHex};
 
     fn bundle() -> BatchBundle {
         BatchBundle {
@@ -291,5 +292,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SimulateError::Decode(_)));
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_hands_each_leaf_its_lock_refs() {
+        let leaf = LeafToSettle {
+            leaf: LeafHex {
+                nullifier: "0x01".to_string(),
+                recipient: "0xaa".to_string(),
+                amount: "0x01".to_string(),
+                fee_recipient: "0x00".to_string(),
+                fee_amount: "0x00".to_string(),
+                deadline: "0x00".to_string(),
+            },
+            lock_refs: vec![LockRefHex {
+                nonce: "0x7".to_string(),
+                digest: "0xab".to_string(),
+            }],
+        };
+        let rejected = simulator(
+            r#"grep -qF '"nonce":"0x7"' && echo '{"rejected":[]}' || echo '{"rejected":[{"nullifier":"0x01","reason":"lock refs missing from the payload"}]}'"#,
+        )
+        .simulate(&[leaf])
+        .await
+        .unwrap();
+        assert_eq!(rejected, Vec::new());
     }
 }

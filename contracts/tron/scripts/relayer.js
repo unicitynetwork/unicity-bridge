@@ -307,6 +307,17 @@ function toTronHex(tw, address) {
   return hex.length === 40 ? "41" + hex : hex;
 }
 
+async function unknownLock(vault, lockRefs) {
+  for (const ref of lockRefs) {
+    const nonce = BigInt(ref.nonce);
+    const stored = String(await vault.lockDigest(nonce.toString()).call());
+    if (stored.toLowerCase().replace(/^0x/, "") !== ref.digest.toLowerCase().replace(/^0x/, "")) {
+      return `lock ${nonce} digest ${ref.digest} is not the vault's ${stored}`;
+    }
+  }
+  return null;
+}
+
 async function simulateFromStdin() {
   const payload = JSON.parse(await readStdin());
   const env = loadEnv();
@@ -320,8 +331,13 @@ async function simulateFromStdin() {
     )
   ).abi;
   const vault = tw.contract(abi, vaultHex);
+  const rejected = [];
+  for (const leaf of payload.leaves || []) {
+    const reason = await unknownLock(vault, leaf.lockRefs || []);
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason });
+  }
   if (await vault.PULL_PAYMENTS().call()) {
-    process.stdout.write(JSON.stringify({ rejected: [] }));
+    process.stdout.write(JSON.stringify({ rejected }));
     return;
   }
   const assetHex = toTronHex(tw, await vault.ASSET().call());
@@ -347,8 +363,9 @@ async function simulateFromStdin() {
     return revertReason({ contractResult: j.constant_result, resMessage: j.result && j.result.message });
   }
 
-  const rejected = [];
+  const refused = new Set(rejected.map((r) => r.nullifier));
   for (const leaf of payload.leaves || []) {
+    if (refused.has(leaf.nullifier)) continue;
     const fee = now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
     const principal = BigInt(leaf.amount) - fee;
     let reason = principal > 0n ? await transferReverts(leaf.recipient, principal) : null;

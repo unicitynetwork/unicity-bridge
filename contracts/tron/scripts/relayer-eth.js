@@ -108,12 +108,18 @@ async function settle(vault, bundle, confirmations = 1) {
 }
 
 async function simulate(vault, leaves) {
-  if (await vault.PULL_PAYMENTS()) return { rejected: [] };
+  const rejected = [];
+  for (const l of leaves) {
+    const reason = await unknownLock(vault, l.lockRefs || []);
+    if (reason) rejected.push({ nullifier: l.nullifier, reason });
+  }
+  if (await vault.PULL_PAYMENTS()) return { rejected };
   const provider = vault.runner.provider ?? vault.runner;
   const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
   const vaultAddress = await vault.getAddress();
-  const rejected = [];
+  const refused = new Set(rejected.map((r) => r.nullifier));
   for (const l of leaves) {
+    if (refused.has(l.nullifier)) continue;
     try {
       await asset.transfer.staticCall(l.recipient, BigInt(l.amount), { from: vaultAddress });
     } catch (e) {
@@ -121,6 +127,16 @@ async function simulate(vault, leaves) {
     }
   }
   return { rejected };
+}
+
+async function unknownLock(vault, lockRefs) {
+  for (const ref of lockRefs) {
+    const stored = await vault.lockDigest(BigInt(ref.nonce));
+    if (stored.toLowerCase() !== ref.digest.toLowerCase()) {
+      return `lock ${BigInt(ref.nonce)} digest ${ref.digest} is not the vault's ${stored}`;
+    }
+  }
+  return null;
 }
 
 function readStdin() {

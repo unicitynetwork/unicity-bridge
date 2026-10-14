@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use bridge_return_guest::GuestInput;
+use bridge_return_guest::{wire, GuestInput};
 use serde::{Deserialize, Serialize};
 
-use crate::store::{hex32, LeafHex, ReturnRecord, ReturnStatus};
+use crate::store::{hex32, LeafHex, LockRefHex, ReturnRecord, ReturnStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +42,28 @@ impl Burn {
     pub fn nonces_disjoint(&self, taken: &HashSet<u64>) -> bool {
         self.lock_nonces.iter().all(|n| !taken.contains(n))
     }
+
+    pub fn leaf_to_settle(&self) -> LeafToSettle {
+        LeafToSettle {
+            leaf: self.leaf.clone(),
+            lock_refs: self.lock_refs(),
+        }
+    }
+
+    fn lock_refs(&self) -> Vec<LockRefHex> {
+        wire::decode_guest_input(&self.wire_input)
+            .map(|input| input.sorted_lock_refs.into_iter().map(LockRefHex::from).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// What the settlement simulation checks per leaf: the payout and the source locks it draws on.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeafToSettle {
+    #[serde(flatten)]
+    pub leaf: LeafHex,
+    pub lock_refs: Vec<LockRefHex>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -170,5 +192,21 @@ mod tests {
         assert!(!member.in_batch("b2"));
         member.record.transition(ReturnStatus::Settled, 3_000);
         assert!(!member.in_batch("b1"));
+    }
+
+    #[test]
+    fn a_leaf_to_settle_carries_the_lock_refs_the_burn_draws_on() {
+        let fixture = build_b1_direct_bridge_fixture();
+        let wire = wire::encode_guest_input(&fixture.input);
+        let burn = Burn::from_input("r1".to_string(), &fixture.input, wire);
+        let to_settle = burn.leaf_to_settle();
+        assert_eq!(to_settle.leaf, burn.leaf);
+        assert_eq!(
+            to_settle.lock_refs,
+            vec![LockRefHex::from(fixture.input.sorted_lock_refs[0])]
+        );
+        let json = serde_json::to_value(&to_settle).unwrap();
+        assert_eq!(json["nullifier"], burn.leaf.nullifier);
+        assert_eq!(json["lockRefs"][0]["nonce"], "0x7");
     }
 }

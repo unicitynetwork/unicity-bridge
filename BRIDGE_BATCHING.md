@@ -84,8 +84,9 @@ again to read the nullifier, and a `ReturnRecord` is created with status
 serialized). Idempotent on nullifier via `ReturnStore::insert_or_requeue`: a
 known nullifier returns the existing record with `duplicate: true`, except a
 record that `failed` with `recoverable: true`, which is replaced and queued
-again. Tests and relayers may post a pre-assembled `wireInput` instead of the
-envelope; intake then requires exactly one return leaf (`unsupported_batch_shape`).
+again. In-process tests, whose router has no intake, post a pre-assembled `wireInput`
+instead; a configured service refuses it (`raw_witness_refused`). Intake requires
+exactly one return leaf (`unsupported_batch_shape`).
 
 ### 3.2 The queue (`queue.rs::spawn`)
 

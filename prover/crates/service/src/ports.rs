@@ -3,10 +3,10 @@ use std::future::Future;
 use bridge_return_host::s2::{RebuiltAccumulator, SettledBatch};
 
 use crate::{
-    domain::assembler::Rejected,
+    domain::{assembler::Rejected, burn::LeafToSettle},
     prover::{ProofBundle, Prover, ProverError},
     sequencer::{ChainEvents, ChainSyncError},
-    store::{BatchBundle, LeafHex},
+    store::BatchBundle,
     submitter::{SimulateError, SubmitOutcome, Submitter},
 };
 
@@ -23,7 +23,7 @@ pub trait Settler: Send + Sync + 'static {
 
     fn simulate(
         &self,
-        leaves: &[LeafHex],
+        leaves: &[LeafToSettle],
     ) -> impl Future<Output = Result<Vec<Rejected>, SimulateError>> + Send;
 }
 
@@ -45,7 +45,7 @@ impl Settler for Submitter {
         Submitter::submit(self, bundle).await
     }
 
-    async fn simulate(&self, leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
+    async fn simulate(&self, leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {
         Submitter::simulate(self, leaves).await
     }
 }

@@ -106,7 +106,8 @@ pub struct CreateReturnRequest {
     pub config_hash: Option<String>,
     #[serde(default)]
     pub anchor_hint: Option<String>,
-    /// Alternative: a pre-assembled guest wire input (fixtures / relayers).
+    /// Alternative for in-process fixtures: a pre-assembled guest wire input. Refused
+    /// once a deployment config is loaded, since nothing pins its trust base.
     #[serde(default)]
     pub wire_input: Option<String>,
 }
@@ -321,6 +322,14 @@ fn build_wire_input(state: &AppState, req: &CreateReturnRequest) -> Result<Vec<u
                     "provide {tokenCbor, reasonBytes} (wallet envelope) or wireInput".to_string(),
                 )
             })?;
+            if state.intake.is_some() {
+                return Err(ApiError::BadRequest(
+                    "raw_witness_refused",
+                    "this service admits burns through the wallet envelope {tokenCbor, reasonBytes}; \
+                     a pre-assembled wireInput is taken only by a service run without a deployment config"
+                        .to_string(),
+                ));
+            }
             decode_hex(wire)
         }
         _ => Err(ApiError::BadRequest(

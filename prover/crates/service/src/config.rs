@@ -16,7 +16,7 @@ pub struct ServiceConfig {
     pub config_hash: Option<[u8; 32]>,
     pub trust_base_path: Option<PathBuf>,
     /// Frozen deployment config JSON (e.g. `deployments/nile/nile-usdt.json`).
-    /// Required (with `trust_base_path`) to accept the wallet `{tokenCbor,reasonBytes}` envelope.
+    /// Required, with `trust_base_path`: the service admits only burns certified under this deployment's trust base.
     pub deployment_config_path: Option<PathBuf>,
     /// Source-chain lock-justification CBOR tag (bridge lock = 1330002 on every family).
     pub justification_tag: u64,

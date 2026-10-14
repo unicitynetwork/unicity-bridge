@@ -339,6 +339,16 @@ impl EnvelopeIntake {
         config_hash(&self.config)
     }
 
+    /// The deployment config this intake binds.
+    pub fn config(&self) -> BridgeConfig {
+        self.config
+    }
+
+    /// The canonical hash of the trust base every admitted burn must be certified under.
+    pub fn trust_base_hash(&self) -> [u8; 32] {
+        canonical_hash(&self.trust_base)
+    }
+
     /// Build the certified guest **wire input** from the wallet envelope
     /// (`tokenCbor` + `reasonBytes`). Fully verifies the burned token against the
     /// trust base and derives the settlement leaf (00 §4/§5).
