@@ -10,6 +10,17 @@ export const BRIDGE_LOCK_JUSTIFICATION_TAG = 1330002n;
 
 const VERSION = 1n;
 
+/** The largest amount a lock may carry: the justification and the return relation hold it as uint64. */
+export const MAX_LOCK_AMOUNT = (1n << 64n) - 1n;
+
+/** Rejects an amount the lock cannot carry, before any transaction or justification is built. */
+export function assertLockAmount(amount: bigint): void {
+  if (amount <= 0n) throw new Error(`bridge lock amount must be positive, got ${amount}`);
+  if (amount > MAX_LOCK_AMOUNT) {
+    throw new Error(`bridge lock amount ${amount} exceeds uint64, the width the mint justification carries`);
+  }
+}
+
 /** Decoded contents of a lock justification (the token's mint reason). */
 export interface BridgeLockJustificationData {
   /** Source chain id (Tron mainnet 728126428, Nile 3448148188, Sepolia 11155111). */
@@ -32,7 +43,9 @@ export interface BridgeLockJustificationData {
 export class BridgeLockJustification {
   public static readonly CBOR_TAG = BRIDGE_LOCK_JUSTIFICATION_TAG;
 
-  public constructor(public readonly data: BridgeLockJustificationData) {}
+  public constructor(public readonly data: BridgeLockJustificationData) {
+    assertLockAmount(data.amount);
+  }
 
   public toCBOR(): Uint8Array {
     const d = this.data;

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   BridgeLockJustification,
   BRIDGE_LOCK_JUSTIFICATION_TAG,
+  MAX_LOCK_AMOUNT,
 } from '../src/index.js';
 import { hexToBytes } from './helpers.js';
 
@@ -36,4 +37,20 @@ test('decoding rejects a foreign CBOR tag', () => {
 test('the tag is the allocated bridge tag', () => {
   assert.equal(BridgeLockJustification.CBOR_TAG, BRIDGE_LOCK_JUSTIFICATION_TAG);
   assert.equal(BRIDGE_LOCK_JUSTIFICATION_TAG, 1330002n);
+});
+
+test('the amount is at most uint64, the width the justification and the return relation carry', () => {
+  const make = (amount: bigint) =>
+    new BridgeLockJustification({
+      chainId: 1,
+      lockContract: new Uint8Array(20),
+      assetContract: new Uint8Array(20),
+      txid: new Uint8Array(32),
+      logIndex: 0,
+      amount,
+      nonce: 0n,
+    });
+  assert.equal(MAX_LOCK_AMOUNT, (1n << 64n) - 1n);
+  assert.equal(BridgeLockJustification.fromCBOR(make(MAX_LOCK_AMOUNT).toCBOR()).data.amount, MAX_LOCK_AMOUNT);
+  assert.throws(() => make(MAX_LOCK_AMOUNT + 1n), /uint64/);
 });

@@ -154,7 +154,8 @@ contract UnicityBridgeVault {
     // ---------------------------------------------------------------------
 
     /// @notice Lock `amount` of the asset and bind it to a future Unicity mint.
-    /// @param amount               Asset amount (token decimals). Must be > 0.
+    /// @param amount               Asset amount (token decimals). Must be > 0 and fit
+    ///                             in uint64, the width the mint justification carries.
     /// @param unicityTokenId       The Unicity TokenId (32 bytes) this funds.
     /// @param recipientCommitment  SHA256 of the recipient's encoded predicate.
     /// @return nonce               The lock id, echoed in {Lock}.
@@ -167,6 +168,7 @@ contract UnicityBridgeVault {
         bytes32 recipientCommitment
     ) external nonReentrant returns (uint256 nonce) {
         require(amount > 0, "vault: zero amount");
+        require(amount <= type(uint64).max, "vault: amount exceeds uint64");
         require(unicityTokenId != bytes32(0), "vault: zero tokenId");
         require(recipientCommitment != bytes32(0), "vault: zero recipient");
         require(!tokenIdUsed[unicityTokenId], "vault: tokenId already locked");
