@@ -179,3 +179,80 @@ contract MockFalseReturnTRC20 {
         balanceOf[to] += value;
     }
 }
+
+/// @dev A TRC20 that, once broken, returns false from transfer/transferFrom
+///      and moves nothing: the ERC-20 way of reporting a failed transfer.
+contract MockFalseNoopTRC20 {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    bool public broken;
+
+    function setBroken(bool isBroken) external {
+        broken = isBroken;
+    }
+
+    function mint(address to, uint256 value) external {
+        balanceOf[to] += value;
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        return true;
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        if (broken) return false;
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
+        if (broken) return false;
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= value, "false-noop: allowance");
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - value;
+        _transfer(from, to, value);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 value) private {
+        require(balanceOf[from] >= value, "false-noop: balance");
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
+    }
+}
+
+/// @dev A fee-on-transfer TRC20: the sender is debited `value`, the recipient
+///      is credited `value` less a 10% fee.
+contract MockFeeOnTransferTRC20 {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 value) external {
+        balanceOf[to] += value;
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        return true;
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= value, "fee-on-transfer: allowance");
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - value;
+        _transfer(from, to, value);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 value) private {
+        require(balanceOf[from] >= value, "fee-on-transfer: balance");
+        balanceOf[from] -= value;
+        balanceOf[to] += value - value / 10;
+    }
+}

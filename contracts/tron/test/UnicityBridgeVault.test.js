@@ -585,3 +585,61 @@ describe("UnicityBridgeVault — pull-payment mode (§9 batch atomicity)", () =>
     expect(await vault.spentRoot()).to.equal(ethers.ZeroHash);
   });
 });
+
+describe("UnicityBridgeVault — custody moves exactly the recorded amount", () => {
+  async function settledLeaf(vault, asset, alice, bob) {
+    const nonce = await lockDeposit(vault, asset, alice, 1_000_000n, ethers.id("dep-1"));
+    const digest = await vault.lockDigest(nonce);
+    const leaf = [ethers.id("nul-1"), bob.address, 400_000n, ethers.ZeroAddress, 0n, 0n];
+    const lockRefs = [[nonce, digest]];
+    const { encoded } = await buildBatch(vault, { leaves: [leaf], lockRefs });
+    return { encoded, leaf, lockRefs };
+  }
+
+  it("lock() records nothing when transferFrom returns false and moves nothing", async () => {
+    const { vault, asset, alice } = await deployVault({ assetName: "MockFalseNoopTRC20" });
+    await asset.mint(alice.address, 100n);
+    await asset.connect(alice).approve(await vault.getAddress(), 100n);
+    await asset.setBroken(true);
+    await expect(vault.connect(alice).lock(100n, ethers.id("t"), ethers.id("c"))).to.be.revertedWith(
+      "vault: amount not received"
+    );
+    expect(await vault.nextNonce()).to.equal(0n);
+    expect(await vault.tokenIdUsed(ethers.id("t"))).to.equal(false);
+    expect(await asset.balanceOf(alice.address)).to.equal(100n);
+  });
+
+  it("lock() records nothing when the vault receives less than the amount (fee-on-transfer)", async () => {
+    const { vault, asset, alice } = await deployVault({ assetName: "MockFeeOnTransferTRC20" });
+    await asset.mint(alice.address, 100n);
+    await asset.connect(alice).approve(await vault.getAddress(), 100n);
+    await expect(vault.connect(alice).lock(100n, ethers.id("t"), ethers.id("c"))).to.be.revertedWith(
+      "vault: amount not received"
+    );
+    expect(await vault.nextNonce()).to.equal(0n);
+  });
+
+  it("push settlement keeps the root when transfer returns false and pays nothing", async () => {
+    const { vault, asset, alice, bob } = await deployVault({ assetName: "MockFalseNoopTRC20" });
+    const { encoded, leaf, lockRefs } = await settledLeaf(vault, asset, alice, bob);
+    await asset.setBroken(true);
+    await expect(vault.fulfillBatch(encoded, "0x", [leaf], lockRefs)).to.be.revertedWith(
+      "vault: amount not sent"
+    );
+    expect(await vault.spentRoot()).to.equal(ethers.ZeroHash);
+    expect(await asset.balanceOf(await vault.getAddress())).to.equal(1_000_000n);
+  });
+
+  it("withdraw() keeps the credit when transfer returns false and pays nothing", async () => {
+    const { vault, asset, alice, bob } = await deployVault({
+      assetName: "MockFalseNoopTRC20",
+      pullPayments: true,
+    });
+    const { encoded, leaf, lockRefs } = await settledLeaf(vault, asset, alice, bob);
+    await vault.fulfillBatch(encoded, "0x", [leaf], lockRefs);
+    await asset.setBroken(true);
+    await expect(vault.connect(bob).withdraw()).to.be.revertedWith("vault: amount not sent");
+    expect(await vault.owed(bob.address)).to.equal(400_000n);
+    expect(await asset.balanceOf(bob.address)).to.equal(0n);
+  });
+});
