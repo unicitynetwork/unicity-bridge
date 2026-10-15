@@ -120,3 +120,17 @@ describe("UnicityLock", () => {
     });
   });
 });
+
+describe("UnicityLock amount width", () => {
+  it("caps the amount at uint64 like the vault", async () => {
+    const { user, usdt, lock } = await deploy();
+    const max = (1n << 64n) - 1n;
+    await usdt.mint(user.address, max + 1n);
+    await usdt.connect(user).approve(await lock.getAddress(), max + 1n);
+    await expect(lock.connect(user).lock(max + 1n, TOKEN_ID, RECIP)).to.be.revertedWith(
+      "UnicityLock: amount exceeds uint64"
+    );
+    await lock.connect(user).lock(max, TOKEN_ID, RECIP);
+    expect(await lock.nextNonce()).to.equal(1n);
+  });
+});

@@ -586,6 +586,20 @@ describe("UnicityBridgeVault — pull-payment mode (§9 batch atomicity)", () =>
   });
 });
 
+describe("UnicityBridgeVault — lock amount width", () => {
+  it("lock() caps the amount at uint64, the width the mint justification carries", async () => {
+    const { vault, asset, alice } = await deployVault();
+    const max = (1n << 64n) - 1n;
+    await asset.mint(alice.address, max + 1n);
+    await asset.connect(alice).approve(await vault.getAddress(), max + 1n);
+    await expect(
+      vault.connect(alice).lock(max + 1n, ethers.id("t"), ethers.id("c"))
+    ).to.be.revertedWith("vault: amount exceeds uint64");
+    await vault.connect(alice).lock(max, ethers.id("t"), ethers.id("c"));
+    expect(await vault.nextNonce()).to.equal(1n);
+  });
+});    
+    
 describe("UnicityBridgeVault — custody moves exactly the recorded amount", () => {
   const FAR_DEADLINE = 2n ** 40n;
 

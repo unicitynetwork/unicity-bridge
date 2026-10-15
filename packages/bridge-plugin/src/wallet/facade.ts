@@ -29,6 +29,7 @@ import {
 } from '../bridge-back/burn.js';
 import { recipientCommitment } from '../identifiers.js';
 import { fromHex, toHex } from '../hex.js';
+import { assertLockAmount } from '../BridgeLockJustification.js';
 import type { ContractCall } from '../contract-call.js';
 import type { BridgePlugin } from '../index.js';
 
@@ -97,6 +98,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
  * *that* token.
  */
 export async function buildBridgeInPlan(input: BridgeInPlanInput): Promise<BridgeInPlan> {
+  assertLockAmount(input.amount);
   const saltBytes = crypto.getRandomValues(new Uint8Array(32));
   const salt = TokenSalt.fromBytes(saltBytes);
   const tokenId = await TokenId.fromSalt(NetworkId.fromId(input.networkId), salt);

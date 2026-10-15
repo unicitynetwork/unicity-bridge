@@ -12,7 +12,7 @@ import { EncodedPredicate } from '@unicitylabs/state-transition-sdk/lib/predicat
 import { SignaturePredicate } from '@unicitylabs/state-transition-sdk/lib/predicate/builtin/SignaturePredicate.js';
 import { SigningService } from '@unicitylabs/state-transition-sdk/lib/crypto/secp256k1/SigningService.js';
 
-import { fromHex, recipientCommitment, toHex } from '../src/index.js';
+import { fromHex, MAX_LOCK_AMOUNT, recipientCommitment, toHex } from '../src/index.js';
 import {
   buildBridgeInPlan,
   buildBridgeRegistry,
@@ -145,4 +145,19 @@ test('the Nile manifest is disabled: Tron cannot settle a return under its 80 ms
   assert.match(NILE_USDT_BRIDGE.disabledReason ?? '', /80 ms/);
   const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
   assert.equal(loaded.manifest.disabledReason, NILE_USDT_BRIDGE.disabledReason);
+});
+
+test('buildBridgeInPlan refuses an amount the mint cannot carry before any transaction is built', async () => {
+  const [loaded] = loadBridges(NILE_USDT_BRIDGE, deps());
+  const owner = SignaturePredicate.create(SigningService.generate().publicKey);
+  const plan = (amount: bigint) =>
+    buildBridgeInPlan({
+      plugin: loaded.plugin,
+      amount,
+      networkId: 4,
+      ownerPredicateCbor: EncodedPredicate.fromPredicate(owner).toCBOR(),
+    });
+  await assert.rejects(plan(MAX_LOCK_AMOUNT + 1n), /uint64/);
+  await assert.rejects(plan(0n), /positive/);
+  assert.equal((await plan(MAX_LOCK_AMOUNT)).amount, MAX_LOCK_AMOUNT);
 });
