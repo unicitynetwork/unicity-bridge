@@ -186,9 +186,15 @@ contract MockFalseNoopTRC20 {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     bool public broken;
+    address public brokenFor;
 
     function setBroken(bool isBroken) external {
         broken = isBroken;
+    }
+
+    /// @dev Fail (return false, move nothing) only for transfers to `to`.
+    function setBrokenFor(address to) external {
+        brokenFor = to;
     }
 
     function mint(address to, uint256 value) external {
@@ -201,7 +207,7 @@ contract MockFalseNoopTRC20 {
     }
 
     function transfer(address to, uint256 value) external returns (bool) {
-        if (broken) return false;
+        if (broken || to == brokenFor) return false;
         _transfer(msg.sender, to, value);
         return true;
     }

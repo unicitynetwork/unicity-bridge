@@ -314,7 +314,11 @@ contract UnicityBridgeVault {
         require(_held() - before == value, "vault: amount not received");
     }
 
+    /// @dev A payout to the vault itself moves no balance, so it is a no-op: the
+    ///      amount simply stays in custody. Without this, a burn naming the vault
+    ///      as recipient or fee recipient would revert every batch it lands in.
     function _sendExactly(address to, uint256 value) private {
+        if (to == address(this) || value == 0) return;
         uint256 before = _held();
         _callAsset(abi.encodeWithSelector(ITRC20.transfer.selector, to, value), "vault: transfer failed");
         require(before - _held() == value, "vault: amount not sent");
