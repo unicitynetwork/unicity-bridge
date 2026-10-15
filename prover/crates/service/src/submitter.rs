@@ -63,6 +63,19 @@ impl Submitter {
         Self::with_commands(None, None)
     }
 
+    /// The simulation is what checks each burn's lock refs against the vault before
+    /// proving, so a service that admits burns refuses to run without it.
+    pub fn require_simulation(self) -> Result<Self, String> {
+        if self.simulate_cmd.is_none() {
+            return Err(
+                "BRIDGE_RETURN_SIMULATE_CMD is required: it checks each burn's lock refs \
+                        against the vault before proving"
+                    .to_string(),
+            );
+        }
+        Ok(self)
+    }
+
     pub fn label(&self) -> &'static str {
         match self.submit_cmd {
             None => "none",
@@ -175,7 +188,10 @@ fn snippet(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{LeafHex, LockRefHex};
+    use crate::{
+        domain::assembler::RejectionKind,
+        store::{LeafHex, LockRefHex},
+    };
 
     fn bundle() -> BatchBundle {
         BatchBundle {
@@ -258,6 +274,15 @@ mod tests {
         assert_eq!(outcome, SubmitOutcome::Skipped);
     }
 
+    #[test]
+    fn simulation_is_required_by_a_service_that_admits_burns() {
+        let Err(err) = Submitter::none().require_simulation() else {
+            panic!("a submitter without simulation passed");
+        };
+        assert!(err.contains("BRIDGE_RETURN_SIMULATE_CMD"), "{err}");
+        assert!(simulator("true").require_simulation().is_ok());
+    }
+
     #[tokio::test]
     async fn simulate_without_command_rejects_nothing() {
         assert_eq!(Submitter::none().simulate(&[]).await.unwrap(), Vec::new());
@@ -275,9 +300,21 @@ mod tests {
             rejected,
             vec![Rejected {
                 nullifier: "0x01".to_string(),
-                reason: "blocked".to_string()
+                reason: "blocked".to_string(),
+                kind: RejectionKind::Recipient,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_reads_a_lock_rejection() {
+        let rejected = simulator(
+            r#"cat >/dev/null; echo '{"rejected":[{"nullifier":"0x01","reason":"no lock","kind":"lock"}]}'"#,
+        )
+        .simulate(&[])
+        .await
+        .unwrap();
+        assert_eq!(rejected[0].kind, RejectionKind::Lock);
     }
 
     #[tokio::test]

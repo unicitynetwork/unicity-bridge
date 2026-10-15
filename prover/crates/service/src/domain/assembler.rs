@@ -17,6 +17,20 @@ use super::burn::Burn;
 pub struct Rejected {
     pub nullifier: String,
     pub reason: String,
+    /// What the simulation refused: a payout the recipient cannot take now or a lock
+    /// not yet confirmed (both retried), or a lock ref the vault does not hold (final,
+    /// the burn draws on no real lock).
+    #[serde(default)]
+    pub kind: RejectionKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionKind {
+    #[default]
+    Recipient,
+    Unconfirmed,
+    Lock,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,8 +166,16 @@ fn admit(
         .iter()
         .find(|r| r.nullifier.eq_ignore_ascii_case(burn.nullifier()))
     {
-        return Err(Exclusion::Rejected {
-            message: r.reason.clone(),
+        return Err(match r.kind {
+            RejectionKind::Recipient => Exclusion::Rejected {
+                message: r.reason.clone(),
+            },
+            RejectionKind::Unconfirmed => Exclusion::Rejected {
+                message: format!("lock not confirmed yet: {}", r.reason),
+            },
+            RejectionKind::Lock => Exclusion::Invalid {
+                message: format!("lock refs are not the vault's: {}", r.reason),
+            },
         });
     }
     if input
@@ -317,6 +339,7 @@ mod tests {
                 .to_uppercase()
                 .replace("0X", "0x"),
             reason: "transfer would revert".to_string(),
+            kind: RejectionKind::Recipient,
         }];
         let assembled = assemble(&[&a, &b], &empty(), &rejected).unwrap();
 
@@ -330,6 +353,49 @@ mod tests {
                 }
             )]
         );
+    }
+
+    #[test]
+    fn a_lock_rejection_excludes_the_member_as_invalid() {
+        let (a, a_input) = member("a", 11, 0x61);
+        let (b, _) = member("b", 12, 0x62);
+        let rejected: Vec<Rejected> = serde_json::from_value(serde_json::json!([{
+            "nullifier": hex32(&nullifier(&a_input)),
+            "reason": "lock 11 digest 0xab is not the vault's 0x00",
+            "kind": "lock",
+        }]))
+        .unwrap();
+        let assembled = assemble(&[&a, &b], &empty(), &rejected).unwrap();
+
+        assert_eq!(assembled.kept, vec!["b"]);
+        assert!(matches!(
+            &assembled.excluded[..],
+            [(id, Exclusion::Invalid { message })] if id == "a" && message.contains("lock 11")
+        ));
+    }
+
+    #[test]
+    fn an_unconfirmed_lock_is_retried_like_a_recipient_rejection() {
+        let (a, a_input) = member("a", 11, 0x61);
+        let rejected = [Rejected {
+            nullifier: hex32(&nullifier(&a_input)),
+            reason: "lock 11 digest 0xab is not the vault's 0x00".to_string(),
+            kind: RejectionKind::Unconfirmed,
+        }];
+        let Err(AssembleError::AllExcluded(excluded)) = assemble(&[&a], &empty(), &rejected) else {
+            panic!("the only member was kept");
+        };
+        assert!(matches!(
+            &excluded[..],
+            [(id, Exclusion::Rejected { message })] if id == "a" && message.contains("not confirmed")
+        ));
+    }
+
+    #[test]
+    fn a_rejection_without_a_kind_is_a_recipient_rejection() {
+        let rejected: Rejected =
+            serde_json::from_str(r#"{"nullifier":"0x01","reason":"blocked"}"#).unwrap();
+        assert_eq!(rejected.kind, RejectionKind::Recipient);
     }
 
     #[test]

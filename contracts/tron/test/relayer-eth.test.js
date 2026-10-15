@@ -127,6 +127,7 @@ describe("relayer-eth simulate checks the lock refs a leaf draws on", () => {
     const { rejected } = await simulate(vault, [fine, forged]);
     expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
     expect(rejected[0].reason).to.include("lock");
+    expect(rejected[0].kind).to.equal("lock");
   });
 
   it("checks lock refs for a pull-payment vault too", async () => {
@@ -134,5 +135,24 @@ describe("relayer-eth simulate checks the lock refs a leaf draws on", () => {
     const forged = leaf(recipient, "n6", [{ nonce: "0x0", digest: ethers.id("no such lock") }]);
     const { rejected } = await simulate(vault, [forged]);
     expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
+    expect(rejected[0].kind).to.equal("lock");
+  });
+
+  it("tags a payout that would revert as a recipient rejection", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const lock = await lockOnce(vault, "f");
+    const tooMuch = { ...leaf(recipient, "n7", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]), amount: (AMOUNT * 50n).toString() };
+    const { rejected } = await simulate(vault, [tooMuch]);
+    expect(rejected.map((r) => [r.nullifier, r.kind])).to.deep.equal([[tooMuch.nullifier, "recipient"]]);
+  });
+
+  it("reads lock digests at the confirmed height and tags a lock not yet that deep as unconfirmed", async () => {
+    const { recipient, vault } = await deployBridge(true);
+    const lock = await lockOnce(vault, "g");
+    const fresh = leaf(recipient, "n8", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]);
+    const early = await simulate(vault, [fresh], 3);
+    expect(early.rejected.map((r) => [r.nullifier, r.kind])).to.deep.equal([[fresh.nullifier, "unconfirmed"]]);
+    await hre.network.provider.send("hardhat_mine", ["0x2"]);
+    expect((await simulate(vault, [fresh], 3)).rejected).to.deep.equal([]);
   });
 });

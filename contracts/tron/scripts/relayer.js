@@ -307,6 +307,8 @@ function toTronHex(tw, address) {
   return hex.length === 40 ? "41" + hex : hex;
 }
 
+// Lock digests are read at the head: TronWeb constant calls take no block tag. The
+// rejection names its kind, "lock" (final for the burn) or "recipient" (retried).
 async function unknownLock(vault, lockRefs) {
   for (const ref of lockRefs) {
     const nonce = BigInt(ref.nonce);
@@ -316,6 +318,15 @@ async function unknownLock(vault, lockRefs) {
     }
   }
   return null;
+}
+
+async function lockRejections(vault, leaves) {
+  const rejected = [];
+  for (const leaf of leaves) {
+    const reason = await unknownLock(vault, leaf.lockRefs || []);
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason, kind: "lock" });
+  }
+  return rejected;
 }
 
 async function simulateFromStdin() {
@@ -331,11 +342,7 @@ async function simulateFromStdin() {
     )
   ).abi;
   const vault = tw.contract(abi, vaultHex);
-  const rejected = [];
-  for (const leaf of payload.leaves || []) {
-    const reason = await unknownLock(vault, leaf.lockRefs || []);
-    if (reason) rejected.push({ nullifier: leaf.nullifier, reason });
-  }
+  const rejected = await lockRejections(vault, payload.leaves || []);
   if (await vault.PULL_PAYMENTS().call()) {
     process.stdout.write(JSON.stringify({ rejected }));
     return;
@@ -370,7 +377,7 @@ async function simulateFromStdin() {
     const principal = BigInt(leaf.amount) - fee;
     let reason = principal > 0n ? await transferReverts(leaf.recipient, principal) : null;
     if (!reason && fee > 0n) reason = await transferReverts(leaf.feeRecipient, fee);
-    if (reason) rejected.push({ nullifier: leaf.nullifier, reason });
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason, kind: "recipient" });
   }
   console.error(
     `relayer simulate --stdin: ${(payload.leaves || []).length} leaf(ves), ${rejected.length} rejected`
@@ -394,7 +401,11 @@ async function main() {
   );
 }
 
-main().catch((e) => {
-  console.error(e.message || e);
-  process.exit(1);
-});
+module.exports = { lockRejections };
+
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e.message || e);
+    process.exit(1);
+  });
+}

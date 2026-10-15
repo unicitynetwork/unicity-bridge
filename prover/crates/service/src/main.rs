@@ -4,13 +4,12 @@ use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
     domain::policy::BatchPolicy,
-    load_intake,
+    load_intake, load_submitter,
     orchestrator::Orchestrator,
     prover::{GuestCheck, Prover},
     router,
     sequencer::ChainEvents,
     store::ReturnStore,
-    submitter::Submitter,
     AppState,
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
@@ -45,7 +44,10 @@ async fn main() {
             ReturnStore::memory(config.retry)
         }
     };
-    let submitter = Submitter::from_env().with_timeout(config.command_timeout);
+    let submitter = load_submitter(&config).unwrap_or_else(|err| {
+        eprintln!("refusing to start: {err}");
+        std::process::exit(2);
+    });
     tracing::info!("S4 submitter: {}", submitter.label());
     let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());

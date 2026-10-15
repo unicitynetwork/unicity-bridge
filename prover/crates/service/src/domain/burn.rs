@@ -43,17 +43,18 @@ impl Burn {
         self.lock_nonces.iter().all(|n| !taken.contains(n))
     }
 
-    pub fn leaf_to_settle(&self) -> LeafToSettle {
-        LeafToSettle {
+    /// `None` when the stored input no longer decodes: such a burn has no lock refs to
+    /// check, so it is not simulated, and assembly excludes it as invalid.
+    pub fn leaf_to_settle(&self) -> Option<LeafToSettle> {
+        let input = wire::decode_guest_input(&self.wire_input).ok()?;
+        Some(LeafToSettle {
             leaf: self.leaf.clone(),
-            lock_refs: self.lock_refs(),
-        }
-    }
-
-    fn lock_refs(&self) -> Vec<LockRefHex> {
-        wire::decode_guest_input(&self.wire_input)
-            .map(|input| input.sorted_lock_refs.into_iter().map(LockRefHex::from).collect())
-            .unwrap_or_default()
+            lock_refs: input
+                .sorted_lock_refs
+                .into_iter()
+                .map(LockRefHex::from)
+                .collect(),
+        })
     }
 }
 
@@ -199,7 +200,7 @@ mod tests {
         let fixture = build_b1_direct_bridge_fixture();
         let wire = wire::encode_guest_input(&fixture.input);
         let burn = Burn::from_input("r1".to_string(), &fixture.input, wire);
-        let to_settle = burn.leaf_to_settle();
+        let to_settle = burn.leaf_to_settle().unwrap();
         assert_eq!(to_settle.leaf, burn.leaf);
         assert_eq!(
             to_settle.lock_refs,
@@ -208,5 +209,18 @@ mod tests {
         let json = serde_json::to_value(&to_settle).unwrap();
         assert_eq!(json["nullifier"], burn.leaf.nullifier);
         assert_eq!(json["lockRefs"][0]["nonce"], "0x7");
+    }
+
+    #[test]
+    fn a_burn_whose_input_does_not_decode_has_no_leaf_to_settle() {
+        let fixture = build_b1_direct_bridge_fixture();
+        let mut wire = wire::encode_guest_input(&fixture.input);
+        let burn = Burn::from_input("r1".to_string(), &fixture.input, wire.clone());
+        wire.truncate(wire.len() / 2);
+        let corrupt = Burn {
+            wire_input: wire,
+            ..burn
+        };
+        assert_eq!(corrupt.leaf_to_settle(), None);
     }
 }

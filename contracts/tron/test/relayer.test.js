@@ -1,5 +1,7 @@
 const { expect } = require("chai");
+const hre = require("hardhat");
 const { hex32, normalizeEvent, groupBatches } = require("../scripts/relayer-lib.js");
+const { lockRejections } = require("../scripts/relayer.js");
 
 const R = (n) => "0x" + n.toString(16).padStart(64, "0");
 
@@ -63,5 +65,52 @@ describe("S4 relayer — event grouping (relayer-lib)", () => {
       { kind: "Released", blockNumber: 100, eventIndex: 1, nullifier: R(0xa1) },
     ];
     expect(() => groupBatches(events)).to.throw(/expected 3 Released, found 1/);
+  });
+});
+
+describe("S4 relayer — simulate checks the lock refs a leaf draws on", () => {
+  const ethers = hre.ethers;
+  const AMOUNT = 1_000_000n;
+
+  // The vault through the TronWeb contract shape (`method(...args).call()`).
+  function tronShaped(vault) {
+    return { lockDigest: (nonce) => ({ call: () => vault.lockDigest(nonce) }) };
+  }
+
+  async function deployVault() {
+    const [deployer, recipient] = await ethers.getSigners();
+    const verifier = await (await ethers.getContractFactory("MockProofVerifier")).deploy();
+    const asset = await (await ethers.getContractFactory("MockTRC20")).deploy();
+    const cfg = [31337, deployer.address, await asset.getAddress(), ethers.id("type"), ethers.id("coin"), 39048, ethers.id("lock"), ethers.id("nullifier")];
+    const vault = await (await ethers.getContractFactory("UnicityBridgeVault")).deploy(cfg, await verifier.getAddress(), ethers.ZeroHash, deployer.address, false);
+    await asset.mint(deployer.address, AMOUNT);
+    await asset.approve(await vault.getAddress(), AMOUNT);
+    const nonce = await vault.nextNonce();
+    await vault.lock(AMOUNT, ethers.id("token"), ethers.id("recipient"));
+    return { recipient, vault, lock: { nonce, digest: await vault.lockDigest(nonce) } };
+  }
+
+  function leaf(recipient, label, lockRefs) {
+    return { nullifier: ethers.id(label), recipient: recipient.address, amount: AMOUNT.toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0", lockRefs };
+  }
+
+  it("rejects, as a lock rejection, a leaf whose lock ref is not the digest the vault stored", async () => {
+    const { recipient, vault, lock } = await deployVault();
+    const fine = leaf(recipient, "t1", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]);
+    const forged = leaf(recipient, "t2", [{ nonce: "0x3e7", digest: ethers.id("no such lock") }]);
+    const wrongDigest = leaf(recipient, "t3", [{ nonce: "0x" + lock.nonce.toString(16), digest: ethers.id("other") }]);
+    const rejected = await lockRejections(tronShaped(vault), [fine, forged, wrongDigest]);
+    expect(rejected.map((r) => [r.nullifier, r.kind])).to.deep.equal([
+      [forged.nullifier, "lock"],
+      [wrongDigest.nullifier, "lock"],
+    ]);
+    expect(rejected[0].reason).to.include("lock 999");
+  });
+
+  it("matches a digest the vault returns without a 0x prefix", async () => {
+    const { recipient, vault, lock } = await deployVault();
+    const bare = { lockDigest: (nonce) => ({ call: async () => (await vault.lockDigest(nonce)).slice(2).toUpperCase() }) };
+    const fine = leaf(recipient, "t4", [{ nonce: lock.nonce.toString(), digest: lock.digest }]);
+    expect(await lockRejections(bare, [fine])).to.deep.equal([]);
   });
 });

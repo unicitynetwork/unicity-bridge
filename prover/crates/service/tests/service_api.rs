@@ -9,7 +9,9 @@ use axum::{
 use std::sync::Arc;
 
 use bridge_return_host::{
-    fixture::{build_b1_direct_bridge_fixture, build_settlement_fixture, build_split_bridge_fixture},
+    fixture::{
+        build_b1_direct_bridge_fixture, build_settlement_fixture, build_split_bridge_fixture,
+    },
     s1::EnvelopeIntake,
 };
 use bridge_return_service::{
@@ -183,6 +185,37 @@ async fn a_return_the_service_already_holds_is_not_charged() {
     let (status, again) = submit(&charging(fixture_fee(), store), member(11, 0x61)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["returnId"], accepted["returnId"]);
+    assert_eq!(again["duplicate"], true);
+}
+
+#[tokio::test]
+async fn a_full_queue_refuses_a_new_burn_before_holding_it() {
+    let store = memory_store();
+    let app = router(AppState {
+        config: ServiceConfig {
+            max_pending: 1,
+            ..ServiceConfig::default()
+        },
+        store: store.clone(),
+        clock: Clock::default(),
+        intake: None,
+        chain_events: ChainEvents::none(),
+    });
+    let held = post_return(&app, member(11, 0x61)).await;
+    let (status, error) = submit(&app, member(12, 0x62)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error["error"]["code"], "queue_full");
+    assert_eq!(error["error"]["recoverable"], true);
+    assert_eq!(store.health().queue_depth, 1);
+    assert!(store
+        .get_by_nullifier(&format!(
+            "0x{}",
+            hex::encode(support::nullifier_of(&member(12, 0x62)))
+        ))
+        .is_none());
+
+    let again = post_return(&app, member(11, 0x61)).await;
+    assert_eq!(again["returnId"], held["returnId"]);
     assert_eq!(again["duplicate"], true);
 }
 
@@ -535,8 +568,14 @@ async fn a_configured_service_refuses_a_raw_witness_even_one_built_for_its_deplo
     let (app, store, intake) = configured_for_sepolia();
     let self_certified =
         build_settlement_fixture(intake.config(), [0x42; 20], 1_000_000, 999_999).input;
-    assert_eq!(self_certified.public_values.config_hash, intake.config_hash());
-    assert_ne!(self_certified.public_values.trust_base_hash, intake.trust_base_hash());
+    assert_eq!(
+        self_certified.public_values.config_hash,
+        intake.config_hash()
+    );
+    assert_ne!(
+        self_certified.public_values.trust_base_hash,
+        intake.trust_base_hash()
+    );
     let (status, error) = submit(&app, self_certified).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"]["code"], "raw_witness_refused");

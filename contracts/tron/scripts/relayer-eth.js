@@ -107,14 +107,21 @@ async function settle(vault, bundle, confirmations = 1) {
   return { txid: tx.hash, gasUsed: receipt.gasUsed, blockNumber: receipt.blockNumber };
 }
 
-async function simulate(vault, leaves) {
+// Each rejection names its kind: "lock" (the vault holds no such lock, final for the
+// burn), "unconfirmed" (the lock is not yet `confirmations` deep, retried) or
+// "recipient" (the payout would revert now, retried). Lock digests are read at the
+// same confirmed block the settled log is read at.
+async function simulate(vault, leaves, confirmations = 1) {
+  const provider = vault.runner.provider ?? vault.runner;
+  const confirmed = Math.max((await provider.getBlockNumber()) - (confirmations - 1), 0);
   const rejected = [];
   for (const l of leaves) {
-    const reason = await unknownLock(vault, l.lockRefs || []);
-    if (reason) rejected.push({ nullifier: l.nullifier, reason });
+    const reason = await unknownLock(vault, l.lockRefs || [], confirmed);
+    if (!reason) continue;
+    const kind = (await unknownLock(vault, l.lockRefs || [], "latest")) ? "lock" : "unconfirmed";
+    rejected.push({ nullifier: l.nullifier, reason, kind });
   }
   if (await vault.PULL_PAYMENTS()) return { rejected };
-  const provider = vault.runner.provider ?? vault.runner;
   const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
   const vaultAddress = await vault.getAddress();
   const refused = new Set(rejected.map((r) => r.nullifier));
@@ -123,15 +130,15 @@ async function simulate(vault, leaves) {
     try {
       await asset.transfer.staticCall(l.recipient, BigInt(l.amount), { from: vaultAddress });
     } catch (e) {
-      rejected.push({ nullifier: l.nullifier, reason: revertReason(asset, e) });
+      rejected.push({ nullifier: l.nullifier, reason: revertReason(asset, e), kind: "recipient" });
     }
   }
   return { rejected };
 }
 
-async function unknownLock(vault, lockRefs) {
+async function unknownLock(vault, lockRefs, blockTag) {
   for (const ref of lockRefs) {
-    const stored = await vault.lockDigest(BigInt(ref.nonce));
+    const stored = await vault.lockDigest(BigInt(ref.nonce), { blockTag });
     if (stored.toLowerCase() !== ref.digest.toLowerCase()) {
       return `lock ${BigInt(ref.nonce)} digest ${ref.digest} is not the vault's ${stored}`;
     }
@@ -177,7 +184,7 @@ async function main() {
     process.stdout.write(txid);
   } else if (cmd === "simulate" && stdin) {
     const payload = JSON.parse(await readStdin());
-    process.stdout.write(JSON.stringify(await simulate(vault, payload.leaves || [])));
+    process.stdout.write(JSON.stringify(await simulate(vault, payload.leaves || [], settleConfirmations)));
   } else {
     console.error("usage: relayer-eth.js events | scan | settle --stdin | simulate --stdin");
     process.exit(2);

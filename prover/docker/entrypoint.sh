@@ -48,7 +48,9 @@ export BRIDGE_RETURN_VKEY_CMD="${BRIDGE_RETURN_VKEY_CMD:-$BRIDGE_HOST_BIN sp1-vk
 : "${BRIDGE_RELAYER:=relayer-eth.js}"
 : "${BRIDGE_RETURN_SUBMIT_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} settle --stdin}"
 : "${BRIDGE_RETURN_EVENTS_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} events}"
-export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD
+# The lock-ref check before proving: the service refuses to start without it.
+: "${BRIDGE_RETURN_SIMULATE_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} simulate --stdin}"
+export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD BRIDGE_RETURN_SIMULATE_CMD
 mkdir -p "$BRIDGE_RETURN_PROOF_DIR" "$BRIDGE_RETURN_STATE_DIR"
 echo "bridge-return-service: mode=$BRIDGE_RETURN_PROVE_MODE elf=$SP1_GUEST_ELF vkey=$(cat /app/sp1/vkey.txt 2>/dev/null || echo unknown)"
 exec /app/bin/bridge-return-service "$@"

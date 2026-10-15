@@ -46,6 +46,15 @@ pub fn load_intake(config: &config::ServiceConfig) -> Result<Arc<EnvelopeIntake>
     Ok(Arc::new(intake))
 }
 
+/// The S4 submitter and settlement simulation from the environment. The simulation
+/// checks lock refs before proving, so the service fails closed without it; only
+/// in-process tests (no intake) run a submitter without one.
+pub fn load_submitter(config: &config::ServiceConfig) -> Result<submitter::Submitter, String> {
+    submitter::Submitter::from_env()
+        .with_timeout(config.command_timeout)
+        .require_simulation()
+}
+
 pub fn router(state: AppState) -> Router {
     api::router(Arc::new(state))
 }
@@ -60,5 +69,22 @@ mod tests {
             panic!("started without a deployment");
         };
         assert!(err.contains("BRIDGE_DEPLOYMENT_CONFIG"), "{err}");
+    }
+
+    // The only test that touches BRIDGE_RETURN_SIMULATE_CMD.
+    #[test]
+    fn the_simulation_is_required_so_the_service_fails_closed_without_a_lock_check() {
+        std::env::remove_var("BRIDGE_RETURN_SIMULATE_CMD");
+        let Err(err) = load_submitter(&config::ServiceConfig::default()) else {
+            panic!("started without a settlement simulation");
+        };
+        assert!(err.contains("BRIDGE_RETURN_SIMULATE_CMD"), "{err}");
+        std::env::set_var(
+            "BRIDGE_RETURN_SIMULATE_CMD",
+            "node scripts/relayer-eth.js simulate --stdin",
+        );
+        let loaded = load_submitter(&config::ServiceConfig::default());
+        std::env::remove_var("BRIDGE_RETURN_SIMULATE_CMD");
+        assert!(loaded.is_ok());
     }
 }

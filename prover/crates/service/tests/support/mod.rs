@@ -18,7 +18,7 @@ use bridge_return_host::{
 };
 use bridge_return_service::{
     domain::{
-        assembler::Rejected,
+        assembler::{Rejected, RejectionKind},
         burn::{Burn, LeafToSettle},
     },
     ports::{ChainLog, ProofBackend, Settler},
@@ -154,9 +154,14 @@ impl ScriptedSettler {
     }
 
     pub fn reject(&self, nullifier: &str, reason: &str) {
+        self.reject_as(nullifier, reason, RejectionKind::Recipient);
+    }
+
+    pub fn reject_as(&self, nullifier: &str, reason: &str, kind: RejectionKind) {
         self.rejected.lock().unwrap().push(Rejected {
             nullifier: nullifier.to_string(),
             reason: reason.to_string(),
+            kind,
         });
     }
 

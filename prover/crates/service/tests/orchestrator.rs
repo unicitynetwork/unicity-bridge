@@ -5,7 +5,9 @@ use std::time::Duration;
 use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
-    domain::{batch::BatchStatus, policy::BatchPolicy, retry::RetryPolicy},
+    domain::{
+        assembler::RejectionKind, batch::BatchStatus, policy::BatchPolicy, retry::RetryPolicy,
+    },
     orchestrator::Orchestrator,
     store::{ErrorKind, ReturnRecord, ReturnStatus, ReturnStore},
     submitter::SubmitOutcome,
@@ -509,6 +511,42 @@ async fn rejected_recipient_is_excluded_before_proving() {
     assert!(failure.message.contains("blocked"));
     assert_eq!(h.prover.calls(), 1);
     assert_eq!(h.settler.submitted()[0].leaves.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lock_mismatch_fails_its_burn_for_good_and_the_rest_settles() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    let a_nullifier = nullifier_of(&member(11, 0x61));
+    h.settler.reject_as(
+        &format!("0x{}", hex::encode(a_nullifier)),
+        "lock 11 digest 0xab is not the vault's 0x00",
+        RejectionKind::Lock,
+    );
+    h.accept("a", 11, 0x61);
+    h.accept("b", 12, 0x62);
+    h.reach("b", ReturnStatus::Settled).await;
+    let a = h.record("a");
+    assert_eq!(a.status, ReturnStatus::Failed);
+    let failure = a.failure.unwrap();
+    assert!(!failure.recoverable);
+    assert_eq!(failure.kind, ErrorKind::ChainRejected);
+    assert!(failure.message.contains("lock 11"));
+    assert_eq!(h.settler.submitted()[0].leaves.len(), 1);
+    assert_eq!(h.store.health().queue_depth, 0);
+
+    tokio::time::sleep(HOUR).await;
+    h.accept("c", 13, 0x63);
+    h.reach("c", ReturnStatus::Settled).await;
+    assert_eq!(h.status("a"), ReturnStatus::Failed);
+    assert_eq!(h.prover.calls(), 2);
+    assert!(h
+        .settler
+        .submitted()
+        .iter()
+        .all(|bundle| bundle.leaves.len() == 1));
 }
 
 #[tokio::test(start_paused = true)]

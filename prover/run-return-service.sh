@@ -13,6 +13,9 @@ export BRIDGE_RETURN_SUBMIT_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $RO
 # S2/S3 chain sync: emit the vault's settlement log so proofs chain onto the
 # vault's current spentRoot (else fulfillBatch reverts with "vault: stale root").
 export BRIDGE_RETURN_EVENTS_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER events"
+# Lock refs (and push payouts) are checked against the vault before proving;
+# the service refuses to start without this.
+export BRIDGE_RETURN_SIMULATE_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER simulate --stdin"
 export BRIDGE_RETURN_STATE_DIR="$ROOT/prover/target/bridge-return-service/state"
 export BRIDGE_RETURN_IDLE_WAIT_SECS=0
 export BRIDGE_RETURN_MAX_BATCH_SIZE=8
