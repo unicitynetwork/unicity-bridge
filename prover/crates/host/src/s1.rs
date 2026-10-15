@@ -327,6 +327,16 @@ impl EnvelopeIntake {
         let config = bridge_config_from_json(c)?;
         let trust_base = RootTrustBase::from_json(trust_base_json)
             .map_err(|e| HostError::Check(format!("trust base json: {e}")))?;
+        if let Some(pinned) = doc
+            .get("trust_base")
+            .filter(|tb| tb.get("canonical_hash").is_some())
+        {
+            if json_b32(pinned, "canonical_hash")? != canonical_hash(&trust_base) {
+                return Err(HostError::Check(
+                    "the trust base is not the one the deployment config pins".to_string(),
+                ));
+            }
+        }
         Ok(Self {
             config,
             trust_base,
@@ -337,6 +347,16 @@ impl EnvelopeIntake {
     /// The deployment `config_hash` this intake binds (cross-check vs the envelope).
     pub fn config_hash(&self) -> [u8; 32] {
         config_hash(&self.config)
+    }
+
+    /// The deployment config this intake binds.
+    pub fn config(&self) -> BridgeConfig {
+        self.config
+    }
+
+    /// The canonical hash of the trust base every admitted burn must be certified under.
+    pub fn trust_base_hash(&self) -> [u8; 32] {
+        canonical_hash(&self.trust_base)
     }
 
     /// Build the certified guest **wire input** from the wallet envelope

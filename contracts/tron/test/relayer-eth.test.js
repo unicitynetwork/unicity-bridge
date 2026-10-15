@@ -8,10 +8,10 @@ const NULLIFIER_DOMAIN = "0xd4530e4ea58fc8e38f84506e62b421476c3eeec70f4cbebefc32
 const AMOUNT = 1_000_000n;
 const ethers = hre.ethers;
 
-async function deployBridge(pullPayments) {
+async function deployBridge(pullPayments, assetName = "MockTRC20") {
   const [deployer, recipient] = await ethers.getSigners();
   const verifier = await (await ethers.getContractFactory("MockProofVerifier")).deploy();
-  const asset = await (await ethers.getContractFactory("MockTRC20")).deploy();
+  const asset = await (await ethers.getContractFactory(assetName)).deploy();
   const cfg = [31337, deployer.address, await asset.getAddress(), ethers.id("type"), ethers.id("coin"), 39048, LOCK_DOMAIN, NULLIFIER_DOMAIN];
   const vault = await (await ethers.getContractFactory("UnicityBridgeVault")).deploy(cfg, await verifier.getAddress(), ethers.ZeroHash, deployer.address, pullPayments);
   await vault.setTrustBaseAllowed(TRUST_BASE_HASH, true);
@@ -110,6 +110,82 @@ describe("relayer-eth against the vault", () => {
     const { recipient, vault } = await deployBridge(true);
     const tooMuch = { nullifier: ethers.id("n3"), recipient: recipient.address, amount: (AMOUNT * 5n).toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0" };
     const { rejected } = await simulate(vault, [tooMuch]);
+    expect(rejected).to.deep.equal([]);
+  });
+});
+
+describe("relayer-eth simulate checks the lock refs a leaf draws on", () => {
+  function leaf(recipient, label, lockRefs) {
+    return { nullifier: ethers.id(label), recipient: recipient.address, amount: AMOUNT.toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0", lockRefs };
+  }
+
+  it("rejects a leaf whose lock ref is not the digest the vault stored", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const lock = await lockOnce(vault, "d");
+    const fine = leaf(recipient, "n4", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]);
+    const forged = leaf(recipient, "n5", [{ nonce: "0x3e7", digest: ethers.id("no such lock") }]);
+    const { rejected } = await simulate(vault, [fine, forged]);
+    expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
+    expect(rejected[0].reason).to.include("lock");
+    expect(rejected[0].kind).to.equal("lock");
+  });
+
+  it("checks lock refs for a pull-payment vault too", async () => {
+    const { recipient, vault } = await deployBridge(true);
+    const forged = leaf(recipient, "n6", [{ nonce: "0x0", digest: ethers.id("no such lock") }]);
+    const { rejected } = await simulate(vault, [forged]);
+    expect(rejected.map((r) => r.nullifier)).to.deep.equal([forged.nullifier]);
+    expect(rejected[0].kind).to.equal("lock");
+  });
+
+  it("tags a payout that would revert as a recipient rejection", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const lock = await lockOnce(vault, "f");
+    const tooMuch = { ...leaf(recipient, "n7", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]), amount: (AMOUNT * 50n).toString() };
+    const { rejected } = await simulate(vault, [tooMuch]);
+    expect(rejected.map((r) => [r.nullifier, r.kind])).to.deep.equal([[tooMuch.nullifier, "recipient"]]);
+  });
+
+  it("reads lock digests at the confirmed height and tags a lock not yet that deep as unconfirmed", async () => {
+    const { recipient, vault } = await deployBridge(true);
+    const lock = await lockOnce(vault, "g");
+    const fresh = leaf(recipient, "n8", [{ nonce: "0x" + lock.nonce.toString(16), digest: lock.digest }]);
+    const early = await simulate(vault, [fresh], 3);
+    expect(early.rejected.map((r) => [r.nullifier, r.kind])).to.deep.equal([[fresh.nullifier, "unconfirmed"]]);
+    await hre.network.provider.send("hardhat_mine", ["0x2"]);
+    expect((await simulate(vault, [fresh], 3)).rejected).to.deep.equal([]);
+  });
+});
+
+describe("relayer-eth simulate mirrors what the vault will pay", () => {
+  const FAR = (2n ** 40n).toString();
+  function leaf(label, recipient, amount, feeRecipient = ethers.ZeroAddress, feeAmount = "0", deadline = "0") {
+    return { nullifier: ethers.id(label), recipient, amount: amount.toString(), feeRecipient, feeAmount, deadline };
+  }
+
+  it("rejects a transfer that returns false without reverting", async () => {
+    const { recipient, vault } = await deployBridge(false, "MockFalseReturnTRC20");
+    await lockOnce(vault, "h");
+    const { rejected } = await simulate(vault, [leaf("n10", recipient.address, AMOUNT)]);
+    expect(rejected.map((r) => [r.reason, r.kind])).to.deep.equal([["transfer returned false", "recipient"]]);
+  });
+
+  it("simulates the fee transfer to the fee recipient", async () => {
+    const { recipient, asset, vault } = await deployBridge(false, "MockBlocklistTRC20");
+    await lockOnce(vault, "i");
+    const feeRecipient = (await ethers.getSigners())[2];
+    await asset.setBlocked(feeRecipient.address, true);
+    const paid = leaf("n11", recipient.address, AMOUNT, feeRecipient.address, "1000", FAR);
+    const { rejected } = await simulate(vault, [paid]);
+    expect(rejected.map((r) => r.nullifier)).to.deep.equal([paid.nullifier]);
+    expect(rejected[0].reason).to.include("blocked");
+  });
+
+  it("does not simulate a payout to the vault itself, which the vault treats as a no-op", async () => {
+    const { asset, vault } = await deployBridge(false, "MockBlocklistTRC20");
+    const vaultAddress = await vault.getAddress();
+    await asset.setBlocked(vaultAddress, true);
+    const { rejected } = await simulate(vault, [leaf("n12", vaultAddress, AMOUNT)]);
     expect(rejected).to.deep.equal([]);
   });
 });

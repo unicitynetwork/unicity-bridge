@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use bridge_return_guest::GuestInput;
+use bridge_return_guest::{wire, GuestInput};
 use serde::{Deserialize, Serialize};
 
-use crate::store::{hex32, LeafHex, ReturnRecord, ReturnStatus};
+use crate::store::{hex32, LeafHex, LockRefHex, ReturnRecord, ReturnStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +42,29 @@ impl Burn {
     pub fn nonces_disjoint(&self, taken: &HashSet<u64>) -> bool {
         self.lock_nonces.iter().all(|n| !taken.contains(n))
     }
+
+    /// `None` when the stored input no longer decodes: such a burn has no lock refs to
+    /// check, so it is not simulated, and assembly excludes it as invalid.
+    pub fn leaf_to_settle(&self) -> Option<LeafToSettle> {
+        let input = wire::decode_guest_input(&self.wire_input).ok()?;
+        Some(LeafToSettle {
+            leaf: self.leaf.clone(),
+            lock_refs: input
+                .sorted_lock_refs
+                .into_iter()
+                .map(LockRefHex::from)
+                .collect(),
+        })
+    }
+}
+
+/// What the settlement simulation checks per leaf: the payout and the source locks it draws on.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeafToSettle {
+    #[serde(flatten)]
+    pub leaf: LeafHex,
+    pub lock_refs: Vec<LockRefHex>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -170,5 +193,34 @@ mod tests {
         assert!(!member.in_batch("b2"));
         member.record.transition(ReturnStatus::Settled, 3_000);
         assert!(!member.in_batch("b1"));
+    }
+
+    #[test]
+    fn a_leaf_to_settle_carries_the_lock_refs_the_burn_draws_on() {
+        let fixture = build_b1_direct_bridge_fixture();
+        let wire = wire::encode_guest_input(&fixture.input);
+        let burn = Burn::from_input("r1".to_string(), &fixture.input, wire);
+        let to_settle = burn.leaf_to_settle().unwrap();
+        assert_eq!(to_settle.leaf, burn.leaf);
+        assert_eq!(
+            to_settle.lock_refs,
+            vec![LockRefHex::from(fixture.input.sorted_lock_refs[0])]
+        );
+        let json = serde_json::to_value(&to_settle).unwrap();
+        assert_eq!(json["nullifier"], burn.leaf.nullifier);
+        assert_eq!(json["lockRefs"][0]["nonce"], "0x7");
+    }
+
+    #[test]
+    fn a_burn_whose_input_does_not_decode_has_no_leaf_to_settle() {
+        let fixture = build_b1_direct_bridge_fixture();
+        let mut wire = wire::encode_guest_input(&fixture.input);
+        let burn = Burn::from_input("r1".to_string(), &fixture.input, wire.clone());
+        wire.truncate(wire.len() / 2);
+        let corrupt = Burn {
+            wire_input: wire,
+            ..burn
+        };
+        assert_eq!(corrupt.leaf_to_settle(), None);
     }
 }

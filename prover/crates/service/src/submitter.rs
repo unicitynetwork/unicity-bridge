@@ -4,8 +4,8 @@ use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    domain::assembler::Rejected,
-    store::{BatchBundle, LeafHex},
+    domain::{assembler::Rejected, burn::LeafToSettle},
+    store::BatchBundle,
 };
 
 #[derive(Clone)]
@@ -63,6 +63,19 @@ impl Submitter {
         Self::with_commands(None, None)
     }
 
+    /// The simulation is what checks each burn's lock refs against the vault before
+    /// proving, so a service that admits burns refuses to run without it.
+    pub fn require_simulation(self) -> Result<Self, String> {
+        if self.simulate_cmd.is_none() {
+            return Err(
+                "BRIDGE_RETURN_SIMULATE_CMD is required: it checks each burn's lock refs \
+                        against the vault before proving"
+                    .to_string(),
+            );
+        }
+        Ok(self)
+    }
+
     pub fn label(&self) -> &'static str {
         match self.submit_cmd {
             None => "none",
@@ -77,7 +90,7 @@ impl Submitter {
         }
     }
 
-    pub async fn simulate(&self, leaves: &[LeafHex]) -> Result<Vec<Rejected>, SimulateError> {
+    pub async fn simulate(&self, leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {
         match &self.simulate_cmd {
             None => Ok(Vec::new()),
             Some(cmd) => run_simulate_command(cmd, leaves, self.timeout).await,
@@ -119,7 +132,7 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) 
 
 async fn run_simulate_command(
     cmd: &str,
-    leaves: &[LeafHex],
+    leaves: &[LeafToSettle],
     timeout: Duration,
 ) -> Result<Vec<Rejected>, SimulateError> {
     let payload = serde_json::json!({ "leaves": leaves }).to_string();
@@ -175,6 +188,10 @@ fn snippet(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        domain::assembler::RejectionKind,
+        store::{LeafHex, LockRefHex},
+    };
 
     fn bundle() -> BatchBundle {
         BatchBundle {
@@ -257,6 +274,15 @@ mod tests {
         assert_eq!(outcome, SubmitOutcome::Skipped);
     }
 
+    #[test]
+    fn simulation_is_required_by_a_service_that_admits_burns() {
+        let Err(err) = Submitter::none().require_simulation() else {
+            panic!("a submitter without simulation passed");
+        };
+        assert!(err.contains("BRIDGE_RETURN_SIMULATE_CMD"), "{err}");
+        assert!(simulator("true").require_simulation().is_ok());
+    }
+
     #[tokio::test]
     async fn simulate_without_command_rejects_nothing() {
         assert_eq!(Submitter::none().simulate(&[]).await.unwrap(), Vec::new());
@@ -274,9 +300,21 @@ mod tests {
             rejected,
             vec![Rejected {
                 nullifier: "0x01".to_string(),
-                reason: "blocked".to_string()
+                reason: "blocked".to_string(),
+                kind: RejectionKind::Recipient,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_reads_a_lock_rejection() {
+        let rejected = simulator(
+            r#"cat >/dev/null; echo '{"rejected":[{"nullifier":"0x01","reason":"no lock","kind":"lock"}]}'"#,
+        )
+        .simulate(&[])
+        .await
+        .unwrap();
+        assert_eq!(rejected[0].kind, RejectionKind::Lock);
     }
 
     #[tokio::test]
@@ -291,5 +329,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SimulateError::Decode(_)));
+    }
+
+    #[tokio::test]
+    async fn run_simulate_command_hands_each_leaf_its_lock_refs() {
+        let leaf = LeafToSettle {
+            leaf: LeafHex {
+                nullifier: "0x01".to_string(),
+                recipient: "0xaa".to_string(),
+                amount: "0x01".to_string(),
+                fee_recipient: "0x00".to_string(),
+                fee_amount: "0x00".to_string(),
+                deadline: "0x00".to_string(),
+            },
+            lock_refs: vec![LockRefHex {
+                nonce: "0x7".to_string(),
+                digest: "0xab".to_string(),
+            }],
+        };
+        let rejected = simulator(
+            r#"grep -qF '"nonce":"0x7"' && echo '{"rejected":[]}' || echo '{"rejected":[{"nullifier":"0x01","reason":"lock refs missing from the payload"}]}'"#,
+        )
+        .simulate(&[leaf])
+        .await
+        .unwrap();
+        assert_eq!(rejected, Vec::new());
     }
 }

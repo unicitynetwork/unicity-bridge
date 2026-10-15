@@ -16,7 +16,7 @@ pub struct ServiceConfig {
     pub config_hash: Option<[u8; 32]>,
     pub trust_base_path: Option<PathBuf>,
     /// Frozen deployment config JSON (e.g. `deployments/nile/nile-usdt.json`).
-    /// Required (with `trust_base_path`) to accept the wallet `{tokenCbor,reasonBytes}` envelope.
+    /// Required, with `trust_base_path`: the service admits only burns certified under this deployment's trust base.
     pub deployment_config_path: Option<PathBuf>,
     /// Source-chain lock-justification CBOR tag (bridge lock = 1330002 on every family).
     pub justification_tag: u64,
@@ -24,6 +24,9 @@ pub struct ServiceConfig {
     pub max_batch_size: usize,
     pub max_batch_bytes: usize,
     pub command_timeout: Duration,
+    /// The most returns held unfinished (queued, proving, awaiting settlement or a retry);
+    /// `POST /returns` refuses a new burn beyond it.
+    pub max_pending: usize,
     pub state_dir: Option<PathBuf>,
     pub retry: RetryPolicy,
     pub fee: FeePolicy,
@@ -59,6 +62,7 @@ impl Default for ServiceConfig {
             max_batch_size: 8,
             max_batch_bytes: 8 << 20,
             command_timeout: Duration::from_secs(600),
+            max_pending: 1000,
             state_dir: None,
             retry: RetryPolicy::default(),
             fee: FeePolicy::default(),
@@ -105,6 +109,9 @@ impl ServiceConfig {
         }
         if let Some(bytes) = env_parsed("BRIDGE_RETURN_MAX_BATCH_BYTES")? {
             cfg.max_batch_bytes = positive(bytes, "BRIDGE_RETURN_MAX_BATCH_BYTES")?;
+        }
+        if let Some(max) = env_parsed("BRIDGE_RETURN_MAX_PENDING")? {
+            cfg.max_pending = positive(max, "BRIDGE_RETURN_MAX_PENDING")?;
         }
         cfg.state_dir = env_opt("BRIDGE_RETURN_STATE_DIR").map(PathBuf::from);
         if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_RETRY_BASE_SECS")? {

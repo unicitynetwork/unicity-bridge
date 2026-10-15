@@ -96,8 +96,8 @@ cargo run -p bridge-return-service --release
 | Env var | Default | Purpose |
 |---|---|---|
 | `BRIDGE_RETURN_BIND` | `127.0.0.1:8787` | HTTP bind address. |
-| `BRIDGE_DEPLOYMENT_CONFIG` | — | Path to the frozen deployment JSON (`deployments/nile/nile-usdt.json`). **Required for envelope intake.** |
-| `TRUST_BASE_PATH` | — | Path to the trust base JSON (`bft-trustbase.testnet2.json`). **Required for envelope intake.** |
+| `BRIDGE_DEPLOYMENT_CONFIG` | — | Path to the frozen deployment JSON (`deployments/nile/nile-usdt.json`). **Required.** |
+| `TRUST_BASE_PATH` | — | Path to the trust base JSON (`bft-trustbase.testnet2.json`). **Required.** |
 | `BRIDGE_JUSTIFICATION_TAG` | `1330002` | Source-chain lock-justification CBOR tag (Tron USDT). |
 | `BRIDGE_CONFIG_HASH` | — | If set, the intake cross-checks the envelope's declared `configHash`. |
 | `BRIDGE_RETURN_PROVE_MODE` | `precheck_only` | `precheck_only` or `sp1_groth16`. |
@@ -117,14 +117,15 @@ cargo run -p bridge-return-service --release
 | `BRIDGE_RETURN_FEE_WINDOW_SECS` | `86400` | Time the service wants between accepting a burn and the burn's fee deadline. |
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
 | `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer-eth.js events` or `relayer.js events`). Unset assumes a pristine vault. |
-| `BRIDGE_RETURN_SIMULATE_CMD` | — | Transfer pre-simulation command (see below). Unset = no simulation. |
+| `BRIDGE_RETURN_SIMULATE_CMD` | — | Settlement pre-simulation command: lock-ref and transfer checks (see below). **Required.** |
+| `BRIDGE_RETURN_MAX_PENDING` | `1000` | Most returns held unfinished (queued, proving, awaiting settlement or a retry); beyond it `POST /returns` refuses a new burn with `queue_full` (HTTP 503, recoverable). |
 | `RUST_LOG` | — | e.g. `bridge_return_service=info`. |
 
-Without `BRIDGE_DEPLOYMENT_CONFIG` + `TRUST_BASE_PATH` the service runs in
-**wireInput-only** mode (accepts a pre-assembled guest input; used by fixtures /
-relayers) and refuses the wallet `{tokenCbor, reasonBytes}` envelope with
-`intake_unconfigured` (HTTP 503, recoverable: the same burn goes through once the
-operator fixes the configuration).
+`BRIDGE_DEPLOYMENT_CONFIG`, `TRUST_BASE_PATH` and `BRIDGE_RETURN_SIMULATE_CMD` are
+required: the service refuses to start without them (exit 2), and admits a burn only through the wallet envelope, which
+it verifies against that trust base. A pre-assembled `wireInput` is refused with
+`raw_witness_refused` (HTTP 400), since nothing would pin its trust base to the
+deployment's. Only the in-process test router, built without an intake, takes one.
 
 ---
 
@@ -132,7 +133,7 @@ operator fixes the configuration).
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/returns` | Submit `{tokenCbor, configHash, reasonBytes}` (or `{wireInput}`). Idempotent on nullifier; S1 precheck rejects bad burns synchronously. |
+| `POST` | `/returns` | Submit `{tokenCbor, configHash, reasonBytes}`. Idempotent on nullifier; S1 precheck rejects bad burns synchronously. |
 | `GET` | `/returns/:id` | Rich status record (below). |
 | `GET` | `/returns?nullifier=` | Lookup by nullifier (wallet idempotency); `null` if unknown. |
 | `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `settleTxid`) — anyone can self-submit it. |
@@ -196,16 +197,28 @@ Example (wrapping the proven relayer):
 BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer-eth.js settle --stdin'
 ```
 
-### Transfer pre-simulation
+### Settlement pre-simulation
 
-The vault pays every leaf in one transaction, so a recipient whose transfer
-reverts would revert the whole batch. Set `BRIDGE_RETURN_SIMULATE_CMD` to a
-program that receives `{"leaves": [...]}` (the bundle's leaf objects) on
-**stdin** and prints `{"rejected": [{"nullifier", "reason"}]}` on stdout (exit 0;
-exit 1 when the node is unreachable). The service runs it before every proof
-and sets rejected burns aside as recoverable failures. Unset, nothing is
-simulated. `contracts/tron/scripts/relayer-eth.js simulate --stdin` (and `relayer.js` for Tron) implements it
-with a constant call of the asset's `transfer` from the vault.
+Nothing but the vault knows whether a burn's source locks exist, and the vault
+pays every leaf in one transaction, so a recipient whose transfer reverts would
+revert the whole batch. `BRIDGE_RETURN_SIMULATE_CMD` (required) is a program
+that receives `{"leaves": [...]}` (the bundle's leaf objects, each with the
+`lockRefs` it draws on) on **stdin** and prints
+`{"rejected": [{"nullifier", "reason", "kind"}]}` on stdout (exit 0; exit 1 when
+the node is unreachable). The service runs it before every proof. `kind` is
+`lock` for a lock ref that is not the digest the vault stored: that return fails
+for good (`chain_rejected`, not recoverable) and never re-enters a batch.
+`unconfirmed` (the lock is not yet as deep as the relayer's confirmations) and
+`recipient` (the default when `kind` is absent) set the burn aside as a
+recoverable failure that is retried. A burn whose stored input no longer decodes
+is not simulated and fails for good. `contracts/tron/scripts/relayer-eth.js simulate --stdin`
+(and `relayer.js` for Tron) implements it: lock refs are checked for pull-payment
+vaults too, `relayer-eth.js` reads them at the block `ETH_SETTLE_CONFIRMATIONS`
+makes final (`relayer.js` reads them at the head, as TronWeb constant calls take no
+block), and for a push vault the asset's `transfer` from the vault is constant-called
+for the principal and for the fee, skipping a payout of zero or to the vault itself,
+with a returned `false` counted as a failure on EVM chains (not on Tron, where USDT
+returns false on success).
 
 ---
 

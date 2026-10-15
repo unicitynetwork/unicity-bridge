@@ -84,6 +84,11 @@ impl Ledger {
         pending
     }
 
+    /// Returns neither settled nor finally failed: queued, in a batch, or awaiting a retry.
+    pub fn unfinished(&self) -> usize {
+        self.returns.values().filter(|r| !r.is_done()).count()
+    }
+
     pub fn burns(&self, ids: &[String]) -> Vec<&Burn> {
         ids.iter()
             .filter_map(|id| self.returns.get(id).map(|r| &r.burn))
@@ -334,7 +339,7 @@ impl Ledger {
             Exclusion::Rejected { message } => schedule_retry(
                 record,
                 ErrorKind::SubmissionFailed,
-                &format!("recipient rejected: {message}"),
+                &format!("rejected by the settlement simulation: {message}"),
                 at_ms,
                 retry,
             ),

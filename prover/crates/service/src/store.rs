@@ -221,13 +221,29 @@ impl ReturnStore {
     }
 
     pub fn accept(&self, burn: Burn, record: ReturnRecord, now_ms: u128) -> (ReturnRecord, bool) {
+        self.accept_within(burn, record, now_ms, usize::MAX)
+            .expect("no limit on unfinished returns")
+    }
+
+    /// Accept like [`Self::accept`], but refuse (`None`, nothing persisted) a burn the
+    /// store does not hold yet once `max_unfinished` returns are still unfinished.
+    pub fn accept_within(
+        &self,
+        burn: Burn,
+        record: ReturnRecord,
+        now_ms: u128,
+        max_unfinished: usize,
+    ) -> Option<(ReturnRecord, bool)> {
         let mut inner = self.inner.lock().expect("store poisoned");
         let known = inner
             .ledger
             .by_nullifier(&record.nullifier)
             .map(|r| (r.burn.id.clone(), r.record.failed_recoverably()));
+        if known.is_none() && inner.ledger.unfinished() >= max_unfinished {
+            return None;
+        }
         let id = match known {
-            Some((id, false)) => return (inner.ledger.record(&id).expect("known"), false),
+            Some((id, false)) => return Some((inner.ledger.record(&id).expect("known"), false)),
             Some((id, true)) => {
                 inner.commit(Event::Requeued {
                     id: id.clone(),
@@ -242,7 +258,7 @@ impl ReturnStore {
             }
         };
         self.changed.notify_one();
-        (inner.ledger.record(&id).expect("just committed"), true)
+        Some((inner.ledger.record(&id).expect("just committed"), true))
     }
 
     pub fn apply(&self, event: Event) {

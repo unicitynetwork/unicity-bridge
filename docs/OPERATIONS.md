@@ -109,7 +109,8 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
-| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, unset | settlement, event scan and transfer pre-simulation hooks; replaceable by any program with the same stdin/stdout contract |
+| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, the Node relayer | settlement, event scan and pre-simulation (lock refs, transfers) hooks; replaceable by any program with the same stdin/stdout contract. The service refuses to start without a simulate command |
+| `BRIDGE_RETURN_MAX_PENDING` | `1000` | most returns held unfinished; beyond it a new burn is refused with `queue_full` (HTTP 503, recoverable) |
 | `BRIDGE_RETURN_BIND` | `0.0.0.0:8787` | listen address |
 | `SP1_WORKER_NUM_*` | `1` | single-worker proving; the only setting that fits a 16 GB host (`docs/dev-plan/03-status.md`) |
 
@@ -228,12 +229,15 @@ settlement broadcast retrying for half an hour, so it is not the service's
 default. Commands the service runs against the chain are cut off after
 `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` (default 600) and count as a failed attempt.
 
-`BRIDGE_RETURN_SIMULATE_CMD` set to `relayer-eth.js simulate --stdin` drops a
-leaf whose transfer would revert before proving the batch; the reason is the
-token's own revert string (USDC: `ERC20: transfer amount exceeds balance`). It
-matters in push-payment mode only. Against a pull-payment vault, such as the
-Sepolia one, both relayers reject nothing, since settlement only credits what
-the vault owes. The Tron relayer's reading of the constant-call response was
+`BRIDGE_RETURN_SIMULATE_CMD` (`relayer-eth.js simulate --stdin` by default)
+checks each leaf's lock refs against the vault's `lockDigest`, read at the block
+`ETH_SETTLE_CONFIRMATIONS` makes final, before proving the batch. A lock ref the
+vault does not hold fails that return for good; a lock not yet that deep is
+retried. In push-payment mode it also drops a leaf whose transfer would revert;
+the reason is the token's own revert string (USDC: `ERC20: transfer amount
+exceeds balance`), and the return is retried. Against a pull-payment vault, such
+as the Sepolia one, only the lock refs are checked, since settlement only
+credits what the vault owes. The Tron relayer's reading of the constant-call response was
 never checked against Nile (§8).
 
 ## 6. Where the money-critical state lives
@@ -291,7 +295,9 @@ Worth alerting on:
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
-| A recipient's transfer would revert and take the batch with it | push payments, a hostile or blocked recipient | with `BRIDGE_RETURN_SIMULATE_CMD` set the service excludes the leaf before proving and fails that return recoverably; without it the batch reverts on chain and is retried with the same members; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |
+| A recipient's transfer would revert and take the batch with it | push payments, a hostile or blocked recipient | the simulate command excludes the leaf before proving and the service fails that return recoverably; a deployment expecting this uses pull payments (`PULL_PAYMENTS`, immutable, chosen at deploy) |
+| Return `failed` for good with `lock refs are not the vault's` | the burn draws on a lock the vault never stored (a fabricated or foreign burn) | nothing; the return never re-enters a batch |
+| `POST /returns` answers `queue_full` (HTTP 503) | `BRIDGE_RETURN_MAX_PENDING` returns are unfinished | wait for batches to settle (the wallet's resubmit is accepted then), or raise the limit |
 | First proof fails with a truncated proving key | interrupted download | delete the artifact volume and let it download again; verify the size against `docs/dev-plan/03-status.md` |
 | Proof out of memory | under one proof's peak available (about 26 GiB for a live burn on the current guest) | more memory; there is no smaller mode |
 

@@ -371,7 +371,8 @@ event and move the record back to the earliest still-valid stage:
 Synchronous `POST /returns` errors are returned as soon as possible with
 `{"error": {"code", "message", "recoverable"}}`. Important codes:
 `invalid_hex`, `invalid_wire_input`, `precheck_rejected`,
-`config_hash_mismatch`, `unsupported_batch_shape`. Async failures are stored in
+`config_hash_mismatch`, `raw_witness_refused`, `unsupported_batch_shape`, and `queue_full`
+(HTTP 503, recoverable: the service holds `BRIDGE_RETURN_MAX_PENDING` unfinished returns). Async failures are stored in
 `GET /returns/:id.failure` with a `kind` such as `proving_failed`,
 `submission_failed`, `chain_rejected`, or `service_unavailable`. A failed service
 attempt does **not** imply funds are lost; the burned blob remains the recovery

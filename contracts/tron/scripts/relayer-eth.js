@@ -107,20 +107,58 @@ async function settle(vault, bundle, confirmations = 1) {
   return { txid: tx.hash, gasUsed: receipt.gasUsed, blockNumber: receipt.blockNumber };
 }
 
-async function simulate(vault, leaves) {
-  if (await vault.PULL_PAYMENTS()) return { rejected: [] };
+// Each rejection names its kind: "lock" (the vault holds no such lock, final for the
+// burn), "unconfirmed" (the lock is not yet `confirmations` deep, retried) or
+// "recipient" (the payout would revert now, retried). Lock digests are read at the
+// same confirmed block the settled log is read at.
+async function simulate(vault, leaves, confirmations = 1) {
   const provider = vault.runner.provider ?? vault.runner;
-  const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
-  const vaultAddress = await vault.getAddress();
+  const confirmed = Math.max((await provider.getBlockNumber()) - (confirmations - 1), 0);
   const rejected = [];
   for (const l of leaves) {
-    try {
-      await asset.transfer.staticCall(l.recipient, BigInt(l.amount), { from: vaultAddress });
-    } catch (e) {
-      rejected.push({ nullifier: l.nullifier, reason: revertReason(asset, e) });
-    }
+    const reason = await unknownLock(vault, l.lockRefs || [], confirmed);
+    if (!reason) continue;
+    const kind = (await unknownLock(vault, l.lockRefs || [], "latest")) ? "lock" : "unconfirmed";
+    rejected.push({ nullifier: l.nullifier, reason, kind });
+  }
+  if (await vault.PULL_PAYMENTS()) return { rejected };
+  const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
+  const vaultAddress = await vault.getAddress();
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const refused = new Set(rejected.map((r) => r.nullifier));
+  for (const l of leaves) {
+    if (refused.has(l.nullifier)) continue;
+    const fee = BigInt(l.feeRecipient) !== 0n && now <= BigInt(l.deadline) ? BigInt(l.feeAmount) : 0n;
+    const principal = BigInt(l.amount) - fee;
+    const reason =
+      (await transferFails(asset, vaultAddress, l.recipient, principal)) ??
+      (await transferFails(asset, vaultAddress, l.feeRecipient, fee));
+    if (reason) rejected.push({ nullifier: l.nullifier, reason, kind: "recipient" });
   }
   return { rejected };
+}
+
+// The vault skips a payout of zero or to itself, and on EVM chains a transfer that
+// returns false has failed; a void return (Ethereum USDT) decodes to nothing and passes.
+async function transferFails(asset, vaultAddress, to, amount) {
+  if (amount === 0n || to.toLowerCase() === vaultAddress.toLowerCase()) return null;
+  try {
+    const ok = await asset.transfer.staticCall(to, amount, { from: vaultAddress });
+    return ok === false ? "transfer returned false" : null;
+  } catch (e) {
+    if (e.code === "BAD_DATA") return null;
+    return revertReason(asset, e);
+  }
+}
+
+async function unknownLock(vault, lockRefs, blockTag) {
+  for (const ref of lockRefs) {
+    const stored = await vault.lockDigest(BigInt(ref.nonce), { blockTag });
+    if (stored.toLowerCase() !== ref.digest.toLowerCase()) {
+      return `lock ${BigInt(ref.nonce)} digest ${ref.digest} is not the vault's ${stored}`;
+    }
+  }
+  return null;
 }
 
 function readStdin() {
@@ -161,7 +199,7 @@ async function main() {
     process.stdout.write(txid);
   } else if (cmd === "simulate" && stdin) {
     const payload = JSON.parse(await readStdin());
-    process.stdout.write(JSON.stringify(await simulate(vault, payload.leaves || [])));
+    process.stdout.write(JSON.stringify(await simulate(vault, payload.leaves || [], settleConfirmations)));
   } else {
     console.error("usage: relayer-eth.js events | scan | settle --stdin | simulate --stdin");
     process.exit(2);

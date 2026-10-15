@@ -6,7 +6,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bridge_return_host::fixture::{build_b1_direct_bridge_fixture, build_split_bridge_fixture};
+use std::sync::Arc;
+
+use bridge_return_host::{
+    fixture::{
+        build_b1_direct_bridge_fixture, build_settlement_fixture, build_split_bridge_fixture,
+    },
+    s1::EnvelopeIntake,
+};
 use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
@@ -178,6 +185,37 @@ async fn a_return_the_service_already_holds_is_not_charged() {
     let (status, again) = submit(&charging(fixture_fee(), store), member(11, 0x61)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["returnId"], accepted["returnId"]);
+    assert_eq!(again["duplicate"], true);
+}
+
+#[tokio::test]
+async fn a_full_queue_refuses_a_new_burn_before_holding_it() {
+    let store = memory_store();
+    let app = router(AppState {
+        config: ServiceConfig {
+            max_pending: 1,
+            ..ServiceConfig::default()
+        },
+        store: store.clone(),
+        clock: Clock::default(),
+        intake: None,
+        chain_events: ChainEvents::none(),
+    });
+    let held = post_return(&app, member(11, 0x61)).await;
+    let (status, error) = submit(&app, member(12, 0x62)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error["error"]["code"], "queue_full");
+    assert_eq!(error["error"]["recoverable"], true);
+    assert_eq!(store.health().queue_depth, 1);
+    assert!(store
+        .get_by_nullifier(&format!(
+            "0x{}",
+            hex::encode(support::nullifier_of(&member(12, 0x62)))
+        ))
+        .is_none());
+
+    let again = post_return(&app, member(11, 0x61)).await;
+    assert_eq!(again["returnId"], held["returnId"]);
     assert_eq!(again["duplicate"], true);
 }
 
@@ -505,4 +543,55 @@ async fn wait_status(app: &axum::Router, id: &str, status: &str) {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("return {id} never reached {status}: {record}");
+}
+
+fn configured_for_sepolia() -> (axum::Router, ReturnStore, Arc<EnvelopeIntake>) {
+    let deployment = include_str!("../../../../deployments/sepolia/sepolia-usdc.json");
+    let trust_base = include_str!("../../../../bft-trustbase.testnet2.json");
+    let intake = Arc::new(EnvelopeIntake::from_json(deployment, trust_base, 1_330_002).unwrap());
+    let store = memory_store();
+    let app = router(AppState {
+        config: ServiceConfig {
+            config_hash: Some(intake.config_hash()),
+            ..ServiceConfig::default()
+        },
+        store: store.clone(),
+        clock: Clock::default(),
+        intake: Some(intake.clone()),
+        chain_events: ChainEvents::none(),
+    });
+    (app, store, intake)
+}
+
+#[tokio::test]
+async fn a_configured_service_refuses_a_raw_witness_even_one_built_for_its_deployment() {
+    let (app, store, intake) = configured_for_sepolia();
+    let self_certified =
+        build_settlement_fixture(intake.config(), [0x42; 20], 1_000_000, 999_999).input;
+    assert_eq!(
+        self_certified.public_values.config_hash,
+        intake.config_hash()
+    );
+    assert_ne!(
+        self_certified.public_values.trust_base_hash,
+        intake.trust_base_hash()
+    );
+    let (status, error) = submit(&app, self_certified).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "raw_witness_refused");
+    assert_eq!(error["error"]["recoverable"], false);
+    assert_eq!(store.health().queue_depth, 0);
+}
+
+#[test]
+fn the_intake_refuses_a_trust_base_the_deployment_does_not_pin() {
+    let deployment = include_str!("../../../../deployments/sepolia/sepolia-usdc.json");
+    let trust_base = include_str!("../../../../bft-trustbase.testnet2.json");
+    let pinned = "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0";
+    assert!(deployment.contains(pinned));
+    let other = deployment.replace(pinned, &format!("0x{}", "00".repeat(32)));
+    let Err(err) = EnvelopeIntake::from_json(&other, trust_base, 1_330_002) else {
+        panic!("accepted a trust base the deployment does not pin");
+    };
+    assert!(err.to_string().contains("pins"), "{err}");
 }

@@ -4,13 +4,12 @@ use bridge_return_service::{
     clock::Clock,
     config::ServiceConfig,
     domain::policy::BatchPolicy,
-    load_intake,
+    load_intake, load_submitter,
     orchestrator::Orchestrator,
     prover::{GuestCheck, Prover},
     router,
     sequencer::ChainEvents,
     store::ReturnStore,
-    submitter::Submitter,
     AppState,
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
@@ -28,14 +27,10 @@ async fn main() {
     });
     let bind: SocketAddr = config.bind;
     let intake = load_intake(&config).unwrap_or_else(|err| {
-        eprintln!("envelope intake disabled: {err}");
-        None
+        eprintln!("refusing to start: {err}");
+        std::process::exit(2);
     });
-    if intake.is_some() {
-        tracing::info!("envelope intake enabled (deployment config + trust base loaded)");
-    } else {
-        tracing::warn!("envelope intake disabled — only wireInput submissions accepted");
-    }
+    tracing::info!("envelope intake enabled (deployment config + trust base loaded)");
     let clock = Clock::default();
     let store = match &config.state_dir {
         Some(dir) => ReturnStore::open(dir, config.retry, clock.now_ms()).unwrap_or_else(|err| {
@@ -49,7 +44,10 @@ async fn main() {
             ReturnStore::memory(config.retry)
         }
     };
-    let submitter = Submitter::from_env().with_timeout(config.command_timeout);
+    let submitter = load_submitter(&config).unwrap_or_else(|err| {
+        eprintln!("refusing to start: {err}");
+        std::process::exit(2);
+    });
     tracing::info!("S4 submitter: {}", submitter.label());
     let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
@@ -101,7 +99,7 @@ async fn main() {
         config,
         store,
         clock,
-        intake,
+        intake: Some(intake),
         chain_events,
     })
     .layer(

@@ -3,13 +3,13 @@ use crate::{
     domain::{
         assembler::{assemble, AssembleError, Exclusion},
         batch::Batch,
-        burn::Burn,
+        burn::{Burn, LeafToSettle},
         event::Event,
         policy::BatchPolicy,
         retry::RetryPolicy,
     },
     ports::{ChainLog, ProofBackend, Settler},
-    store::{hex32, BatchBundle, ErrorKind, LeafHex, ReturnStore, Taken},
+    store::{hex32, BatchBundle, ErrorKind, ReturnStore, Taken},
     submitter::SubmitOutcome,
 };
 
@@ -112,7 +112,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let burns: Vec<Burn> = self
             .store
             .read(|ledger| ledger.burns(&batch.members).into_iter().cloned().collect());
-        let leaves: Vec<LeafHex> = burns.iter().map(|b| b.leaf.clone()).collect();
+        let leaves: Vec<LeafToSettle> = burns.iter().filter_map(Burn::leaf_to_settle).collect();
         let rejected = match self.settler.simulate(&leaves).await {
             Ok(rejected) => rejected,
             Err(e) => {

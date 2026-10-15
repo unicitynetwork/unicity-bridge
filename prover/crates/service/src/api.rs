@@ -106,7 +106,8 @@ pub struct CreateReturnRequest {
     pub config_hash: Option<String>,
     #[serde(default)]
     pub anchor_hint: Option<String>,
-    /// Alternative: a pre-assembled guest wire input (fixtures / relayers).
+    /// Alternative for in-process fixtures: a pre-assembled guest wire input. Refused
+    /// once a deployment config is loaded, since nothing pins its trust base.
     #[serde(default)]
     pub wire_input: Option<String>,
 }
@@ -175,7 +176,10 @@ async fn create_return(
         report.public_values,
         state.clock.now_ms(),
     );
-    let (record, inserted) = state.store.accept(burn, record, state.clock.now_ms());
+    let (record, inserted) = state
+        .store
+        .accept_within(burn, record, state.clock.now_ms(), state.config.max_pending)
+        .ok_or(ApiError::QueueFull(state.config.max_pending))?;
     if inserted {
         tracing::info!(
             return_id = %record.return_id,
@@ -241,6 +245,8 @@ pub enum ApiError {
     ChainUnsynced(String),
     #[error("envelope intake is not configured (set BRIDGE_DEPLOYMENT_CONFIG + TRUST_BASE_PATH)")]
     IntakeUnconfigured,
+    #[error("the service already holds {0} unfinished returns; resubmit once some settle")]
+    QueueFull(usize),
     #[error("return not found: {0}")]
     NotFound(String),
 }
@@ -252,7 +258,7 @@ impl IntoResponse for ApiError {
             | ApiError::FeeRefused(_, _)
             | ApiError::PrecheckRejected(_)
             | ApiError::Host(_) => StatusCode::BAD_REQUEST,
-            ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured => {
+            ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured | ApiError::QueueFull(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -263,6 +269,7 @@ impl IntoResponse for ApiError {
             ApiError::Host(_) => "host_error",
             ApiError::ChainUnsynced(_) => "chain_unsynced",
             ApiError::IntakeUnconfigured => "intake_unconfigured",
+            ApiError::QueueFull(_) => "queue_full",
             ApiError::NotFound(_) => "not_found",
         };
         let recoverable = matches!(
@@ -271,6 +278,7 @@ impl IntoResponse for ApiError {
                 | ApiError::Host(_)
                 | ApiError::ChainUnsynced(_)
                 | ApiError::IntakeUnconfigured
+                | ApiError::QueueFull(_)
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves
@@ -321,6 +329,14 @@ fn build_wire_input(state: &AppState, req: &CreateReturnRequest) -> Result<Vec<u
                     "provide {tokenCbor, reasonBytes} (wallet envelope) or wireInput".to_string(),
                 )
             })?;
+            if state.intake.is_some() {
+                return Err(ApiError::BadRequest(
+                    "raw_witness_refused",
+                    "this service admits burns through the wallet envelope {tokenCbor, reasonBytes}; \
+                     a pre-assembled wireInput is taken only by a service run without a deployment config"
+                        .to_string(),
+                ));
+            }
             decode_hex(wire)
         }
         _ => Err(ApiError::BadRequest(

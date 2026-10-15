@@ -307,6 +307,28 @@ function toTronHex(tw, address) {
   return hex.length === 40 ? "41" + hex : hex;
 }
 
+// Lock digests are read at the head: TronWeb constant calls take no block tag. The
+// rejection names its kind, "lock" (final for the burn) or "recipient" (retried).
+async function unknownLock(vault, lockRefs) {
+  for (const ref of lockRefs) {
+    const nonce = BigInt(ref.nonce);
+    const stored = String(await vault.lockDigest(nonce.toString()).call());
+    if (stored.toLowerCase().replace(/^0x/, "") !== ref.digest.toLowerCase().replace(/^0x/, "")) {
+      return `lock ${nonce} digest ${ref.digest} is not the vault's ${stored}`;
+    }
+  }
+  return null;
+}
+
+async function lockRejections(vault, leaves) {
+  const rejected = [];
+  for (const leaf of leaves) {
+    const reason = await unknownLock(vault, leaf.lockRefs || []);
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason, kind: "lock" });
+  }
+  return rejected;
+}
+
 async function simulateFromStdin() {
   const payload = JSON.parse(await readStdin());
   const env = loadEnv();
@@ -320,8 +342,9 @@ async function simulateFromStdin() {
     )
   ).abi;
   const vault = tw.contract(abi, vaultHex);
+  const rejected = await lockRejections(vault, payload.leaves || []);
   if (await vault.PULL_PAYMENTS().call()) {
-    process.stdout.write(JSON.stringify({ rejected: [] }));
+    process.stdout.write(JSON.stringify({ rejected }));
     return;
   }
   const assetHex = toTronHex(tw, await vault.ASSET().call());
@@ -329,6 +352,7 @@ async function simulateFromStdin() {
   const now = BigInt(Math.floor(Date.now() / 1000));
 
   async function transferReverts(to, amount) {
+    if (toTronHex(tw, to).toLowerCase() === vaultHex.toLowerCase()) return null;
     const parameter = coder.encode(["address", "uint256"], [to, amount]).slice(2);
     const r = await fetch(base + "/wallet/triggerconstantcontract", {
       method: "POST",
@@ -347,13 +371,15 @@ async function simulateFromStdin() {
     return revertReason({ contractResult: j.constant_result, resMessage: j.result && j.result.message });
   }
 
-  const rejected = [];
+  const refused = new Set(rejected.map((r) => r.nullifier));
   for (const leaf of payload.leaves || []) {
-    const fee = now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
+    if (refused.has(leaf.nullifier)) continue;
+    const fee =
+      BigInt(leaf.feeRecipient) !== 0n && now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
     const principal = BigInt(leaf.amount) - fee;
     let reason = principal > 0n ? await transferReverts(leaf.recipient, principal) : null;
     if (!reason && fee > 0n) reason = await transferReverts(leaf.feeRecipient, fee);
-    if (reason) rejected.push({ nullifier: leaf.nullifier, reason });
+    if (reason) rejected.push({ nullifier: leaf.nullifier, reason, kind: "recipient" });
   }
   console.error(
     `relayer simulate --stdin: ${(payload.leaves || []).length} leaf(ves), ${rejected.length} rejected`
@@ -377,7 +403,11 @@ async function main() {
   );
 }
 
-main().catch((e) => {
-  console.error(e.message || e);
-  process.exit(1);
-});
+module.exports = { lockRejections };
+
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e.message || e);
+    process.exit(1);
+  });
+}
