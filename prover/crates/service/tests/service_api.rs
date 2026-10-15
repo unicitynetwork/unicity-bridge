@@ -582,3 +582,16 @@ async fn a_configured_service_refuses_a_raw_witness_even_one_built_for_its_deplo
     assert_eq!(error["error"]["recoverable"], false);
     assert_eq!(store.health().queue_depth, 0);
 }
+
+#[test]
+fn the_intake_refuses_a_trust_base_the_deployment_does_not_pin() {
+    let deployment = include_str!("../../../../deployments/sepolia/sepolia-usdc.json");
+    let trust_base = include_str!("../../../../bft-trustbase.testnet2.json");
+    let pinned = "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0";
+    assert!(deployment.contains(pinned));
+    let other = deployment.replace(pinned, &format!("0x{}", "00".repeat(32)));
+    let Err(err) = EnvelopeIntake::from_json(&other, trust_base, 1_330_002) else {
+        panic!("accepted a trust base the deployment does not pin");
+    };
+    assert!(err.to_string().contains("pins"), "{err}");
+}

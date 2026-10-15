@@ -327,6 +327,13 @@ impl EnvelopeIntake {
         let config = bridge_config_from_json(c)?;
         let trust_base = RootTrustBase::from_json(trust_base_json)
             .map_err(|e| HostError::Check(format!("trust base json: {e}")))?;
+        if let Some(pinned) = doc.get("trust_base").filter(|tb| tb.get("canonical_hash").is_some()) {
+            if json_b32(pinned, "canonical_hash")? != canonical_hash(&trust_base) {
+                return Err(HostError::Check(
+                    "the trust base is not the one the deployment config pins".to_string(),
+                ));
+            }
+        }
         Ok(Self {
             config,
             trust_base,
