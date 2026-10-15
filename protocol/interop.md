@@ -121,7 +121,7 @@ LockRecord = (
   asset               : address(20),   // = config.asset (deployment constant)
   tokenType           : bytes32,       // = config.tokenType
   coinId              : bytes32,       // = config.coinId
-  amount              : uint256,
+  amount              : uint256,       // ≤ 2^64−1: lock() refuses more, the mint justification is uint64
   unicityTokenId      : bytes32,
   recipientCommitment : bytes32        // = SHA256(recipient predicate CBOR)
 )
