@@ -124,16 +124,31 @@ async function simulate(vault, leaves, confirmations = 1) {
   if (await vault.PULL_PAYMENTS()) return { rejected };
   const asset = new ethers.Contract(await vault.ASSET(), ERC20_ABI, provider);
   const vaultAddress = await vault.getAddress();
+  const now = BigInt(Math.floor(Date.now() / 1000));
   const refused = new Set(rejected.map((r) => r.nullifier));
   for (const l of leaves) {
     if (refused.has(l.nullifier)) continue;
-    try {
-      await asset.transfer.staticCall(l.recipient, BigInt(l.amount), { from: vaultAddress });
-    } catch (e) {
-      rejected.push({ nullifier: l.nullifier, reason: revertReason(asset, e), kind: "recipient" });
-    }
+    const fee = BigInt(l.feeRecipient) !== 0n && now <= BigInt(l.deadline) ? BigInt(l.feeAmount) : 0n;
+    const principal = BigInt(l.amount) - fee;
+    const reason =
+      (await transferFails(asset, vaultAddress, l.recipient, principal)) ??
+      (await transferFails(asset, vaultAddress, l.feeRecipient, fee));
+    if (reason) rejected.push({ nullifier: l.nullifier, reason, kind: "recipient" });
   }
   return { rejected };
+}
+
+// The vault skips a payout of zero or to itself, and on EVM chains a transfer that
+// returns false has failed; a void return (Ethereum USDT) decodes to nothing and passes.
+async function transferFails(asset, vaultAddress, to, amount) {
+  if (amount === 0n || to.toLowerCase() === vaultAddress.toLowerCase()) return null;
+  try {
+    const ok = await asset.transfer.staticCall(to, amount, { from: vaultAddress });
+    return ok === false ? "transfer returned false" : null;
+  } catch (e) {
+    if (e.code === "BAD_DATA") return null;
+    return revertReason(asset, e);
+  }
 }
 
 async function unknownLock(vault, lockRefs, blockTag) {

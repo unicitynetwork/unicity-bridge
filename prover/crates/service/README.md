@@ -215,7 +215,10 @@ is not simulated and fails for good. `contracts/tron/scripts/relayer-eth.js simu
 (and `relayer.js` for Tron) implements it: lock refs are checked for pull-payment
 vaults too, `relayer-eth.js` reads them at the block `ETH_SETTLE_CONFIRMATIONS`
 makes final (`relayer.js` reads them at the head, as TronWeb constant calls take no
-block), and for a push vault the asset's `transfer` from the vault is constant-called.
+block), and for a push vault the asset's `transfer` from the vault is constant-called
+for the principal and for the fee, skipping a payout of zero or to the vault itself,
+with a returned `false` counted as a failure on EVM chains (not on Tron, where USDT
+returns false on success).
 
 ---
 

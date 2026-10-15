@@ -352,6 +352,7 @@ async function simulateFromStdin() {
   const now = BigInt(Math.floor(Date.now() / 1000));
 
   async function transferReverts(to, amount) {
+    if (toTronHex(tw, to).toLowerCase() === vaultHex.toLowerCase()) return null;
     const parameter = coder.encode(["address", "uint256"], [to, amount]).slice(2);
     const r = await fetch(base + "/wallet/triggerconstantcontract", {
       method: "POST",
@@ -373,7 +374,8 @@ async function simulateFromStdin() {
   const refused = new Set(rejected.map((r) => r.nullifier));
   for (const leaf of payload.leaves || []) {
     if (refused.has(leaf.nullifier)) continue;
-    const fee = now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
+    const fee =
+      BigInt(leaf.feeRecipient) !== 0n && now <= BigInt(leaf.deadline) ? BigInt(leaf.feeAmount) : 0n;
     const principal = BigInt(leaf.amount) - fee;
     let reason = principal > 0n ? await transferReverts(leaf.recipient, principal) : null;
     if (!reason && fee > 0n) reason = await transferReverts(leaf.feeRecipient, fee);
