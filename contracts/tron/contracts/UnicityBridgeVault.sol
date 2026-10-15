@@ -7,7 +7,10 @@ import {IProofVerifier} from "./IProofVerifier.sol";
 /// @dev Minimal TRC20/ERC20 surface. The transfer return value is not trusted
 ///      (Tether USDT on Tron returns false even on success); the vault checks
 ///      that its own balance moved by exactly the amount instead, see
-///      {_receiveExactly}/{_sendExactly}.
+///      {_receiveExactly}/{_sendExactly}. Supported assets are plain tokens whose
+///      balances move by exactly the transferred amount: a fee-on-transfer asset
+///      is refused at lock time, and a rebasing or admin-seizable asset is not
+///      supported, since a balance that changes between transfers is not detected.
 interface ITRC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function transfer(address to, uint256 value) external returns (bool);

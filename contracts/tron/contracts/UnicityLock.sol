@@ -8,7 +8,9 @@ interface ITRC20 {
     function transfer(address to, uint256 value) external returns (bool);
 }
 
-/// @title UnicityLock
+/// @title UnicityLock (legacy, not for deployment)
+/// @notice Superseded by {UnicityBridgeVault}; kept only for packages/bridge-plugin/demo
+///         and its tests. Its transfer helpers ignore a false return value.
 /// @notice Locks USDT (TRC20) on Tron to back a bridged token mint on Unicity.
 ///         Each lock commits to the exact Unicity `tokenId` and to a
 ///         `recipientCommitment = SHA256(recipient predicate)`, so the resulting

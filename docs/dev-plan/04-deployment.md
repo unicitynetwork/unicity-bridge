@@ -193,9 +193,10 @@ Goal: exercise the vault's settlement logic on Nile without a real proof. Done:
 > | `UnicityBridgeVault` (mock asset) | `TW9JPcZcBAVyuUifftWQbEbZ4nRRzgiR3L` |
 >
 > fulfillBatch tx: `348e744a83f4f51a8a9e275e7e42825d58bc8230daabc168a4100735aa76da34`.
-> Run: `node scripts/mock-smoke.js [existing-token]`. For mainnet/production, use a
-> real Tether-style (void-returning) USDT, or loosen the vault's `_check` if a
-> false-returning token must be supported.
+> Run: `node scripts/mock-smoke.js [existing-token]`. The vault decides every
+> transfer by its own balance moving by exactly the amount, so void-returning and
+> false-returning tokens both work; fee-on-transfer and rebasing assets are not
+> supported.
 >
 > Two more TronWeb gotchas the scripts handle: `createSmartContract` returns the
 > tx **directly** while `triggerSmartContract` returns `{transaction}`; and a
