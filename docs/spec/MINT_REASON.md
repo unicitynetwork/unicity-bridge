@@ -70,7 +70,7 @@ stays 1:1):
   assetContract:  bstr,    // 20-byte EVM-form address of the USDT TRC20 token
   txid:           bstr,    // 32-byte Tron tx hash of the lock() call
   logIndex:       uint,    // index of the Lock event within that tx's logs
-  amount:         uint,    // locked amount in token decimals; 1 ≤ amount ≤ 2^64−1 (the vault's lock() refuses more)
+  amount:         uint,    // locked amount in token decimals; 1 ≤ amount ≤ 2^64−1 (the vault's lock() refuses more; at 18 decimals that is 18.446744073709551615 tokens)
   nonce:          uint     // lock nonce assigned by the contract (from the event)
 ]
 ```

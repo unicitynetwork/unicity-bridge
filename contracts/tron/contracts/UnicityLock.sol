@@ -97,6 +97,7 @@ contract UnicityLock {
         bytes32 recipientCommitment
     ) external nonReentrant returns (uint256 nonce) {
         require(amount > 0, "UnicityLock: zero amount");
+        require(amount <= type(uint64).max, "UnicityLock: amount exceeds uint64");
         require(unicityTokenId != bytes32(0), "UnicityLock: zero tokenId");
         require(recipientCommitment != bytes32(0), "UnicityLock: zero recipient");
         require(!tokenIdUsed[unicityTokenId], "UnicityLock: tokenId already locked");

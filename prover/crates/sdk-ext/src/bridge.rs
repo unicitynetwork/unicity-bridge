@@ -480,8 +480,9 @@ fn keccak256(input: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod value_payload_tests {
-    use super::{decode_bridged_payment_data, encode_bridged_payment_data};
+    use super::{decode_bridged_payment_data, encode_bridged_payment_data, BridgeLockJustification};
     use alloc::vec;
+    use alloc::vec::Vec;
     use num_bigint::BigUint;
     use unicity_token::cbor::{encode_array, encode_byte_string, encode_null, encode_tag, encode_uint};
     use unicity_token::payment::{Asset, AssetId, PaymentAssetCollection};
@@ -519,5 +520,40 @@ mod value_payload_tests {
         assert!(decode_bridged_payment_data(&v2).is_err());
         let other_tag = encode_tag(39048, &encode_array(&[&encode_uint(1), &assets().to_cbor(), &encode_null()]));
         assert!(decode_bridged_payment_data(&other_tag).is_err());
+    }
+
+    fn lock_justification_with_amount(amount: &[u8]) -> Vec<u8> {
+        encode_tag(
+            1_330_002,
+            &encode_array(&[
+                &encode_uint(1),
+                &encode_uint(11_155_111),
+                &encode_byte_string(&[0x11; 20]),
+                &encode_byte_string(&[0x22; 20]),
+                &encode_byte_string(&[0x33; 32]),
+                &encode_uint(0),
+                amount,
+                &encode_uint(7),
+            ]),
+        )
+    }
+
+    #[test]
+    fn the_lock_justification_amount_is_at_most_u64_max() {
+        let at_max = BridgeLockJustification::from_cbor_bytes(
+            &lock_justification_with_amount(&encode_uint(u64::MAX)),
+            1_330_002,
+        )
+        .unwrap();
+        assert_eq!(at_max.amount, u64::MAX);
+
+        let two_pow_64 = encode_tag(2, &encode_byte_string(&[1, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(matches!(
+            BridgeLockJustification::from_cbor_bytes(
+                &lock_justification_with_amount(&two_pow_64),
+                1_330_002
+            ),
+            Err(super::BridgeExtError::BridgeLockJustificationMalformed)
+        ));
     }
 }
