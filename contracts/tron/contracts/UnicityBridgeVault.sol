@@ -4,12 +4,17 @@ pragma solidity ^0.8.24;
 import {BridgeConfig, ReturnLeaf, SourceLockRef, PublicValues, BridgeEncoding} from "./BridgeEncoding.sol";
 import {IProofVerifier} from "./IProofVerifier.sol";
 
-/// @dev Minimal TRC20/ERC20 surface. Tether USDT on Tron (mainnet and Nile
-///      testnet) returns false even on success. We require only that the call
-///      does not revert; see {_safeTransfer}/{_safeTransferFrom}.
+/// @dev Minimal TRC20/ERC20 surface. The transfer return value is not trusted
+///      (Tether USDT on Tron returns false even on success); the vault checks
+///      that its own balance moved by exactly the amount instead, see
+///      {_receiveExactly}/{_sendExactly}. Supported assets are plain tokens whose
+///      balances move by exactly the transferred amount: a fee-on-transfer asset
+///      is refused at lock time, and a rebasing or admin-seizable asset is not
+///      supported, since a balance that changes between transfers is not detected.
 interface ITRC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function transfer(address to, uint256 value) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
 }
 
 /// @title UnicityBridgeVault
@@ -188,7 +193,7 @@ contract UnicityBridgeVault {
         );
 
         emit Lock(nonce, msg.sender, amount, unicityTokenId, recipientCommitment);
-        _safeTransferFrom(msg.sender, address(this), amount);
+        _receiveExactly(msg.sender, amount);
     }
 
     // ---------------------------------------------------------------------
@@ -256,9 +261,9 @@ contract UnicityBridgeVault {
                     owed[l.feeRecipient] += fee;
                 }
             } else {
-                _safeTransfer(l.recipient, principal);
+                _sendExactly(l.recipient, principal);
                 if (fee > 0) {
-                    _safeTransfer(l.feeRecipient, fee);
+                    _sendExactly(l.feeRecipient, fee);
                 }
             }
             emit Released(l.nullifier, l.recipient, l.amount, l.feeRecipient, fee, l.deadline);
@@ -275,7 +280,7 @@ contract UnicityBridgeVault {
         require(amount > 0, "vault: nothing owed");
         owed[msg.sender] = 0;
         emit Withdrawn(msg.sender, amount);
-        _safeTransfer(msg.sender, amount);
+        _sendExactly(msg.sender, amount);
     }
 
     // ---------------------------------------------------------------------
@@ -294,7 +299,7 @@ contract UnicityBridgeVault {
     }
 
     // ---------------------------------------------------------------------
-    // Token transfer helpers (tolerate no-return + false-returning TRC20s)
+    // Token transfer helpers: the vault's own balance is the ground truth
     // ---------------------------------------------------------------------
 
     // TVM (unlike EVM) does not reliably forward "all remaining energy" to a
@@ -305,19 +310,31 @@ contract UnicityBridgeVault {
     // standalone on 14.6k). Pin an explicit, generous stipend.
     uint256 private constant TRANSFER_GAS_STIPEND = 200_000;
 
-    function _safeTransferFrom(address from, address to, uint256 value) private {
-        (bool ok,) = address(ASSET).call{gas: TRANSFER_GAS_STIPEND}(
-            abi.encodeWithSelector(ITRC20.transferFrom.selector, from, to, value)
+    function _receiveExactly(address from, uint256 value) private {
+        uint256 before = _held();
+        _callAsset(
+            abi.encodeWithSelector(ITRC20.transferFrom.selector, from, address(this), value),
+            "vault: transferFrom failed"
         );
-        require(ok, "vault: transferFrom failed");
+        require(_held() - before == value, "vault: amount not received");
     }
 
-    function _safeTransfer(address to, uint256 value) private {
-        (bool ok,) = address(ASSET).call{gas: TRANSFER_GAS_STIPEND}(
-            abi.encodeWithSelector(ITRC20.transfer.selector, to, value)
-        );
-        // Tether USDT on Tron (mainnet + Nile faucet TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf)
-        // returns false even on success; real failures revert. Require only no-revert.
-        require(ok, "vault: transfer failed");
+    /// @dev A payout to the vault itself moves no balance, so it is a no-op: the
+    ///      amount simply stays in custody. Without this, a burn naming the vault
+    ///      as recipient or fee recipient would revert every batch it lands in.
+    function _sendExactly(address to, uint256 value) private {
+        if (to == address(this) || value == 0) return;
+        uint256 before = _held();
+        _callAsset(abi.encodeWithSelector(ITRC20.transfer.selector, to, value), "vault: transfer failed");
+        require(before - _held() == value, "vault: amount not sent");
+    }
+
+    function _held() private view returns (uint256) {
+        return ASSET.balanceOf{gas: TRANSFER_GAS_STIPEND}(address(this));
+    }
+
+    function _callAsset(bytes memory data, string memory failure) private {
+        (bool ok,) = address(ASSET).call{gas: TRANSFER_GAS_STIPEND}(data);
+        require(ok, failure);
     }
 }
