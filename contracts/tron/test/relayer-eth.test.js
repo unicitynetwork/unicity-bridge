@@ -95,6 +95,46 @@ describe("relayer-eth against the vault", () => {
     expect(final.spent_root).to.equal(bundle.spentRootNew);
   });
 
+  // Stands in for the vault, failing the first `failures` calls of each read settledLog makes.
+  function flaky(vault, failures, code = "TIMEOUT") {
+    const calls = { head: 0, logs: 0, root: 0 };
+    const read = (key, call) => async (...args) => {
+      calls[key] += 1;
+      if (calls[key] <= failures) throw Object.assign(new Error(`request ${code}`), { code, shortMessage: `request ${code}` });
+      return call(...args);
+    };
+    const provider = vault.runner.provider ?? vault.runner;
+    return {
+      calls,
+      runner: { provider: { getBlockNumber: read("head", () => provider.getBlockNumber()) } },
+      filters: vault.filters,
+      queryFilter: read("logs", (...args) => vault.queryFilter(...args)),
+      spentRoot: read("root", (...args) => vault.spentRoot(...args)),
+    };
+  }
+  const NO_WAIT = { retries: 2, delayMs: 0 };
+
+  it("reads the settled log through requests that time out once", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    await settle(vault, await craftBundle(vault, recipient, await lockOnce(vault, "j"), "j"));
+    const unreliable = flaky(vault, 1);
+    expect(await settledLog(unreliable, 0, 1, NO_WAIT)).to.deep.equal(await settledLog(vault, 0));
+    expect(unreliable.calls).to.deep.equal({ head: 2, logs: 3, root: 2 });
+  });
+
+  it("gives up on a read that keeps timing out, and at once on an error a repeat cannot clear", async () => {
+    const { vault } = await deployBridge(false);
+    const down = flaky(vault, Infinity);
+    let err = await settledLog(down, 0, 1, NO_WAIT).catch((e) => e);
+    expect(err.code).to.equal("TIMEOUT");
+    expect(down.calls.head).to.equal(3);
+
+    const broken = flaky(vault, Infinity, "CALL_EXCEPTION");
+    err = await settledLog(broken, 0, 1, NO_WAIT).catch((e) => e);
+    expect(err.code).to.equal("CALL_EXCEPTION");
+    expect(broken.calls.head).to.equal(1);
+  });
+
   it("names the leaves whose payout would revert", async () => {
     const { recipient, vault } = await deployBridge(false);
     const lock = await lockOnce(vault, "c");
