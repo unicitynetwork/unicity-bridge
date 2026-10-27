@@ -188,6 +188,8 @@ impl Settler for ScriptedSettler {
 #[derive(Clone, Default)]
 pub struct FakeChainLog {
     log: Arc<Mutex<SettledLog>>,
+    answers: Arc<Mutex<VecDeque<bool>>>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl FakeChainLog {
@@ -216,6 +218,19 @@ impl FakeChainLog {
     pub fn forget_history(&self) {
         self.log.lock().unwrap().batches.clear();
     }
+
+    /// The next reads answer in turn: `true` serves the log, `false` fails the way the
+    /// events command does when an RPC request times out. Reads past the script serve the log.
+    pub fn answer(&self, reachable: &[bool]) {
+        self.answers
+            .lock()
+            .unwrap()
+            .extend(reachable.iter().copied());
+    }
+
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 
 impl ChainLog for FakeChainLog {
@@ -223,6 +238,13 @@ impl ChainLog for FakeChainLog {
         &self,
         known: Vec<SettledBatch>,
     ) -> Result<RebuiltAccumulator, ChainSyncError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.answers.lock().unwrap().pop_front() == Some(false) {
+            return Err(ChainSyncError::CommandFailed {
+                status: "exit status: 1".to_string(),
+                stderr: "request timeout (code=TIMEOUT, version=6.16.0)".to_string(),
+            });
+        }
         let mut log = self.log.lock().unwrap().clone();
         log.batches.extend(known);
         s2::rebuild_verified(&log).map_err(|e| ChainSyncError::Rebuild(e.to_string()))

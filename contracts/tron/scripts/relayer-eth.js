@@ -21,6 +21,21 @@ const VERIFIER_ERRORS = [
 ];
 const ERC20_ABI = ["function transfer(address to, uint256 value) returns (bool)"];
 const LOG_WINDOW = 10_000;
+// A read the events scan makes is repeated after 1, 2 and 4 seconds before the scan
+// fails, since one failed request out of the dozens a scan makes would otherwise fail it.
+const RPC_RETRY = { retries: 3, delayMs: 1000 };
+// What a repeat of the same read can clear: a timeout, an HTTP 5xx, a dropped socket, and
+// the JSON-RPC errors ethers cannot classify, which is how a node's rate limit arrives.
+const TRANSIENT_RPC_ERRORS = new Set([
+  "TIMEOUT",
+  "SERVER_ERROR",
+  "NETWORK_ERROR",
+  "UNKNOWN_ERROR",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+]);
 const HOST_BIN =
   process.env.BRIDGE_HOST_BIN || path.join(__dirname, "..", "..", "..", "prover", "target", "debug", "bridge-return-host");
 
@@ -41,20 +56,33 @@ function context() {
   };
 }
 
-async function settledLog(vault, fromBlock, confirmations = 1) {
+async function retried(what, read, { retries, delayMs } = RPC_RETRY) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await read();
+    } catch (e) {
+      if (attempt >= retries || !TRANSIENT_RPC_ERRORS.has(e.code)) throw e;
+      console.error(`relayer-eth: ${what} failed (${e.shortMessage || e.message}); retry ${attempt + 1} of ${retries}`);
+      await new Promise((r) => setTimeout(r, delayMs * 2 ** attempt));
+    }
+  }
+}
+
+async function settledLog(vault, fromBlock, confirmations = 1, retry = RPC_RETRY) {
   const provider = vault.runner.provider ?? vault.runner;
-  const final = Math.max((await provider.getBlockNumber()) - (confirmations - 1), fromBlock);
+  const head = await retried("block number", () => provider.getBlockNumber(), retry);
+  const final = Math.max(head - (confirmations - 1), fromBlock);
   const events = [];
   for (let start = fromBlock; start <= final; start += LOG_WINDOW) {
     const end = Math.min(start + LOG_WINDOW - 1, final);
-    const logs = [
-      ...(await vault.queryFilter(vault.filters.BatchFulfilled(), start, end)),
-      ...(await vault.queryFilter(vault.filters.Released(), start, end)),
-    ];
-    for (const log of logs) events.push(normalizeLog(log));
+    for (const name of ["BatchFulfilled", "Released"]) {
+      const logs = await retried(`${name} logs ${start}..${end}`, () => vault.queryFilter(vault.filters[name](), start, end), retry);
+      for (const log of logs) events.push(normalizeLog(log));
+    }
   }
   const grouped = groupBatches(events);
-  return { batches: grouped.batches, spent_root: hex32(await vault.spentRoot({ blockTag: final })) };
+  const root = await retried("spentRoot", () => vault.spentRoot({ blockTag: final }), retry);
+  return { batches: grouped.batches, spent_root: hex32(root) };
 }
 
 function normalizeLog(log) {

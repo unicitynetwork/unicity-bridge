@@ -159,3 +159,56 @@ pub enum ChainSyncError {
     #[error("{0}")]
     Rebuild(String),
 }
+
+impl ChainSyncError {
+    /// The log could not be read at all: the command did not start, timed out or exited
+    /// non-zero, which is what one failed RPC request makes it do. A log that was read but
+    /// does not decode or does not reproduce the vault's root is not this.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Spawn(_) | Self::CommandFailed { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn events(cmd: &str) -> ChainEvents {
+        ChainEvents {
+            backend: Backend::Command(cmd.to_string()),
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_command_that_cannot_reach_the_chain_leaves_the_log_unavailable() {
+        let err = events("echo 'request timeout' >&2; exit 1")
+            .synced_accumulator(Vec::new())
+            .await
+            .unwrap_err();
+        assert!(err.is_unavailable(), "{err}");
+        let err = events("sleep 5")
+            .with_timeout(Duration::from_millis(200))
+            .synced_accumulator(Vec::new())
+            .await
+            .unwrap_err();
+        assert!(err.is_unavailable(), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_log_that_was_read_but_is_unusable_is_not_unavailable() {
+        let err = events("echo nope")
+            .synced_accumulator(Vec::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChainSyncError::Decode(_)), "{err}");
+        assert!(!err.is_unavailable());
+        let root = format!("0x{}", "01".repeat(32));
+        let err = events(&format!(r#"echo '{{"batches":[],"spent_root":"{root}"}}'"#))
+            .synced_accumulator(Vec::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChainSyncError::Rebuild(_)), "{err}");
+        assert!(!err.is_unavailable());
+    }
+}
