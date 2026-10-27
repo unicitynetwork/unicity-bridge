@@ -4,3 +4,4 @@ export * from './family.js';
 export * from './presentation.js';
 export * from './providers.js';
 export * from './signer.js';
+export * from './walletconnect.js';

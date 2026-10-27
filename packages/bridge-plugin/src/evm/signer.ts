@@ -1,5 +1,8 @@
 import { encodeCallData, type ContractCall } from '../contract-call.js';
 import type { SourceSigner, WalletChange } from '../wallet/signer.js';
+import { chainIdFrom, DEFAULT_WALLET_REQUEST_TIMEOUT_MS, sendContractCall, withTimeout } from './wallet-request.js';
+
+export { DEFAULT_WALLET_REQUEST_TIMEOUT_MS, WalletRequestTimeoutError } from './wallet-request.js';
 
 export interface Eip1193Provider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
@@ -7,14 +10,28 @@ export interface Eip1193Provider {
   removeListener?(event: string, listener: (...args: unknown[]) => void): void;
 }
 
+export interface EvmSignerOptions {
+  /**
+   * How long the wallet has to connect or to answer a transaction request before the call fails
+   * with `WalletRequestTimeoutError`; `DEFAULT_WALLET_REQUEST_TIMEOUT_MS` when not given.
+   */
+  readonly requestTimeoutMs?: number;
+}
+
 export class InjectedEvmSigner implements SourceSigner {
   public constructor(
     private readonly provider: Eip1193Provider,
     private readonly expectedChainId?: number,
+    private readonly options: EvmSignerOptions = {},
   ) {}
 
+  private get timeoutMs(): number {
+    return this.options.requestTimeoutMs ?? DEFAULT_WALLET_REQUEST_TIMEOUT_MS;
+  }
+
   public async connect(): Promise<string> {
-    const accounts = (await this.provider.request({ method: 'eth_requestAccounts' })) as string[] | undefined;
+    const request = this.provider.request({ method: 'eth_requestAccounts' });
+    const accounts = (await withTimeout(request, 'eth_requestAccounts', this.timeoutMs)) as string[] | undefined;
     const address = accounts?.[0];
     if (!address) {
       throw new Error('The Ethereum wallet is locked or no account is selected.');
@@ -39,8 +56,7 @@ export class InjectedEvmSigner implements SourceSigner {
   }
 
   public async getNetwork(): Promise<number> {
-    const id = (await this.provider.request({ method: 'eth_chainId' })) as string;
-    return Number.parseInt(id, 16);
+    return chainIdFrom(await this.provider.request({ method: 'eth_chainId' }));
   }
 
   public onChange(cb: (e: WalletChange) => void): () => void {
@@ -58,15 +74,7 @@ export class InjectedEvmSigner implements SourceSigner {
   }
 
   public async sendCall(call: ContractCall): Promise<string> {
-    const from = await this.getAddress();
-    const hash = (await this.provider.request({
-      method: 'eth_sendTransaction',
-      params: [{ from, to: `0x${call.contractHex}`, data: `0x${encodeCallData(call)}` }],
-    })) as string | undefined;
-    if (!hash) {
-      throw new Error(`The wallet returned no transaction hash for ${call.functionSignature}.`);
-    }
-    return hash;
+    return sendContractCall(this.provider, await this.getAddress(), call, this.timeoutMs);
   }
 }
 

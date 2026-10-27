@@ -16,6 +16,7 @@ import {
 import {
   bridgePresentation,
   buildBridgeInPlan,
+  DEFAULT_WALLET_REQUEST_TIMEOUT_MS,
   evmWallets,
   InjectedEvmSigner,
   injectedEvmProvider,
@@ -23,6 +24,7 @@ import {
   loadBridges,
   ManagedEvmSigner,
   SEPOLIA_USDC_BRIDGE,
+  WalletRequestTimeoutError,
   type Eip1193Provider,
   type Eip6963ProviderInfo,
 } from '../src/wallet/index.js';
@@ -182,6 +184,38 @@ test('the injected signer connects, switches chain, reports the network and send
   assert.equal(sent.to, '0x' + VAULT);
   assert.equal(sent.data.slice(0, 10), '0x' + selectorHex('lock(uint256,bytes32,bytes32)'));
   assert.equal(sent.data.length, 2 + 8 + 3 * 64);
+});
+
+test('the injected signer reads a chain id answered as a number, as WalletConnect answers it, the same as a hex one', async () => {
+  for (const answer of [11155111, '0xaa36a7']) {
+    const provider: Eip1193Provider = { request: async () => answer };
+    assert.equal(await new InjectedEvmSigner(provider, 11155111).getNetwork(), 11155111);
+  }
+});
+
+test('the injected signer gives up on a wallet that does not answer, without a refusal code', async () => {
+  const silent = (method: string): Eip1193Provider => ({
+    async request(args) {
+      if (args.method === method) return new Promise(() => {});
+      return args.method === 'eth_chainId' ? '0xaa36a7' : ['0xAbCd000000000000000000000000000000000001'];
+    },
+  });
+  const connecting = new InjectedEvmSigner(silent('eth_requestAccounts'), 11155111, { requestTimeoutMs: 20 });
+  await assert.rejects(connecting.connect(), (e: unknown) => {
+    assert.ok(e instanceof WalletRequestTimeoutError);
+    assert.equal(e.method, 'eth_requestAccounts');
+    assert.equal((e as { code?: unknown }).code, undefined);
+    return true;
+  });
+  const sending = new InjectedEvmSigner(silent('eth_sendTransaction'), 11155111, { requestTimeoutMs: 20 });
+  await assert.rejects(
+    sending.sendCall({ contractHex: USDC, functionSignature: 'approve(address,uint256)', parameters: [{ type: 'address', value: VAULT }, { type: 'uint256', value: '5' }] }),
+    (e: unknown) => e instanceof WalletRequestTimeoutError && e.method === 'eth_sendTransaction' && !('code' in e),
+  );
+  assert.equal(
+    new WalletRequestTimeoutError('eth_sendTransaction', DEFAULT_WALLET_REQUEST_TIMEOUT_MS).message,
+    'The wallet did not answer the transaction request within 5 minutes.',
+  );
 });
 
 test('the browser wallet is offered only when a wallet is injected', () => {

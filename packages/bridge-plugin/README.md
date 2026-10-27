@@ -103,6 +103,17 @@ Ethereum wallets on the page: those announcing themselves through EIP-6963, by n
 icon, or the legacy `window.ethereum` as "Browser wallet" when nothing announced itself: a
 wallet that only sets `window.ethereum` is reachable until some other wallet announces itself,
 which every maintained wallet does.
+`walletConnectEvmWallet(load)` is the entry for wallet apps on a phone, reached through
+WalletConnect by a QR code or by a link that opens the app. The app's `load` builds
+`EthereumProvider` from `@walletconnect/ethereum-provider` (with its project ID and the bridge chain
+in `optionalChains`), so the plugin has no WalletConnect dependency and the app loads that package
+only when the user picks the entry. Its signer opens the session with `enable()` and checks that the
+session includes the bridge chain. WalletConnect requests every chain as optional, so a wallet that
+hides test networks still connects, only without Sepolia: the signer then ends the session and
+throws `WalletChainNotApprovedError`. A rejection a wallet reports with WalletConnect's code 5000
+comes out as the EIP-1193 refusal, 4001. Both EVM signers give the wallet five minutes to connect or
+to answer a transaction request, then throw `WalletRequestTimeoutError`. That error has no `code`:
+the request may still be approved in the wallet afterwards, so it must never read as a refusal.
 `findLock()` tells a wallet that lost track of a lock it asked the user to sign what the chain
 knows: the vault's `tokenIdUsed` says whether the deposit's token id is locked, the `Lock` events
 give the transaction, and the account's pending nonce says whether one is still in flight; the
