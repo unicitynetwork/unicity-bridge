@@ -24,7 +24,7 @@ describe("protocol/vectors conformance (config/lock/public)", () => {
 
   it("BRIDGE_PROTO_VERSION matches the pinned vectors version", () => {
     const version = fs.readFileSync(path.join(VECTORS, "VERSION"), "utf8").trim();
-    expect(version).to.equal("1");
+    expect(version).to.equal("2");
   });
 
   it("config -> configHash (00 §2)", async () => {
