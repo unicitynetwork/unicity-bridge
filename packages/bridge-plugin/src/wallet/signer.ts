@@ -6,6 +6,8 @@ export interface SourceSigner {
   getNetwork(): Promise<number>;
   sendCall(call: ContractCall): Promise<string>;
   onChange?(cb: (e: WalletChange) => void): () => void;
+  /** Ends the wallet's session, where the wallet has one to end (WalletConnect), so the next connect starts a new one. */
+  disconnect?(): Promise<void>;
 }
 
 export interface WalletChange {

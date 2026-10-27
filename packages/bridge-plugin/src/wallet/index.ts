@@ -14,6 +14,7 @@ export * from '../tron/providers.js';
 export * from '../tron/presentation.js';
 export * from '../evm/signer.js';
 export * from '../evm/providers.js';
+export * from '../evm/walletconnect.js';
 export * from '../evm/presentation.js';
 export * from './allowance.js';
 export * from './source-adapter.js';
