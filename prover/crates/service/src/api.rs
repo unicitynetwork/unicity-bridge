@@ -38,6 +38,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: &'static str,
+    pub draining: bool,
     pub queue_depth: usize,
     pub active_batch: Option<String>,
     pub active_batch_size: usize,
@@ -54,6 +55,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let health = state.store.health();
     Json(HealthResponse {
         status: "ok",
+        draining: state.drain.is_draining(),
         queue_depth: health.queue_depth,
         active_batch: health.active_batch,
         active_batch_size: health.active_batch_size,

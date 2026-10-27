@@ -9,6 +9,7 @@ use bridge_return_service::{
     prover::{GuestCheck, Prover},
     router,
     sequencer::ChainEvents,
+    shutdown::{self, Drain, Stopped},
     store::ReturnStore,
     AppState,
 };
@@ -83,7 +84,9 @@ async fn main() {
             std::process::exit(2);
         }
     }
-    tokio::spawn(
+    let mut signals = shutdown::stop_signals();
+    let drain = Drain::default();
+    let mut orchestrator = tokio::spawn(
         Orchestrator::new(
             store.clone(),
             prover,
@@ -93,14 +96,37 @@ async fn main() {
             config.retry,
             clock.clone(),
         )
-        .run(),
+        .run(drain.clone()),
     );
+    let stopping = {
+        let (drain, store, clock) = (drain.clone(), store.clone(), clock.clone());
+        let timeout = config.drain_timeout;
+        async move {
+            match shutdown::stop(
+                &mut signals,
+                &drain,
+                &mut orchestrator,
+                timeout,
+                &store,
+                &clock,
+            )
+            .await
+            {
+                Stopped::Drained => tracing::info!("drained; shutting down"),
+                Stopped::Abandoned => {
+                    proving.abandon();
+                    tracing::info!("shutting down");
+                }
+            }
+        }
+    };
     let app = router(AppState {
         config,
         store,
         clock,
         intake: Some(intake),
         chain_events,
+        drain,
     })
     .layer(
         TraceLayer::new_for_http()
@@ -118,19 +144,8 @@ async fn main() {
         .expect("bind bridge-return-service");
     tracing::info!("bridge-return-service listening on {bind}");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(stopping)
         .await
         .expect("serve bridge-return-service");
-    tracing::info!("shutting down; an in-flight proof is abandoned and re-run at start");
-    proving.abandon();
     std::process::exit(0);
-}
-
-async fn shutdown_signal() {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("listen for SIGTERM");
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = terminate.recv() => {}
-    }
 }

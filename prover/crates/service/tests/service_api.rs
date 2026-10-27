@@ -22,6 +22,7 @@ use bridge_return_service::{
     prover::Prover,
     router,
     sequencer::ChainEvents,
+    shutdown::Drain,
     store::{ErrorKind, ReturnStore},
     AppState,
 };
@@ -63,7 +64,7 @@ fn app_with(
             retry,
             clock.clone(),
         )
-        .run(),
+        .run(Drain::default()),
     );
     let app = router(AppState {
         config,
@@ -71,6 +72,7 @@ fn app_with(
         clock,
         intake: None,
         chain_events: ChainEvents::none(),
+        drain: Drain::default(),
     });
     (app, store)
 }
@@ -85,6 +87,7 @@ fn charging(fee: FeePolicy, store: ReturnStore) -> axum::Router {
         clock: Clock::default(),
         intake: None,
         chain_events: ChainEvents::none(),
+        drain: Drain::default(),
     })
 }
 
@@ -200,6 +203,7 @@ async fn a_full_queue_refuses_a_new_burn_before_holding_it() {
         clock: Clock::default(),
         intake: None,
         chain_events: ChainEvents::none(),
+        drain: Drain::default(),
     });
     let held = post_return(&app, member(11, 0x61)).await;
     let (status, error) = submit(&app, member(12, 0x62)).await;
@@ -234,6 +238,26 @@ async fn health_and_accumulator_are_served() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_draining_service_says_so_on_health_and_keeps_accepting_burns() {
+    let store = memory_store();
+    let drain = Drain::default();
+    let app = router(AppState {
+        config: ServiceConfig::default(),
+        store: store.clone(),
+        clock: Clock::default(),
+        intake: None,
+        chain_events: ChainEvents::none(),
+        drain: drain.clone(),
+    });
+    assert_eq!(get_json(&app, "/health").await["draining"], false);
+    drain.start();
+    assert_eq!(get_json(&app, "/health").await["draining"], true);
+    let accepted = post_return(&app, member(11, 0x61)).await;
+    assert_eq!(accepted["status"], "queued");
+    assert_eq!(store.health().queue_depth, 1);
 }
 
 #[tokio::test]
@@ -559,6 +583,7 @@ fn configured_for_sepolia() -> (axum::Router, ReturnStore, Arc<EnvelopeIntake>) 
         clock: Clock::default(),
         intake: Some(intake.clone()),
         chain_events: ChainEvents::none(),
+        drain: Drain::default(),
     });
     (app, store, intake)
 }

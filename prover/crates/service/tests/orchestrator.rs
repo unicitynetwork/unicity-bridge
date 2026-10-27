@@ -9,12 +9,14 @@ use bridge_return_service::{
         assembler::RejectionKind, batch::BatchStatus, policy::BatchPolicy, retry::RetryPolicy,
     },
     orchestrator::Orchestrator,
+    shutdown::{self, Drain, StopSignal, Stopped},
     store::{ErrorKind, ReturnRecord, ReturnStatus, ReturnStore},
     submitter::SubmitOutcome,
 };
 use support::{
     burn_and_record, member, nullifier_of, FakeChainLog, ProveStep, ScriptedProver, ScriptedSettler,
 };
+use tokio::sync::mpsc;
 
 const HOUR: Duration = Duration::from_secs(3_600);
 const MINUTE: u128 = 60_000;
@@ -25,6 +27,7 @@ struct Harness {
     settler: ScriptedSettler,
     chain: FakeChainLog,
     clock: Clock,
+    drain: Drain,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -54,6 +57,7 @@ impl Harness {
         chain: FakeChainLog,
     ) -> Self {
         let clock = Clock::default();
+        let drain = Drain::default();
         let task = tokio::spawn(
             Orchestrator::new(
                 store.clone(),
@@ -64,7 +68,7 @@ impl Harness {
                 config.retry,
                 clock.clone(),
             )
-            .run(),
+            .run(drain.clone()),
         );
         Self {
             store,
@@ -72,6 +76,7 @@ impl Harness {
             settler,
             chain,
             clock,
+            drain,
             task,
         }
     }
@@ -129,6 +134,27 @@ impl Harness {
     async fn stop(self) {
         self.task.abort();
         let _ = self.task.await;
+    }
+
+    /// Run the service's stop sequence for `signals`, sent before it starts.
+    async fn stop_with(&mut self, signals: &[StopSignal], timeout: Duration) -> Stopped {
+        let (tx, mut rx) = mpsc::channel(4);
+        for signal in signals {
+            tx.send(*signal).await.unwrap();
+        }
+        let stopping = shutdown::stop(
+            &mut rx,
+            &self.drain,
+            &mut self.task,
+            timeout,
+            &self.store,
+            &self.clock,
+        );
+        let stopped = tokio::time::timeout(Duration::from_secs(86_400), stopping)
+            .await
+            .expect("the service never stopped");
+        assert!(self.task.is_finished());
+        stopped
     }
 }
 
@@ -667,6 +693,131 @@ async fn settle_without_submitter_stays_proven() {
         .is_some());
     assert_eq!(h.store.health().queue_depth, 0);
     assert!(h.store.health().last_proof_ms.is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_lets_the_batch_in_flight_settle_and_starts_no_other() {
+    let prover = ScriptedProver::new(vec![ProveStep::Succeed {
+        delay: Duration::from_secs(1_200),
+    }]);
+    let mut h = Harness::simple(prover, ScriptedSettler::settling("0xfeed"));
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proving).await;
+    h.accept("b", 12, 0x62);
+    let stopped = h.stop_with(&[StopSignal::Terminate], Duration::ZERO).await;
+    assert_eq!(stopped, Stopped::Drained);
+    assert!(h.drain.is_draining());
+    assert_eq!(h.status("a"), ReturnStatus::Settled);
+    assert_eq!(h.status("b"), ReturnStatus::Queued);
+    assert_eq!(h.record("b").attempts, 0);
+    assert_eq!(h.prover.calls(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_with_nothing_in_flight_ends_at_once() {
+    let mut h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    tokio::task::yield_now().await;
+    let started = h.clock.now_ms();
+    let stopped = h.stop_with(&[StopSignal::Terminate], Duration::ZERO).await;
+    assert_eq!(stopped, Stopped::Drained);
+    assert_eq!(h.clock.now_ms(), started);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_starts_no_batch_for_burns_waiting_out_the_idle_window() {
+    let retry = RetryPolicy::default();
+    let mut h = Harness::start(
+        ReturnStore::memory(retry),
+        &config(60, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+        FakeChainLog::new(),
+    );
+    h.accept("a", 11, 0x61);
+    tokio::task::yield_now().await;
+    let started = h.clock.now_ms();
+    let stopped = h.stop_with(&[StopSignal::Terminate], Duration::ZERO).await;
+    assert_eq!(stopped, Stopped::Drained);
+    assert_eq!(h.clock.now_ms(), started);
+    assert_eq!(h.status("a"), ReturnStatus::Queued);
+    assert_eq!(h.prover.calls(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_second_sigterm_abandons_the_proof_and_the_next_start_proves_it_without_an_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let retry = RetryPolicy::default();
+    let mut h = Harness::start(
+        reopen(dir.path(), retry),
+        &config(0, retry),
+        ScriptedProver::new(vec![ProveStep::Hang]),
+        ScriptedSettler::settling("0xfeed"),
+        FakeChainLog::new(),
+    );
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proving).await;
+    let abandoned = h.record("a").batch_id.unwrap();
+    let stopped = h
+        .stop_with(
+            &[StopSignal::Terminate, StopSignal::Terminate],
+            Duration::ZERO,
+        )
+        .await;
+    assert_eq!(stopped, Stopped::Abandoned);
+    drop(h);
+
+    let store = reopen(dir.path(), retry);
+    let record = store.get("a").unwrap();
+    assert_eq!(record.status, ReturnStatus::Queued);
+    assert_eq!(record.attempts, 0);
+    assert_eq!(record.not_before_ms, None);
+    assert!(record.message.contains("stopped with the service"));
+    assert_eq!(
+        store.read(|l| l.batch(&abandoned).unwrap().status),
+        BatchStatus::Interrupted
+    );
+    let h = Harness::start(
+        store,
+        &config(0, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+        FakeChainLog::new(),
+    );
+    h.reach("a", ReturnStatus::Settled).await;
+    assert_eq!(h.record("a").attempts, 0);
+    assert_ne!(h.record("a").batch_id.unwrap(), abandoned);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sigint_abandons_the_proof_at_once_without_an_attempt() {
+    let prover = ScriptedProver::new(vec![ProveStep::Hang]);
+    let mut h = Harness::simple(prover, ScriptedSettler::settling("0xfeed"));
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proving).await;
+    let stopped = h.stop_with(&[StopSignal::Interrupt], Duration::ZERO).await;
+    assert_eq!(stopped, Stopped::Abandoned);
+    assert!(!h.drain.is_draining());
+    assert_eq!(h.status("a"), ReturnStatus::Queued);
+    assert_eq!(h.record("a").attempts, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_that_outlasts_its_timeout_abandons_the_proof_without_an_attempt() {
+    let prover = ScriptedProver::new(vec![ProveStep::Hang]);
+    let mut h = Harness::simple(prover, ScriptedSettler::settling("0xfeed"));
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proving).await;
+    let started = h.clock.now_ms();
+    let stopped = h
+        .stop_with(&[StopSignal::Terminate], Duration::from_secs(600))
+        .await;
+    assert_eq!(stopped, Stopped::Abandoned);
+    assert_eq!(h.clock.now_ms(), started + 600_000);
+    assert_eq!(h.status("a"), ReturnStatus::Queued);
+    assert_eq!(h.record("a").attempts, 0);
 }
 
 fn reopen(dir: &std::path::Path, retry: RetryPolicy) -> ReturnStore {

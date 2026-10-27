@@ -103,7 +103,8 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
 | `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
 | `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` (the image sets its full path) | the command that prints the guest's verifying key at start, in a child process like the proofs, so the service itself loads no SP1 code |
-| `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout and a shutdown of the service (`SIGTERM`, Ctrl-C) kill all of it, so a restart never proves next to an orphan |
+| `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout and an abandoned proof (§5, Stopping) kill all of it, so a restart never proves next to an orphan |
+| `BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` | `0` (`2640` in `docker-compose.yml`) | the most a drain waits for the batch in flight before it abandons the proof (§5, Stopping); `0` waits however long the batch takes. Keep it below the container's stop grace period, so the service abandons the proof itself, which costs no attempt, before Docker kills it, which costs one |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
 | `BRIDGE_RETURN_FEE_AMOUNT`, `BRIDGE_RETURN_FEE_FLOOR`, `BRIDGE_RETURN_FEE_RECIPIENT`, `BRIDGE_RETURN_FEE_WINDOW_SECS` | `0`, the amount, none, `86400` | the fee quoted to wallets, in the asset's smallest unit; the least a burn must pay to be accepted; the source-chain account that receives it; the time the service wants between accepting a burn and the burn's fee deadline |
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
@@ -132,6 +133,21 @@ downloads the Groth16 circuit and proving key, about 5.9 GB, into the
 `sp1-artifacts` volume; keep the volume across restarts or every restart pays
 the download. Never set `SP1_CIRCUIT_MODE=dev`: it selects a private artifact
 bucket and a key the vault does not accept.
+
+**Stopping.** SIGTERM drains the service; `docker stop`, `docker compose
+down` and the recreate in `docker compose up -d` all send it. The batch in
+flight runs to its end, settled or failed. No other batch starts, and the process
+exits 0 once nothing is in flight, at once when nothing was. Until then it keeps
+answering: `/health` shows `draining: true`, and `POST /returns` keeps accepting
+burns for the next start. A second SIGTERM, a SIGINT (Ctrl-C) or
+`BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` abandons the proof instead. Its batch goes
+back to the head of the queue and is proven again at the next start, at no
+attempt to its members; only a crash, an OOM kill or a SIGKILL costs one. Docker
+sends SIGKILL ten seconds after SIGTERM unless told otherwise, so
+`docker-compose.yml` gives the service a 45-minute `stop_grace_period` and a
+44-minute drain timeout. Change the two together, and size them for the
+slowest proof plus its settlement. To stop at once while a stop is waiting on
+a drain, `docker kill -s TERM bridge-return-service` abandons the proof.
 
 Proofs run one at a time. When the prover is free, the next batch is
 everything pending, oldest first, up to `BRIDGE_RETURN_MAX_BATCH_SIZE` burns
@@ -261,7 +277,7 @@ never checked against Nile (§8).
 
 ## 7. Monitoring
 
-`GET /health` returns `status`, `queueDepth`, `activeBatch`, `activeBatchSize`,
+`GET /health` returns `status`, `draining`, `queueDepth`, `activeBatch`, `activeBatchSize`,
 `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`,
 `chainSync`. `GET /accumulator` returns `synced`, `spentRoot`, `spentCount`.
 Logs are structured (`RUST_LOG`, default info). The journal itself is readable:
@@ -290,9 +306,9 @@ Worth alerting on:
 | Return `failed` with `service_unavailable` and `accumulator not synced to chain` | the events command could not read the chain for about two minutes: the batch already read it again after 15, 30 and 60 seconds (`chain log unavailable` warnings in the log), and `relayer-eth.js events` repeats each failed read three times before it exits non-zero | the node or RPC endpoint is down or rate-limiting; fix or replace `ETH_RPC_URL`/`TRON_RPC_URL`. The retry reuses the proof as long as the vault root has not moved |
 | Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
 | Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
-| Service restarted | the journal is replayed | nothing to do: queued burns stay queued, an interrupted proof re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
+| Service restarted | the journal is replayed | nothing to do: queued burns stay queued, a proof the service abandoned to stop (§5, Stopping) re-runs at once without an attempt, one a crash cut off re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
 | Return `failed` with `proving_failed` saying the proving command `was killed by signal 9` (the Docker VM's `dmesg` shows an `oom-kill` of `bridge-return-h`) | the proof outgrew the memory limit: a live Sepolia USDC burn peaks at about 26 GiB, 23 GB killed it in a 24 GB WSL VM on 2026-09-23 | the service keeps running and retries with backoff; each kill counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS`. Size the limit for one proof's peak plus the service; keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours) |
-| Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process itself was stopped or killed | each interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
+| Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process died while proving: a crash, an OOM kill of the service itself, or a SIGKILL (Docker's included, once the stop grace period runs out) | each such interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
@@ -340,7 +356,8 @@ the same procedure as a program change.
 `prover/guest-elf/`, and the build fails unless that ELF's key is the one the
 deployment file pins. In `sp1_groth16` mode the service makes the same
 comparison at start against `BRIDGE_DEPLOYMENT_CONFIG` and exits on a mismatch.
-`/app/sp1/vkey.txt` in the image shows the key.
+`/app/sp1/vkey.txt` in the image shows the key. Replacing the container sends
+SIGTERM, so the deploy waits for the batch in flight to finish (§5, Stopping).
 
 ## 10. Known gaps before real value
 

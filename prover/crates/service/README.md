@@ -106,6 +106,7 @@ cargo run -p bridge-return-service --release
 | `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. |
 | `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` | The command that prints the guest's verifying key as JSON at start, given the ELF path; the service itself loads no SP1 code. |
 | `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt; set it well above the slowest proof, or `0` for no limit. |
+| `BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` | `0` | Most a drain (SIGTERM) waits for the batch in flight before abandoning its proof; `0` waits however long it takes. Keep it below the container's stop grace period. |
 | `BRIDGE_RETURN_STATE_DIR` | — (in memory) | Journal directory. Unset, every restart forgets the queue. |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE` | `8` | Most burns in one proof. |
 | `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8388608` | Cap on the summed wire inputs of a batch; a single larger burn still proves alone. |
@@ -139,7 +140,7 @@ deployment's. Only the in-process test router, built without an intake, takes on
 | `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `settleTxid`) — anyone can self-submit it. |
 | `GET` | `/fees` | The fee terms a wallet writes into a burn: `feeRecipient`, `feeAmount` (decimal string) and `deadline` (unix seconds, service clock). A burn paying less than the floor, to another account, or with too little time before its deadline is refused with `fee_not_paid`. |
 | `GET` | `/accumulator` | Rebuilt `spentRoot` + SYNCED flag. |
-| `GET` | `/health` | `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
+| `GET` | `/health` | `draining`, `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
 
 All responses are **camelCase JSON**.
 
@@ -250,8 +251,17 @@ Rust agreement on the burned token).
 
 ## Ops & disposability (§B7)
 
+SIGTERM drains the service: the batch in flight runs to its end (settled, or
+failed as any batch fails), no other starts, and the process exits 0 once
+nothing is in flight. Meanwhile `/health` reports `draining: true` and intake
+keeps journaling burns for the next start. A second SIGTERM, SIGINT or
+`BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` abandons the proof instead: the service kills
+it, journals the interruption as orderly, and the batch is proven again at the
+next start without costing its members an attempt.
+
 A restart replays `journal.jsonl` from `BRIDGE_RETURN_STATE_DIR`: queued burns
-stay queued, a batch that was proving is re-formed after the retry backoff (an
+stay queued, a batch the service abandoned to stop is proven again at once, a
+batch a crash left proving is re-formed after the retry backoff (that
 interruption counts as an attempt, so a service that dies on every proof parks
 the return instead of looping), a proven batch is settled or resubmitted after
 a chain check, scheduled retries keep their schedule. The

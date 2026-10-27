@@ -6,6 +6,10 @@ services:
     image: bridge-return-service
     container_name: bridge-return-service
     restart: unless-stopped
+    # SIGTERM drains: the batch in flight is proven and settled before the service
+    # exits. The grace period covers a slow proof plus its settlement, and the drain
+    # timeout ends a longer one a minute before Docker would kill the process.
+    stop_grace_period: 45m
     ports:
       - "8787:8787"
     environment:
@@ -16,6 +20,7 @@ services:
       BRIDGE_RETURN_RETRY_BASE_SECS: ${BRIDGE_RETURN_RETRY_BASE_SECS:-60}
       BRIDGE_RETURN_COMMAND_TIMEOUT_SECS: ${BRIDGE_RETURN_COMMAND_TIMEOUT_SECS:-600}
       BRIDGE_RETURN_PROVE_TIMEOUT_SECS: ${BRIDGE_RETURN_PROVE_TIMEOUT_SECS:-7200}
+      BRIDGE_RETURN_DRAIN_TIMEOUT_SECS: ${BRIDGE_RETURN_DRAIN_TIMEOUT_SECS:-2640}
       BRIDGE_RETURN_FEE_AMOUNT: ${BRIDGE_RETURN_FEE_AMOUNT:-}
       BRIDGE_RETURN_FEE_FLOOR: ${BRIDGE_RETURN_FEE_FLOOR:-}
       BRIDGE_RETURN_FEE_RECIPIENT: ${BRIDGE_RETURN_FEE_RECIPIENT:-}
