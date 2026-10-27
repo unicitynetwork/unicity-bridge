@@ -1,0 +1,66 @@
+name: CI
+
+# Builds and tests each stack on every pull request and every push to main:
+# the prover workspace (whose host tests also check protocol/vectors against
+# the core derivations), and the npm workspaces, which are the TypeScript bridge
+# packages and the contracts (whose tests check the vectors the vault recomputes).
+#
+# The service image is built from main by bridge-out-service-image.yml; a pull
+# request builds it only when it touches what these tests do not compile.
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+# A newer push to the same pull request supersedes a run in progress; main
+# finishes what it started.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  prover:
+    runs-on: ubuntu-latest
+    # A cold build compiles the workspace and its dependencies in debug; the
+    # cache shortens later ones.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prover
+
+      - name: Test
+        working-directory: prover
+        run: cargo test --workspace --locked
+
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # Builds bridge-core before the plugin that imports it, and compiles the
+      # contracts the tests deploy.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test

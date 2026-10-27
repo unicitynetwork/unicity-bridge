@@ -6,8 +6,15 @@ name: Bridge-out service image
 #
 # The build is the check: the host stage fails unless the pinned guest ELF has
 # its committed sha256 and derives the verifying key the GUEST_DEPLOYMENT record
-# pins, and it runs check-vectors. Pull requests, and manual runs on any ref
-# other than main or a v* tag, build the image the same way but do not push it.
+# pins, and it runs check-vectors. Manual runs on any ref other than main or a
+# v* tag build the image the same way but do not push it.
+#
+# Pull requests are tested by ci.yml, and build the image only when they touch
+# what those tests do not exercise: the Dockerfile and entrypoint, the pinned
+# guest ELF and the deployment records its key is checked against, the host
+# crate (its sp1 feature, which the image compiles, is off in the tests) and the
+# lockfile it resolves against, and the contracts' own lockfile, from which the
+# image installs the relayer.
 #
 # Tags:
 # - `<7-character commit sha>`, what a deployment pins. Written ONCE, from main:
@@ -30,11 +37,15 @@ on:
       - .github/workflows/bridge-out-service-image.yml
   pull_request:
     paths:
-      - prover/**
-      - protocol/**
+      - prover/Dockerfile
+      - prover/docker/**
+      - prover/guest-elf/**
+      - prover/crates/host/**
+      - prover/Cargo.toml
+      - prover/Cargo.lock
       - deployments/**
-      - contracts/tron/**
-      - bft-trustbase.testnet2.json
+      - contracts/tron/package.json
+      - contracts/tron/package-lock.json
       - .dockerignore
       - .github/workflows/bridge-out-service-image.yml
   workflow_dispatch:
