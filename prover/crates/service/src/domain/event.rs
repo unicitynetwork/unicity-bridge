@@ -43,6 +43,11 @@ pub enum Event {
     BatchInterrupted {
         id: String,
         at_ms: u128,
+        /// Written by a service that stopped in order and abandoned the proof itself, which
+        /// costs the members no attempt; a crash leaves the batch proving and recovery
+        /// charges one. Absent in journals written before it existed: those were charged.
+        #[serde(default)]
+        orderly: bool,
     },
     ReturnExcluded {
         id: String,

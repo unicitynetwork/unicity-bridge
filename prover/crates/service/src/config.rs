@@ -39,6 +39,8 @@ pub struct ServiceConfig {
     pub vkey_cmd: String,
     /// The most a proof may take before it is killed; zero means no limit.
     pub prove_timeout: Duration,
+    /// The most a drain waits for the batch in flight before abandoning it; zero means no limit.
+    pub drain_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -72,6 +74,7 @@ impl Default for ServiceConfig {
             prove_cmd: "bridge-return-host sp1-groth16-files".to_string(),
             vkey_cmd: "bridge-return-host sp1-vkey".to_string(),
             prove_timeout: Duration::from_secs(7200),
+            drain_timeout: Duration::ZERO,
         }
     }
 }
@@ -153,6 +156,9 @@ impl ServiceConfig {
         }
         if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_PROVE_TIMEOUT_SECS")? {
             cfg.prove_timeout = Duration::from_secs(secs);
+        }
+        if let Some(secs) = env_parsed::<u64>("BRIDGE_RETURN_DRAIN_TIMEOUT_SECS")? {
+            cfg.drain_timeout = Duration::from_secs(secs);
         }
         if env_opt("BRIDGE_RETURN_PROVE_MODE").as_deref() == Some("sp1_groth16") {
             cfg.prove_mode = ProveMode::Sp1Groth16;

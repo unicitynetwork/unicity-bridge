@@ -9,6 +9,7 @@ pub mod orchestrator;
 pub mod ports;
 pub mod prover;
 pub mod sequencer;
+pub mod shutdown;
 pub mod store;
 pub mod submitter;
 
@@ -31,6 +32,8 @@ pub struct AppState {
     /// S2/S3 chain-sync seam — reconstructs the vault's accumulator so proofs
     /// chain onto its current `spentRoot` (`BRIDGE_RETURN_EVENTS_CMD`).
     pub chain_events: sequencer::ChainEvents,
+    /// Set once SIGTERM starts a drain; `/health` reports it.
+    pub drain: shutdown::Drain,
 }
 
 /// Load the envelope intake (deployment JSON + trust base). The service admits

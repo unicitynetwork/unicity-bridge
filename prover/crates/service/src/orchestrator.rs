@@ -13,6 +13,7 @@ use crate::{
         retry::RetryPolicy,
     },
     ports::{ChainLog, ProofBackend, Settler},
+    shutdown::Drain,
     store::{hex32, BatchBundle, ErrorKind, ReturnStore, Taken},
     submitter::SubmitOutcome,
 };
@@ -63,12 +64,17 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         }
     }
 
-    pub async fn run(self) {
+    /// Prove and settle batches until `drain` starts, then return once the batch in flight
+    /// has run to its end.
+    pub async fn run(self, drain: Drain) {
         for batch in self.store.read(|ledger| ledger.unsettled_proofs()) {
+            if drain.is_draining() {
+                break;
+            }
             self.run_batch(batch).await;
         }
         let mut collect = true;
-        loop {
+        while !drain.is_draining() {
             match self
                 .store
                 .take_next(&self.policy, self.clock.now_ms(), collect)
@@ -81,15 +87,20 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                     tokio::select! {
                         _ = self.store.changed() => {}
                         _ = self.clock.sleep_until_ms(at_ms) => {}
+                        _ = drain.started() => {}
                     }
                     collect = true;
                 }
                 Taken::Idle => {
-                    self.store.changed().await;
+                    tokio::select! {
+                        _ = self.store.changed() => {}
+                        _ = drain.started() => {}
+                    }
                     collect = true;
                 }
             }
         }
+        tracing::info!("drained: no batch in flight, and none starts");
     }
 
     async fn run_batch(&self, batch: Batch) {
