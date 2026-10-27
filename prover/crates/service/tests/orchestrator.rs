@@ -472,6 +472,95 @@ async fn settler_failure_leaves_bundle_and_members_recoverable_and_retries_reuse
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_chain_log_read_that_fails_before_settling_is_read_again_and_the_proof_settles() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain.answer(&[true, false]);
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(60))
+        .await;
+    let record = h.record("a");
+    assert_eq!(record.attempts, 0);
+    assert!(record
+        .events
+        .iter()
+        .all(|e| e.status != ReturnStatus::Failed));
+    assert_eq!(h.batch_of("a").rebases, 0);
+    assert_eq!(h.prover.calls(), 1);
+    assert_eq!(h.settler.submitted().len(), 1);
+    assert_eq!(h.chain.calls(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chain_log_read_that_fails_before_proving_is_read_again_without_an_attempt() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain.answer(&[false]);
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(60))
+        .await;
+    assert_eq!(h.record("a").attempts, 0);
+    assert_eq!(h.prover.calls(), 1);
+    assert_eq!(h.chain.calls(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chain_log_that_stays_unreadable_fails_the_proven_batch_as_unavailable_and_keeps_the_proof(
+) {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain.answer(&[true, false, false, false, false]);
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Failed, Duration::from_secs(150))
+        .await;
+    let record = h.record("a");
+    assert_eq!(record.attempts, 1);
+    let failure = record.failure.unwrap();
+    assert!(failure.recoverable);
+    assert_eq!(failure.kind, ErrorKind::ServiceUnavailable);
+    assert!(
+        failure.message.contains("accumulator not synced to chain")
+            && failure.message.contains("request timeout"),
+        "{}",
+        failure.message
+    );
+    assert_eq!(h.chain.calls(), 5);
+    assert!(h.settler.submitted().is_empty());
+
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(120))
+        .await;
+    assert_eq!(h.prover.calls(), 1);
+    assert_eq!(h.settler.submitted().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chain_log_that_no_longer_reproduces_the_vault_fails_the_proven_batch_at_once() {
+    let prover = ScriptedProver::new(vec![ProveStep::Succeed { delay: HOUR }]);
+    let h = Harness::simple(prover, ScriptedSettler::settling("0xfeed"));
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proving).await;
+    h.chain
+        .settle_externally(&[nullifier_of(&member(99, 0x70))]);
+    h.chain.forget_history();
+    h.reach_in("a", ReturnStatus::Failed, 2 * HOUR).await;
+    let failure = h.record("a").failure.unwrap();
+    assert_eq!(failure.kind, ErrorKind::ChainRejected);
+    assert!(
+        failure.message.contains("diverged from chain"),
+        "{}",
+        failure.message
+    );
+    assert_eq!(h.chain.calls(), 2);
+    assert!(h.settler.submitted().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
 async fn already_settled_member_is_excluded_and_rest_proceeds() {
     let h = Harness::simple(
         ScriptedProver::instant(),

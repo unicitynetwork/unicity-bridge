@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use bridge_return_host::s2::RebuiltAccumulator;
+
 use crate::{
     clock::Clock,
     domain::{
@@ -12,6 +16,15 @@ use crate::{
     store::{hex32, BatchBundle, ErrorKind, ReturnStore, Taken},
     submitter::SubmitOutcome,
 };
+
+/// A chain log that could not be read is read again after each of these delays before
+/// the batch fails, so one failed RPC request costs the members neither an attempt nor
+/// the proof they are waiting on.
+const SYNC_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+];
 
 pub struct Orchestrator<P, S, C> {
     store: ReturnStore,
@@ -95,19 +108,8 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
 
     async fn prove_stage(&self, batch: &Batch) -> Stage {
         tracing::info!(batch_id = %batch.id, members = batch.members.len(), "batch proving started");
-        let acc = match self
-            .chain
-            .synced_accumulator(self.store.read(|ledger| ledger.settled_batches()))
-            .await
-        {
-            Ok(acc) => acc,
-            Err(e) => {
-                return self.fail(
-                    batch,
-                    ErrorKind::ChainRejected,
-                    format!("accumulator not synced to chain: {e}"),
-                )
-            }
+        let Some(acc) = self.synced(batch).await else {
+            return Stage::Done;
         };
         let burns: Vec<Burn> = self
             .store
@@ -190,19 +192,8 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
     }
 
     async fn settle_stage(&self, batch: &Batch) -> Stage {
-        let acc = match self
-            .chain
-            .synced_accumulator(self.store.read(|ledger| ledger.settled_batches()))
-            .await
-        {
-            Ok(acc) => acc,
-            Err(e) => {
-                return self.fail(
-                    batch,
-                    ErrorKind::SubmissionFailed,
-                    format!("accumulator not synced to chain: {e}"),
-                )
-            }
+        let Some(acc) = self.synced(batch).await else {
+            return Stage::Done;
         };
         let nullifiers = batch.nullifiers();
         let all_released = !nullifiers.is_empty()
@@ -241,6 +232,45 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
             SubmitOutcome::StaleRoot => self.rebase_or_fail(batch, "vault: stale root"),
             SubmitOutcome::Failed { message } => {
                 self.fail(batch, ErrorKind::SubmissionFailed, message)
+            }
+        }
+    }
+
+    /// The vault's accumulator, or `None` once the batch has been failed for want of it.
+    /// A log that could not be read is read again on [`SYNC_RETRY_DELAYS`] and then fails
+    /// the batch as `ServiceUnavailable`; a log that was read but is unusable fails it at
+    /// once as `ChainRejected`.
+    async fn synced(&self, batch: &Batch) -> Option<RebuiltAccumulator> {
+        let mut delays = SYNC_RETRY_DELAYS.iter();
+        loop {
+            let known = self.store.read(|ledger| ledger.settled_batches());
+            let error = match self.chain.synced_accumulator(known).await {
+                Ok(acc) => return Some(acc),
+                Err(e) => e,
+            };
+            match delays.next() {
+                Some(delay) if error.is_unavailable() => {
+                    tracing::warn!(
+                        batch_id = %batch.id,
+                        %error,
+                        "chain log unavailable; reading it again in {}s",
+                        delay.as_secs()
+                    );
+                    tokio::time::sleep(*delay).await;
+                }
+                _ => {
+                    let kind = if error.is_unavailable() {
+                        ErrorKind::ServiceUnavailable
+                    } else {
+                        ErrorKind::ChainRejected
+                    };
+                    self.fail(
+                        batch,
+                        kind,
+                        format!("accumulator not synced to chain: {error}"),
+                    );
+                    return None;
+                }
             }
         }
     }
