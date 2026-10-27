@@ -53,7 +53,9 @@ impl Ledger {
                 at_ms,
             } => self.fail(&id, kind, &message, at_ms, retry),
             Event::BatchRebased { id, at_ms } => self.rebase(&id, at_ms),
-            Event::BatchInterrupted { id, at_ms } => self.interrupt(&id, at_ms, retry),
+            Event::BatchInterrupted { id, at_ms, orderly } => {
+                self.interrupt(&id, at_ms, orderly, retry)
+            }
             Event::ReturnExcluded { id, reason, at_ms } => self.exclude(&id, reason, at_ms, retry),
         }
     }
@@ -144,7 +146,19 @@ impl Ledger {
             .and_then(|b| b.bundle.clone())
     }
 
+    /// The interruptions a start finds: a batch still proving was cut off by a crash, which
+    /// costs its members an attempt.
     pub fn recover(&self, at_ms: u128) -> Vec<Event> {
+        self.interruptions(at_ms, false)
+    }
+
+    /// The interruptions an orderly stop records once it has abandoned the proof in flight;
+    /// they cost no attempt.
+    pub fn stop(&self, at_ms: u128) -> Vec<Event> {
+        self.interruptions(at_ms, true)
+    }
+
+    fn interruptions(&self, at_ms: u128, orderly: bool) -> Vec<Event> {
         let mut proving: Vec<&Batch> = self
             .batches
             .values()
@@ -156,6 +170,7 @@ impl Ledger {
             .map(|b| Event::BatchInterrupted {
                 id: b.id.clone(),
                 at_ms,
+                orderly,
             })
             .collect()
     }
@@ -308,7 +323,7 @@ impl Ledger {
         }
     }
 
-    fn interrupt(&mut self, id: &str, at_ms: u128, retry: &RetryPolicy) {
+    fn interrupt(&mut self, id: &str, at_ms: u128, orderly: bool, retry: &RetryPolicy) {
         let Some(batch) = self.batches.get_mut(id) else {
             tracing::warn!(
                 batch_id = id,
@@ -318,7 +333,12 @@ impl Ledger {
         };
         batch.status = BatchStatus::Interrupted;
         for entry in self.members_of(id) {
-            if entry.record.status == ReturnStatus::Proving {
+            if entry.record.status != ReturnStatus::Proving {
+                continue;
+            }
+            if orderly {
+                requeue_after_stop(&mut entry.record, at_ms);
+            } else {
                 schedule_after_interruption(&mut entry.record, at_ms, retry);
             }
         }
@@ -361,6 +381,16 @@ impl Ledger {
             .values_mut()
             .filter(move |r| ids.contains(&r.burn.id) && r.in_batch(&batch_id))
     }
+}
+
+fn requeue_after_stop(record: &mut ReturnRecord, at_ms: u128) {
+    record.not_before_ms = None;
+    record.failure = None;
+    record.transition_with(
+        ReturnStatus::Queued,
+        at_ms,
+        "Proof stopped with the service; the return is proven again when it starts",
+    );
 }
 
 fn schedule_after_interruption(record: &mut ReturnRecord, at_ms: u128, retry: &RetryPolicy) {
@@ -829,6 +859,7 @@ mod tests {
             Event::BatchInterrupted {
                 id: first.clone(),
                 at_ms: 500,
+                orderly: false,
             },
             &retry(),
         );
@@ -850,6 +881,7 @@ mod tests {
             Event::BatchInterrupted {
                 id: second,
                 at_ms: 71_000,
+                orderly: false,
             },
             &retry(),
         );
@@ -936,9 +968,58 @@ mod tests {
         let events = ledger.recover(600);
         assert!(matches!(
             events.as_slice(),
-            [Event::BatchInterrupted { id, at_ms: 600 }] if *id == second
+            [Event::BatchInterrupted { id, at_ms: 600, orderly: false }] if *id == second
         ));
         assert_eq!(ledger.unsettled_proofs()[0].id, first);
+    }
+
+    #[test]
+    fn an_orderly_stop_requeues_the_proving_batch_without_an_attempt() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100), accepted("b", 0xB, 2, 200)]);
+        let first = formed(&mut ledger, &["a"], 300);
+        proven(&mut ledger, &first, &[[0xA; 32]], 400);
+        let second = formed(&mut ledger, &["b"], 500);
+        let events = ledger.stop(600);
+        assert!(matches!(
+            events.as_slice(),
+            [Event::BatchInterrupted { id, at_ms: 600, orderly: true }] if *id == second
+        ));
+        for _ in 0..3 {
+            for event in ledger.stop(600) {
+                ledger.apply(event, &retry());
+            }
+            formed(&mut ledger, &["b"], 700);
+        }
+        for event in ledger.stop(800) {
+            ledger.apply(event, &retry());
+        }
+        let record = ledger.record("b").unwrap();
+        assert_eq!(record.status, ReturnStatus::Queued);
+        assert_eq!(record.attempts, 0);
+        assert_eq!(record.not_before_ms, None);
+        assert!(record.message.contains("stopped with the service"));
+        assert_eq!(record.queue_position, Some(1));
+        assert_eq!(
+            ledger.batch(&second).unwrap().status,
+            BatchStatus::Interrupted
+        );
+        assert!(ledger.active_batch().is_none());
+        assert!(ledger.stop(900).is_empty());
+        assert_eq!(ledger.record("a").unwrap().status, ReturnStatus::Proven);
+    }
+
+    #[test]
+    fn an_interruption_journaled_before_orderly_existed_is_charged() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        let id = formed(&mut ledger, &["a"], 300);
+        let line = format!(r#"{{"batch_interrupted":{{"id":"{id}","at_ms":500}}}}"#);
+        let event: Event = serde_json::from_str(&line).unwrap();
+        assert!(matches!(
+            event,
+            Event::BatchInterrupted { orderly: false, .. }
+        ));
+        ledger.apply(event, &retry());
+        assert_eq!(ledger.record("a").unwrap().attempts, 1);
     }
 
     #[test]

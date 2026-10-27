@@ -280,6 +280,21 @@ impl ReturnStore {
         }
     }
 
+    /// Put the batch whose proof the service abandoned to stop back in the queue, without
+    /// charging its members an attempt, and name it. Called only once nothing else proves
+    /// or settles.
+    pub fn stop_proving(&self, now_ms: u128) -> Vec<String> {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        let mut stopped = Vec::new();
+        for event in inner.ledger.stop(now_ms) {
+            if let Event::BatchInterrupted { id, .. } = &event {
+                stopped.push(id.clone());
+            }
+            inner.commit(event);
+        }
+        stopped
+    }
+
     pub fn read<T>(&self, f: impl FnOnce(&Ledger) -> T) -> T {
         f(&self.inner.lock().expect("store poisoned").ledger)
     }
