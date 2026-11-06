@@ -34,6 +34,9 @@ pub struct AppState {
     pub chain_events: sequencer::ChainEvents,
     /// Set once SIGTERM starts a drain; `/health` reports it.
     pub drain: shutdown::Drain,
+    /// Whether the service submits settlements itself, and so keeps a batch's proof to
+    /// itself until the batch settles or passes its deadline.
+    pub submits: bool,
 }
 
 /// Load the envelope intake (deployment JSON + trust base). The service admits

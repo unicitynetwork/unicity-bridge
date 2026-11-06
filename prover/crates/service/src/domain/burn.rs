@@ -92,6 +92,11 @@ impl Return {
             )
     }
 
+    /// Released on chain by the vault's log, waiting for a second source to confirm it.
+    pub fn awaits_confirmation(&self) -> bool {
+        self.record.status == ReturnStatus::Submitted
+    }
+
     pub fn is_done(&self) -> bool {
         self.record.status == ReturnStatus::Settled
             || (self.record.status == ReturnStatus::Failed && !self.record.failed_recoverably())

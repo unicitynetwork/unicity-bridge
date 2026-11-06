@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const hre = require("hardhat");
-const { hex32, normalizeEvent, groupBatches } = require("../scripts/relayer-lib.js");
-const { lockRejections } = require("../scripts/relayer.js");
+const { hex32, normalizeEvent, groupBatches, releaseLogged } = require("../scripts/relayer-lib.js");
+const { lockRejections, confirmReleases } = require("../scripts/relayer.js");
 
 const R = (n) => "0x" + n.toString(16).padStart(64, "0");
 
@@ -59,6 +59,18 @@ describe("S4 relayer — event grouping (relayer-lib)", () => {
     expect(batches[0].nullifiers).to.deep.equal([R(0xa1), R(0xa2)]);
   });
 
+  it("names the transaction each batch was settled in, and refuses a Released from another", () => {
+    const events = [
+      { kind: "BatchFulfilled", blockNumber: 100, eventIndex: 0, txId: "aa", spentRootOld: R(0), spentRootNew: R(11), batchSize: 1 },
+      { kind: "Released", blockNumber: 100, eventIndex: 1, txId: "aa", nullifier: R(0xa1) },
+    ];
+    expect(groupBatches(events).batches).to.deep.equal([
+      { nullifiers: [R(0xa1)], spent_root_old: R(0), spent_root_new: R(11), txid: "aa" },
+    ]);
+    const crossed = [events[0], { ...events[1], txId: "bb" }];
+    expect(() => groupBatches(crossed)).to.throw(/from transaction bb, not the batch's aa/);
+  });
+
   it("throws when a batch's Released events are missing (truncated log)", () => {
     const events = [
       { kind: "BatchFulfilled", blockNumber: 100, eventIndex: 0, spentRootOld: R(0), spentRootNew: R(11), batchSize: 3 },
@@ -112,5 +124,52 @@ describe("S4 relayer — simulate checks the lock refs a leaf draws on", () => {
     const bare = { lockDigest: (nonce) => ({ call: async () => (await vault.lockDigest(nonce)).slice(2).toUpperCase() }) };
     const fine = leaf(recipient, "t4", [{ nonce: lock.nonce.toString(), digest: lock.digest }]);
     expect(await lockRejections(bare, [fine])).to.deep.equal([]);
+  });
+});
+
+describe("S4 relayer — confirming a release on a second node", () => {
+  const ethers = hre.ethers;
+  const TOPIC = ethers.id("Released(bytes32,address,uint256,address,uint256,uint64)").slice(2);
+  const VAULT = "41" + "a6".repeat(20);
+  const N1 = R(0xa1);
+
+  // A solidity node's `gettransactioninfobyid` for a successful settlement of `nullifier`.
+  function info(nullifier, overrides = {}) {
+    return {
+      id: "cc".repeat(32),
+      blockNumber: 7,
+      receipt: { result: "SUCCESS" },
+      log: [{ address: "a6".repeat(20), topics: [TOPIC, nullifier.slice(2), "00".repeat(32)], data: "" }],
+      ...overrides,
+    };
+  }
+
+  it("matches the vault's Released log in EVM and Tron shapes", () => {
+    const evm = [{ address: "0x" + "A6".repeat(20), topics: ["0x" + TOPIC, N1] }];
+    expect(releaseLogged(evm, { vault: VAULT, topic: "0x" + TOPIC, nullifier: N1 })).to.equal(true);
+    expect(releaseLogged(info(N1).log, { vault: VAULT, topic: TOPIC, nullifier: N1 })).to.equal(true);
+    expect(releaseLogged(info(N1).log, { vault: VAULT, topic: TOPIC, nullifier: R(0xa2) })).to.equal(false);
+    expect(releaseLogged(info(N1).log, { vault: "41" + "b7".repeat(20), topic: TOPIC, nullifier: N1 })).to.equal(false);
+    expect(releaseLogged(undefined, { vault: VAULT, topic: TOPIC, nullifier: N1 })).to.equal(false);
+  });
+
+  it("confirms only a solidified, successful transaction with the vault's Released log for the nullifier", async () => {
+    const answers = {
+      ["11".repeat(32)]: info(N1),
+      ["22".repeat(32)]: {},
+      ["33".repeat(32)]: info(N1, { receipt: { result: "REVERT" }, log: undefined }),
+      ["44".repeat(32)]: info(R(0xa2)),
+    };
+    const asked = [];
+    const transactionInfo = async (txid) => (asked.push(txid), answers[txid]);
+    const releases = Object.keys(answers).map((txid, i) => ({ nullifier: N1, txid: i === 0 ? "0x" + txid : txid }));
+    const { confirmed, unconfirmed } = await confirmReleases(transactionInfo, VAULT, releases);
+    expect(confirmed).to.deep.equal([releases[0]]);
+    expect(unconfirmed.map((u) => u.reason)).to.deep.equal([
+      "the confirmation node has no solidified transaction by that id",
+      "the transaction did not succeed (REVERT)",
+      "the transaction emitted no Released event for the nullifier from the vault",
+    ]);
+    expect(asked[0]).to.equal("11".repeat(32));
   });
 });

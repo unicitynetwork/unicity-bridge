@@ -12,6 +12,10 @@ use super::{
 };
 use crate::store::{BatchBundle, ErrorKind, ReturnFailure, ReturnRecord, ReturnStatus};
 
+/// How long a release the vault's log shows waits before a second source is asked again
+/// to confirm it.
+pub const RELEASE_RECHECK_MS: u128 = 5 * 60_000;
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ledger {
@@ -30,6 +34,7 @@ pub struct Health {
     pub proving_since_ms: Option<u128>,
     pub last_proof_ms: Option<u128>,
     pub average_proof_ms: Option<u128>,
+    pub unconfirmed_releases: usize,
 }
 
 impl Ledger {
@@ -86,9 +91,33 @@ impl Ledger {
         pending
     }
 
-    /// Returns neither settled nor finally failed: queued, in a batch, or awaiting a retry.
+    /// Returns neither settled nor finally failed: queued, in a batch, awaiting a retry, or
+    /// released on chain and awaiting confirmation.
     pub fn unfinished(&self) -> usize {
         self.returns.values().filter(|r| !r.is_done()).count()
+    }
+
+    /// Returns whose release the vault's log shows but no second source has confirmed,
+    /// due for another check at `now_ms`: `(id, nullifier)`.
+    pub fn releases_due(&self, now_ms: u128) -> Vec<(String, String)> {
+        let mut due: Vec<&Return> = self
+            .returns
+            .values()
+            .filter(|r| r.awaits_confirmation() && r.is_due(now_ms))
+            .collect();
+        due.sort_by_key(|r| r.seq);
+        due.into_iter()
+            .map(|r| (r.burn.id.clone(), r.record.nullifier.clone()))
+            .collect()
+    }
+
+    /// When the next unconfirmed release is due for a check.
+    pub fn next_release_check(&self) -> Option<u128> {
+        self.returns
+            .values()
+            .filter(|r| r.awaits_confirmation())
+            .map(|r| r.record.not_before_ms.unwrap_or(0))
+            .min()
     }
 
     pub fn burns(&self, ids: &[String]) -> Vec<&Burn> {
@@ -195,6 +224,11 @@ impl Ledger {
                 .and_then(Batch::proof_duration_ms),
             average_proof_ms: (!durations.is_empty())
                 .then(|| durations.iter().sum::<u128>() / durations.len() as u128),
+            unconfirmed_releases: self
+                .returns
+                .values()
+                .filter(|r| r.awaits_confirmation())
+                .count(),
         }
     }
 
@@ -221,6 +255,17 @@ impl Ledger {
             tracing::warn!(id, "requeue for an unknown return ignored");
             return;
         };
+        if entry.awaits_confirmation() {
+            let record = &mut entry.record;
+            record.not_before_ms = None;
+            record.failure = None;
+            record.transition_with(
+                ReturnStatus::Queued,
+                at_ms,
+                "The vault log no longer shows this return released; it is proven again",
+            );
+            return;
+        }
         if !entry.record.failed_recoverably() {
             tracing::warn!(
                 id,
@@ -351,11 +396,41 @@ impl Ledger {
         };
         let record = &mut entry.record;
         match reason {
-            Exclusion::AlreadySettled => record.transition_with(
-                ReturnStatus::Settled,
-                at_ms,
-                "Nullifier already released on chain",
-            ),
+            Exclusion::AlreadySettled {
+                txid,
+                unconfirmed: None,
+            } => {
+                let message = match &txid {
+                    Some(txid) => format!("Nullifier already released on chain in {txid}"),
+                    None => "Nullifier already released on chain".to_string(),
+                };
+                record.settle_txid = txid;
+                record.not_before_ms = None;
+                record.failure = None;
+                record.transition_with(ReturnStatus::Settled, at_ms, &message);
+            }
+            Exclusion::AlreadySettled {
+                txid,
+                unconfirmed: Some(why),
+            } => {
+                let released = match &txid {
+                    Some(txid) => format!("released in {txid}"),
+                    None => "released".to_string(),
+                };
+                let message = format!(
+                    "The vault log shows this return {released}; it settles once a second \
+                     source confirms that ({why})"
+                );
+                record.not_before_ms = Some(at_ms + RELEASE_RECHECK_MS);
+                // A check that finds the same as the last adds nothing to the audit trail,
+                // which would otherwise grow by one entry per check for as long as it waits.
+                if record.status == ReturnStatus::Submitted && record.message == message {
+                    return;
+                }
+                record.settle_txid = None;
+                record.failure = None;
+                record.transition_with(ReturnStatus::Submitted, at_ms, &message);
+            }
             Exclusion::Rejected { message } => schedule_retry(
                 record,
                 ErrorKind::SubmissionFailed,
@@ -777,7 +852,10 @@ mod tests {
         ledger.apply(
             Event::ReturnExcluded {
                 id: "a".to_string(),
-                reason: Exclusion::AlreadySettled,
+                reason: Exclusion::AlreadySettled {
+                    txid: None,
+                    unconfirmed: None,
+                },
                 at_ms: 400,
             },
             &retry(),
@@ -901,7 +979,10 @@ mod tests {
         ledger.apply(
             Event::ReturnExcluded {
                 id: "a".to_string(),
-                reason: Exclusion::AlreadySettled,
+                reason: Exclusion::AlreadySettled {
+                    txid: None,
+                    unconfirmed: None,
+                },
                 at_ms: 400,
             },
             &retry(),
@@ -911,6 +992,131 @@ mod tests {
         assert_eq!(record.settle_txid, None);
         assert_eq!(record.success, Some(true));
         assert!(record.message.contains("already released"));
+    }
+
+    fn released(ledger: &mut Ledger, id: &str, txid: &str, unconfirmed: Option<&str>, at_ms: u128) {
+        ledger.apply(
+            Event::ReturnExcluded {
+                id: id.to_string(),
+                reason: Exclusion::AlreadySettled {
+                    txid: Some(txid.to_string()),
+                    unconfirmed: unconfirmed.map(str::to_string),
+                },
+                at_ms,
+            },
+            &retry(),
+        );
+    }
+
+    #[test]
+    fn a_confirmed_release_settles_the_return_with_its_transaction() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        formed(&mut ledger, &["a"], 300);
+        released(&mut ledger, "a", "0xfeed", None, 400);
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Settled);
+        assert_eq!(record.settle_txid.as_deref(), Some("0xfeed"));
+        assert!(record.terminal);
+        assert!(record.message.contains("0xfeed"));
+    }
+
+    #[test]
+    fn an_unconfirmed_release_waits_unfinished_and_uncharged_for_the_next_check() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        formed(&mut ledger, &["a"], 300);
+        released(&mut ledger, "a", "0xfeed", Some("no such transaction"), 400);
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Submitted);
+        assert!(!record.terminal);
+        assert_eq!(record.success, None);
+        assert_eq!(record.settle_txid, None);
+        assert_eq!(record.attempts, 0);
+        assert!(record.message.contains("0xfeed"), "{}", record.message);
+        assert!(
+            record.message.contains("no such transaction"),
+            "{}",
+            record.message
+        );
+        assert!(ledger.pending().is_empty());
+        assert_eq!(ledger.unfinished(), 1);
+        assert_eq!(ledger.health().unconfirmed_releases, 1);
+        assert_eq!(ledger.next_release_check(), Some(400 + RELEASE_RECHECK_MS));
+        assert!(ledger.releases_due(400 + RELEASE_RECHECK_MS - 1).is_empty());
+        assert_eq!(
+            ledger.releases_due(400 + RELEASE_RECHECK_MS),
+            vec![("a".to_string(), record.nullifier.clone())]
+        );
+
+        let trail = record.events.len();
+        released(&mut ledger, "a", "0xfeed", Some("no such transaction"), 450);
+        let again = ledger.record("a").unwrap();
+        assert_eq!(again.events.len(), trail);
+        assert_eq!(again.not_before_ms, Some(450 + RELEASE_RECHECK_MS));
+        released(
+            &mut ledger,
+            "a",
+            "0xfeed",
+            Some("2 of 12 confirmations"),
+            460,
+        );
+        let changed = ledger.record("a").unwrap();
+        assert_eq!(changed.events.len(), trail + 1);
+        assert!(changed.message.contains("2 of 12"), "{}", changed.message);
+
+        released(&mut ledger, "a", "0xfeed", None, 500);
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Settled);
+        assert_eq!(record.settle_txid.as_deref(), Some("0xfeed"));
+        assert_eq!(ledger.next_release_check(), None);
+        assert_eq!(ledger.health().unconfirmed_releases, 0);
+    }
+
+    #[test]
+    fn a_release_the_log_no_longer_shows_is_proven_again() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        formed(&mut ledger, &["a"], 300);
+        released(&mut ledger, "a", "0xfeed", Some("no such transaction"), 400);
+        ledger.apply(
+            Event::Requeued {
+                id: "a".to_string(),
+                at_ms: 500,
+            },
+            &retry(),
+        );
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Queued);
+        assert_eq!(record.not_before_ms, None);
+        assert_eq!(record.attempts, 0);
+        assert_eq!(ledger.pending().len(), 1);
+    }
+
+    #[test]
+    fn an_exclusion_journaled_before_releases_named_a_txid_reads_as_a_confirmed_release() {
+        let event: Event = serde_json::from_str(
+            r#"{"return_excluded":{"id":"a","reason":{"kind":"already_settled"},"at_ms":400}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            event,
+            Event::ReturnExcluded {
+                id: "a".to_string(),
+                reason: Exclusion::AlreadySettled {
+                    txid: None,
+                    unconfirmed: None
+                },
+                at_ms: 400,
+            }
+        );
+        let line = serde_json::to_string(&Event::ReturnExcluded {
+            id: "a".to_string(),
+            reason: Exclusion::released(Some("0xfeed".to_string())),
+            at_ms: 400,
+        })
+        .unwrap();
+        assert!(
+            line.contains(r#""reason":{"kind":"already_settled","txid":"0xfeed","unconfirmed":"#),
+            "{line}"
+        );
     }
 
     #[test]
@@ -1089,6 +1295,7 @@ mod tests {
                 proving_since_ms: Some(10_000),
                 last_proof_ms: Some(5_000),
                 average_proof_ms: Some(4_000),
+                unconfirmed_releases: 0,
             }
         );
     }

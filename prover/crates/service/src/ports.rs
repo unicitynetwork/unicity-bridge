@@ -5,7 +5,7 @@ use bridge_return_host::s2::{RebuiltAccumulator, SettledBatch};
 use crate::{
     domain::{assembler::Rejected, burn::LeafToSettle},
     prover::{ProofBundle, Prover, ProverError},
-    sequencer::{ChainEvents, ChainSyncError},
+    sequencer::{ChainEvents, ChainSyncError, Confirmations, Release},
     store::BatchBundle,
     submitter::{SimulateError, SubmitOutcome, Submitter},
 };
@@ -32,6 +32,12 @@ pub trait ChainLog: Send + Sync + 'static {
         &self,
         known: Vec<SettledBatch>,
     ) -> impl Future<Output = Result<RebuiltAccumulator, ChainSyncError>> + Send;
+
+    /// Check releases the log shows against a second source.
+    fn confirm_releases(
+        &self,
+        releases: &[Release],
+    ) -> impl Future<Output = Result<Confirmations, ChainSyncError>> + Send;
 }
 
 impl ProofBackend for Prover {
@@ -56,5 +62,12 @@ impl ChainLog for ChainEvents {
         known: Vec<SettledBatch>,
     ) -> Result<RebuiltAccumulator, ChainSyncError> {
         ChainEvents::synced_accumulator(self, known).await
+    }
+
+    async fn confirm_releases(
+        &self,
+        releases: &[Release],
+    ) -> Result<Confirmations, ChainSyncError> {
+        ChainEvents::confirm_releases(self, releases).await
     }
 }

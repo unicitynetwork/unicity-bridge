@@ -52,7 +52,9 @@ function normalizeEvent(raw) {
 }
 
 /// Group ordered events into the S2 `events.json` shape:
-/// `{ batches: [{ nullifiers, spent_root_old, spent_root_new }] }`.
+/// `{ batches: [{ nullifiers, spent_root_old, spent_root_new, txid? }] }`. `txid` is the
+/// transaction that emitted the batch, when the events name it; a Released claimed from
+/// another transaction means the log is out of order or incomplete.
 function groupBatches(events) {
   const sorted = [...events].sort(
     (a, b) => a.blockNumber - b.blockNumber || a.eventIndex - b.eventIndex
@@ -64,7 +66,13 @@ function groupBatches(events) {
     const nullifiers = [];
     for (let j = i + 1; j < sorted.length && nullifiers.length < e.batchSize; j++) {
       if (sorted[j].kind === "BatchFulfilled") break; // next batch began; log truncated
-      if (sorted[j].kind === "Released") nullifiers.push(sorted[j].nullifier);
+      if (sorted[j].kind !== "Released") continue;
+      if (e.txId && sorted[j].txId && sorted[j].txId !== e.txId) {
+        throw new Error(
+          `batch at block ${e.blockNumber}: Released ${sorted[j].nullifier} is from transaction ${sorted[j].txId}, not the batch's ${e.txId}`
+        );
+      }
+      nullifiers.push(sorted[j].nullifier);
     }
     if (nullifiers.length !== e.batchSize) {
       throw new Error(
@@ -75,9 +83,48 @@ function groupBatches(events) {
       nullifiers,
       spent_root_old: e.spentRootOld,
       spent_root_new: e.spentRootNew,
+      ...(e.txId ? { txid: e.txId } : {}),
     });
   }
   return { batches };
 }
 
-module.exports = { hex32, normalizeEvent, groupBatches };
+/// Whether `logs` — an EVM receipt's, or the `log` of a Tron transaction info — hold the
+/// vault's event `topic` with `nullifier` as its first indexed argument. Addresses compare
+/// on their last 20 bytes, so a Tron `41`-prefixed or bare hex address matches too.
+function releaseLogged(logs, { vault, topic, nullifier }) {
+  const address = (a) => String(a).toLowerCase().replace(/^0x/, "").slice(-40);
+  return (logs || []).some((log) => {
+    const topics = log.topics || [];
+    return (
+      address(log.address) === address(vault) &&
+      topics.length > 1 &&
+      hex32(topics[0]) === hex32(topic) &&
+      hex32(topics[1]) === hex32(nullifier)
+    );
+  });
+}
+
+/// `request`'s outcome, or a TIMEOUT rejection once `until` (ms since the epoch) passes, so
+/// a stalled request cannot hold a relayer past its deadline. The abandoned request's
+/// eventual outcome is ignored.
+function beforeDeadline(request, until) {
+  if (!Number.isFinite(until)) return request;
+  request.catch(() => {});
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(Object.assign(new Error("request outlasted the deadline"), { code: "TIMEOUT" })),
+      Math.max(until - Date.now(), 0)
+    );
+  });
+  return Promise.race([request, deadline]).finally(() => clearTimeout(timer));
+}
+
+/// Write `text` to stdout and exit with `status` once it is flushed: a request abandoned at
+/// its deadline would otherwise keep the process alive past the caller's timeout.
+function exitWith(text, status) {
+  process.stdout.write(text, () => process.exit(status));
+}
+
+module.exports = { hex32, normalizeEvent, groupBatches, releaseLogged, beforeDeadline, exitWith };

@@ -338,6 +338,17 @@ impl BatchBundle {
         self.proof_bytes != "0x"
     }
 
+    /// The latest deadline among the leaves, after which the vault pays no fee and the spec
+    /// leaves settling the batch to anyone; `None` when a leaf's deadline does not parse.
+    pub fn self_settle_from_secs(&self) -> Option<u64> {
+        self.leaves.iter().try_fold(0u64, |latest, leaf| {
+            let deadline = leaf.deadline.strip_prefix("0x").unwrap_or(&leaf.deadline);
+            u64::from_str_radix(deadline, 16)
+                .ok()
+                .map(|d| latest.max(d))
+        })
+    }
+
     pub fn proven(
         batch_id: String,
         proof: &ProofBundle,

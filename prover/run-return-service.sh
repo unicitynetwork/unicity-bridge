@@ -16,6 +16,9 @@ export BRIDGE_RETURN_EVENTS_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $RO
 # Lock refs (and push payouts) are checked against the vault before proving;
 # the service refuses to start without this.
 export BRIDGE_RETURN_SIMULATE_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER simulate --stdin"
+# A release the service holds no receipt for settles a return only once this confirms it
+# through ETH_CONFIRM_RPC_URL / TRON_CONFIRM_RPC_URL (in .env), a second RPC.
+export BRIDGE_RETURN_CONFIRM_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER confirm --stdin"
 export BRIDGE_RETURN_STATE_DIR="$ROOT/prover/target/bridge-return-service/state"
 export BRIDGE_RETURN_IDLE_WAIT_SECS=0
 export BRIDGE_RETURN_MAX_BATCH_SIZE=8

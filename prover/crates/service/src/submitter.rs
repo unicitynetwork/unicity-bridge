@@ -15,12 +15,26 @@ pub struct Submitter {
     timeout: Duration,
 }
 
+/// The submit command's exit status for a settlement it broadcast but saw no receipt for
+/// (EX_TEMPFAIL): stdout carries the txid, and the chain log settles or refutes it.
+pub const UNCONFIRMED_EXIT: i32 = 75;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmitOutcome {
     Skipped,
-    Submitted { txid: String },
+    /// Settled with the confirmations the submitter waits for.
+    Submitted {
+        txid: String,
+    },
+    /// Broadcast, but the submitter could not read the receipt: the transaction may have
+    /// settled, be waiting to, or have been dropped.
+    Unconfirmed {
+        txid: String,
+    },
     StaleRoot,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,6 +90,11 @@ impl Submitter {
         Ok(self)
     }
 
+    /// Whether a submit command is configured.
+    pub fn submits(&self) -> bool {
+        self.submit_cmd.is_some()
+    }
+
     pub fn label(&self) -> &'static str {
         match self.submit_cmd {
             None => "none",
@@ -113,6 +132,10 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) 
         Err(e) => return SubmitOutcome::Failed { message: e },
     };
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let txid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.code() == Some(UNCONFIRMED_EXIT) && !txid.is_empty() {
+        return SubmitOutcome::Unconfirmed { txid };
+    }
     if !output.status.success() {
         if stderr.contains("stale root") {
             return SubmitOutcome::StaleRoot;
@@ -121,7 +144,6 @@ async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) 
             message: format!("submit command exited {}: {stderr}", output.status),
         };
     }
-    let txid = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if txid.is_empty() {
         return SubmitOutcome::Failed {
             message: "submit command exited 0 but printed no txid".to_string(),
@@ -151,7 +173,7 @@ async fn run_simulate_command(
         .map_err(|e| SimulateError::Decode(format!("{e}; got: {}", snippet(stdout.trim()))))
 }
 
-async fn run_with_stdin(
+pub(crate) async fn run_with_stdin(
     cmd: &str,
     payload: &[u8],
     timeout: Duration,
@@ -254,6 +276,27 @@ mod tests {
             .submit(&bundle())
             .await;
         assert_eq!(outcome, SubmitOutcome::StaleRoot);
+    }
+
+    #[tokio::test]
+    async fn a_settlement_broadcast_without_a_receipt_is_unconfirmed_not_failed() {
+        let outcome =
+            submitter("cat >/dev/null; echo 0xabc; echo 'receipt unreadable' >&2; exit 75")
+                .submit(&bundle())
+                .await;
+        assert_eq!(
+            outcome,
+            SubmitOutcome::Unconfirmed {
+                txid: "0xabc".to_string()
+            }
+        );
+        let outcome = submitter("cat >/dev/null; echo 'nothing broadcast' >&2; exit 75")
+            .submit(&bundle())
+            .await;
+        assert!(
+            matches!(&outcome, SubmitOutcome::Failed { message } if message.contains("nothing broadcast")),
+            "{outcome:?}"
+        );
     }
 
     #[tokio::test]

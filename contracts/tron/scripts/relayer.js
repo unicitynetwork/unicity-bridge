@@ -7,6 +7,7 @@
 //   node scripts/relayer.js scan                       # rebuild from events, verify vs on-chain spentRoot
 //   node scripts/relayer.js settle <bundle> <settle>   # submit fulfillBatch for a prepared batch
 //   node scripts/relayer.js simulate --stdin           # which leaves' transfers would revert (constant calls)
+//   node scripts/relayer.js confirm --stdin            # confirm releases on a second node (TRON_CONFIRM_RPC_URL)
 //
 // The full self-settle loop:
 //   1. scan      — confirm the local view matches the chain (this tool)
@@ -21,7 +22,17 @@ const { execFileSync } = require("child_process");
 const ethers = require("ethers");
 const TronWebLib = require("tronweb");
 const TronWeb = TronWebLib.TronWeb || TronWebLib.default || TronWebLib;
-const { normalizeEvent, groupBatches, hex32 } = require("./relayer-lib.js");
+const { normalizeEvent, groupBatches, hex32, releaseLogged, beforeDeadline, exitWith } = require("./relayer-lib.js");
+
+const RELEASED_TOPIC = ethers.id("Released(bytes32,address,uint256,address,uint256,uint64)");
+// `settle --stdin` exits with this status (EX_TEMPFAIL) when it broadcast the settlement but
+// saw no receipt for it: stdout still carries the txid, and the service settles or refutes
+// the batch from the vault's log instead of failing it.
+const UNCONFIRMED_EXIT = 75;
+// The service kills a command after BRIDGE_RETURN_COMMAND_TIMEOUT_SECS (600 unless set);
+// the receipt wait ends this long before that, so the txid still reaches the service.
+const STARTED_MS = Date.now();
+const TIMEOUT_MARGIN_MS = 30_000;
 
 function loadEnv() {
   const env = {};
@@ -281,13 +292,31 @@ async function settleFromStdin() {
     [],
     meHex
   );
-  const id = (await tw.trx.sendRawTransaction(await tw.trx.sign(built.transaction))).txid || built.transaction.txID;
-  let info;
-  for (let i = 0; i < 20 && !(info && info.receipt); i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    info = await tw.trx.getTransactionInfo(id);
+  const sent = await tw.trx.sendRawTransaction(await tw.trx.sign(built.transaction));
+  if (!sent || !sent.result) {
+    console.error(`fulfillBatch not broadcast: ${sent?.code || "refused"} ${nodeMessage(sent?.message)}`);
+    process.exit(1);
   }
-  const ok = info && info.receipt && info.receipt.result === "SUCCESS";
+  const id = sent.txid || built.transaction.txID;
+  // Once broadcast, a read that fails is read again, and a receipt never seen leaves the
+  // settlement unconfirmed rather than failed. Reads stop, a pending one included, before
+  // the service's command timeout would kill the relayer.
+  const until = STARTED_MS + Number(process.env.BRIDGE_RETURN_COMMAND_TIMEOUT_SECS || 600) * 1000 - TIMEOUT_MARGIN_MS;
+  let info;
+  for (let i = 0; i < 20 && !(info && info.receipt) && Date.now() < until; i++) {
+    await new Promise((r) => setTimeout(r, Math.max(Math.min(3000, until - Date.now()), 0)));
+    try {
+      info = await beforeDeadline(tw.trx.getTransactionInfo(id), until);
+    } catch (e) {
+      console.error(`relayer: receipt of ${id} unread (${e.message || e}); reading it again`);
+    }
+  }
+  if (!(info && info.receipt)) {
+    console.error(`broadcast ${id}, but saw no receipt for it; the service looks for it in the vault's log`);
+    exitWith(id, UNCONFIRMED_EXIT);
+    return;
+  }
+  const ok = info.receipt.result === "SUCCESS";
   if (!ok) {
     // stderr is surfaced verbatim by the service's S4 submit failure log, so the
     // decoded require() string ("vault: stale root", …) reaches the operator.
@@ -298,6 +327,49 @@ async function settleFromStdin() {
   }
   console.error(`settled: https://nile.tronscan.org/#/transaction/${id}`);
   process.stdout.write(id);
+}
+
+// TronWeb reports a node's refusal as hex-encoded text.
+function nodeMessage(message) {
+  if (typeof message !== "string") return "";
+  return /^([0-9a-f]{2})+$/i.test(message) ? Buffer.from(message, "hex").toString() : message;
+}
+
+// Each release (a nullifier and the transaction the settlement log names for it) is
+// confirmed only if `transactionInfo` — a solidity node's, which reports only solidified,
+// final transactions — shows that transaction succeeded with the vault's Released event for
+// the nullifier.
+async function confirmReleases(transactionInfo, vaultHex, releases) {
+  const confirmed = [];
+  const unconfirmed = [];
+  for (const { nullifier, txid } of releases) {
+    const info = await transactionInfo(String(txid).replace(/^0x/i, ""));
+    const reason = !info || !info.id
+      ? "the confirmation node has no solidified transaction by that id"
+      : info.receipt?.result !== "SUCCESS"
+        ? `the transaction did not succeed (${info.receipt?.result || info.result || "no result"})`
+        : !releaseLogged(info.log, { vault: vaultHex, topic: RELEASED_TOPIC, nullifier })
+          ? "the transaction emitted no Released event for the nullifier from the vault"
+          : null;
+    if (reason) unconfirmed.push({ nullifier, txid, reason });
+    else confirmed.push({ nullifier, txid });
+  }
+  return { confirmed, unconfirmed };
+}
+
+async function confirmFromStdin() {
+  const { releases = [] } = JSON.parse(await readStdin());
+  const env = loadEnv();
+  const endpoint = (url) => String(url || "").trim().replace(/\/+$/, "");
+  const base = endpoint(env.TRON_CONFIRM_RPC_URL);
+  if (!base) throw new Error("TRON_CONFIRM_RPC_URL not set: no second node to confirm a release through");
+  if (base.toLowerCase() === endpoint(env.TRON_RPC_URL || "https://nile.trongrid.io").toLowerCase()) {
+    throw new Error("TRON_CONFIRM_RPC_URL is TRON_RPC_URL: a release must be confirmed through a second, independent node");
+  }
+  const tw = new TronWeb({ fullHost: base });
+  const out = await confirmReleases((txid) => tw.trx.getTransactionInfo(txid), tw.address.toHex(env.TRON_VAULT), releases);
+  console.error(`relayer confirm --stdin: ${out.confirmed.length} of ${releases.length} release(s) confirmed on ${base}`);
+  process.stdout.write(JSON.stringify(out));
 }
 
 function toTronHex(tw, address) {
@@ -392,6 +464,7 @@ async function main() {
   if (cmd === "scan") return scan();
   if (cmd === "events") return events();
   if (cmd === "simulate" && process.argv[3] === "--stdin") return simulateFromStdin();
+  if (cmd === "confirm" && process.argv[3] === "--stdin") return confirmFromStdin();
   if (cmd === "settle") {
     if (process.argv[3] === "--stdin") return settleFromStdin();
     const [, , , bundle, settlePath] = process.argv;
@@ -399,11 +472,11 @@ async function main() {
     return settle(bundle, settlePath);
   }
   console.log(
-    "usage: relayer.js scan | events | settle <bundle.json> <settle.json> | settle --stdin | simulate --stdin"
+    "usage: relayer.js scan | events | settle <bundle.json> <settle.json> | settle --stdin | simulate --stdin | confirm --stdin"
   );
 }
 
-module.exports = { lockRejections };
+module.exports = { lockRejections, confirmReleases };
 
 if (require.main === module) {
   main().catch((e) => {

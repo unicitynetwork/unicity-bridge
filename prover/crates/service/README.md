@@ -119,6 +119,7 @@ cargo run -p bridge-return-service --release
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
 | `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer-eth.js events` or `relayer.js events`). Unset assumes a pristine vault. |
 | `BRIDGE_RETURN_SIMULATE_CMD` | — | Settlement pre-simulation command: lock-ref and transfer checks (see below). **Required.** |
+| `BRIDGE_RETURN_CONFIRM_CMD` | — | Confirms, on a second source, a release the chain log shows but the service holds no receipt for (`relayer-eth.js confirm --stdin`, which reads `ETH_CONFIRM_RPC_URL`). Unset, such a return stays `submitted` (see below). |
 | `BRIDGE_RETURN_MAX_PENDING` | `1000` | Most returns held unfinished (queued, proving, awaiting settlement or a retry); beyond it `POST /returns` refuses a new burn with `queue_full` (HTTP 503, recoverable). |
 | `RUST_LOG` | — | e.g. `bridge_return_service=info`. |
 
@@ -137,20 +138,20 @@ deployment's. Only the in-process test router, built without an intake, takes on
 | `POST` | `/returns` | Submit `{tokenCbor, configHash, reasonBytes}`. Idempotent on nullifier; S1 precheck rejects bad burns synchronously. |
 | `GET` | `/returns/:id` | Rich status record (below). |
 | `GET` | `/returns?nullifier=` | Lookup by nullifier (wallet idempotency); `null` if unknown. |
-| `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `settleTxid`) — anyone can self-submit it. |
+| `GET` | `/batches/:id` | Published bundle (`vkey`, `publicValues`, `proofBytes`, `leaves`, `lockRefs`, `settleTxid`) — anyone can self-submit it. A service with a submitter publishes it once the batch settles or every burn in it is past its deadline, and answers `not_published` (HTTP 404, recoverable) before; one without serves it as soon as it is proven. |
 | `GET` | `/fees` | The fee terms a wallet writes into a burn: `feeRecipient`, `feeAmount` (decimal string) and `deadline` (unix seconds, service clock). A burn paying less than the floor, to another account, or with too little time before its deadline is refused with `fee_not_paid`. |
 | `GET` | `/accumulator` | Rebuilt `spentRoot` + SYNCED flag. |
-| `GET` | `/health` | `draining`, `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
+| `GET` | `/health` | `draining`, `queueDepth`, `activeBatch`, `activeBatchSize`, `provingSinceMs`, `lastProofMs`, `averageProofMs`, `unconfirmedReleases`, `maxBatchSize`, `idleWaitMs`, `proveMode`, `chainSync`. |
 
 All responses are **camelCase JSON**.
 
 ### Status semantics
-`GET /returns/:id` returns: `status` (`queued → proving → proven → settled`, or
-`failed`), `terminal`, `success`, `progress` (0–100), `message`, `nextPollMs`
-(poll cadence hint, 0 when terminal), `batchId`, `settleTxid`, `failure`
-(`{kind, message, recoverable}`), `attempts`, `notBeforeMs`, `queuePosition`,
-and an `events` audit trail. `submitted` stays in the enum for older clients
-but is no longer emitted: the submitter returns only once the receipt is in.
+`GET /returns/:id` returns: `status` (`queued → proving → proven → settled`,
+`submitted`, or `failed`), `terminal`, `success`, `progress` (0–100), `message`,
+`nextPollMs` (poll cadence hint, 0 when terminal), `batchId`, `settleTxid`,
+`failure` (`{kind, message, recoverable}`), `attempts`, `notBeforeMs`,
+`queuePosition`, and an `events` audit trail. `settleTxid` is set only for a
+settlement the service holds a receipt for or a second source has confirmed.
 Errors are typed: `{error:{code, message, recoverable}}` with HTTP 400/404/503.
 Failure `kind`s: `precheck_rejected`, `proving_failed`, `submission_failed`,
 `chain_rejected`, `service_unavailable`.
@@ -158,11 +159,25 @@ Failure `kind`s: `precheck_rejected`, `proving_failed`, `submission_failed`,
 Every member of a batch shares its `batchId` and settles in one transaction.
 `batchSize`, `totalAmount` and `publicValues` on the record describe the burn
 as submitted (a batch of one); the batch's own values are on `GET /batches/:id`.
-A burn is set aside on its own when its nullifier is already released on chain
-(it becomes `settled` without a txid), when its recipient would revert the
-transfer (`failed`, recoverable), or when its stored input no longer decodes
-(`failed`, final). Two burns backed by the same deposit prove in separate
-batches.
+A burn is set aside on its own when its nullifier is already released on chain,
+when its recipient would revert the transfer (`failed`, recoverable), or when its
+stored input no longer decodes (`failed`, final). Two burns backed by the same
+deposit prove in separate batches.
+
+A release the chain log shows but the service did not submit itself (another
+party submitted the bundle, or the relayer lost track of its own transaction)
+comes from the one RPC the log is read from. It settles the return, with the
+transaction the log names as `settleTxid`, only once `BRIDGE_RETURN_CONFIRM_CMD`
+confirms that transaction on a second source: it succeeded, is final, and emitted
+the vault's `Released` event for the nullifier. Until then the return is
+`submitted`, not `terminal`, with no `settleTxid`; its `message` names the
+transaction and why it is not confirmed, `/health` counts it in
+`unconfirmedReleases`, and it is checked again every 5 minutes, costing no
+attempt. A return whose release the log no longer shows is queued and proven
+again. A proven batch whose every nullifier the log shows released settles as a
+batch only when one confirmed transaction released them all; otherwise each
+member settles or waits on its own and the batch is closed as `chain_rejected`,
+charging no member.
 
 `recoverable` says whether the same blob may go through later. A precheck
 rejection is deterministic for that blob and is never recoverable. A batch-wide
@@ -193,15 +208,35 @@ without touching the queue:
 - **`command`**: set `BRIDGE_RETURN_SUBMIT_CMD` to a program that receives the
   bundle JSON (`{batchId, mode, vkey, publicValues, proofBytes, leaves, lockRefs}`)
   on **stdin**, submits `fulfillBatch`, and prints the settle **txid** on stdout
-  (exit 0). A non-zero exit whose stderr contains `stale root` makes the service
-  re-prove the batch on the new root; any other failure schedules a retry that
-  reuses the proof. This is the seam for the existing
+  (exit 0). Exit **75** with the txid on stdout means the transaction was
+  broadcast but its receipt could not be read: the service then reads the chain
+  log after 30 s, 1, 2, 4 and 8 minutes, settles the batch once the log shows it
+  released (confirmed as below), re-proves it if the vault root moved past it, and
+  fails it as `submission_failed` only if the log shows neither. A non-zero exit
+  whose stderr contains `stale root` makes the service re-prove the batch on the
+  new root; any other failure schedules a retry that reuses the proof. The
+  relayers poll the receipt themselves, reading it again after a failed request,
+  and stop 30 s before `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` so the txid still
+  reaches the service. This is the seam for the existing
   `contracts/tron/scripts/relayer-eth.js settle` (Ethereum family), `relayer.js settle` (Tron) and for the all-Rust submitter (07 §B7).
 
 Example (wrapping the proven relayer):
 ```bash
 BRIDGE_RETURN_SUBMIT_CMD='node /path/contracts/tron/scripts/relayer-eth.js settle --stdin'
 ```
+
+### Release confirmation
+
+`BRIDGE_RETURN_CONFIRM_CMD` receives `{"releases": [{"nullifier", "txid"}]}` on
+**stdin** and prints `{"confirmed": [{"nullifier", "txid"}], "unconfirmed":
+[{"nullifier", "txid", "reason"}]}` on stdout (exit 0; non-zero when it cannot
+answer). Only an exact `confirmed` match confirms a release.
+`relayer-eth.js confirm --stdin` reads the receipt through `ETH_CONFIRM_RPC_URL`,
+which must be a different endpoint from `ETH_RPC_URL`, and confirms a release
+whose transaction succeeded, is `ETH_SETTLE_CONFIRMATIONS` deep, and carries the
+vault's `Released` event with the nullifier as topic 1. `relayer.js confirm
+--stdin` does the same through a Tron node at `TRON_CONFIRM_RPC_URL`, whose
+solidity API reports only final transactions.
 
 ### Settlement pre-simulation
 
@@ -269,9 +304,15 @@ journal is one JSON object per line (`jq -c 'keys[0]' journal.jsonl` lists the
 event types) and is compacted to one snapshot line at start. The **burned blob**
 is still the claim, and the wallet still resubmits it on a 404. Monitor:
 `/health` (queue depth, the active batch, its size and start, the last proof
-duration), `/accumulator` (SYNCED), last settle txid. Failure modes: precheck
-rejection (typed 400), stale root (re-prove on the new root), reverting
-recipient (excluded before proving), OOM (retried with backoff, then parked).
+duration, `unconfirmedReleases`), `/accumulator` (SYNCED), last settle txid. An
+`unconfirmedReleases` above zero that does not clear within a few checks means
+the chain log and the second source disagree about a payout, or that no second
+source is configured: check the transaction a `submitted` return's message names
+on an explorer. A return waiting on confirmation journals a `return_excluded`
+with `already_settled` and an `unconfirmed` reason at every check. Failure
+modes: precheck rejection (typed 400), stale root (re-prove on the new root),
+reverting recipient (excluded before proving), OOM (retried with backoff, then
+parked).
 
 ## Tests
 

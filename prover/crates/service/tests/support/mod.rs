@@ -23,7 +23,7 @@ use bridge_return_service::{
     },
     ports::{ChainLog, ProofBackend, Settler},
     prover::{ProofBundle, ProverError},
-    sequencer::ChainSyncError,
+    sequencer::{ChainSyncError, Confirmations, Release, Unconfirmed},
     store::{BatchBundle, ReturnRecord},
     submitter::{SimulateError, SubmitOutcome},
 };
@@ -185,11 +185,30 @@ impl Settler for ScriptedSettler {
     }
 }
 
+/// What the second source says about the releases it is asked to confirm.
+#[derive(Clone, Debug, Default)]
+pub enum SecondSource {
+    /// Confirms a release the fake vault's log shows in the transaction asked about.
+    #[default]
+    Agrees,
+    /// Confirms nothing, for this reason.
+    Disagrees(String),
+    /// Cannot be reached.
+    Down,
+}
+
 #[derive(Clone, Default)]
 pub struct FakeChainLog {
     log: Arc<Mutex<SettledLog>>,
     answers: Arc<Mutex<VecDeque<bool>>>,
     calls: Arc<AtomicUsize>,
+    second: Arc<Mutex<SecondSource>>,
+    asked: Arc<Mutex<Vec<Release>>>,
+    delay: Arc<Mutex<Duration>>,
+}
+
+pub fn hex(bytes: &[u8; 32]) -> String {
+    format!("0x{}", ::hex::encode(bytes))
 }
 
 impl FakeChainLog {
@@ -197,16 +216,39 @@ impl FakeChainLog {
         Self::default()
     }
 
-    pub fn settle_externally(&self, nullifiers: &[[u8; 32]]) {
+    /// Settle `nullifiers` in a transaction of their own, and name it.
+    pub fn settle_externally(&self, nullifiers: &[[u8; 32]]) -> String {
         let mut log = self.log.lock().unwrap();
         let acc = s2::rebuild(&log.batches).unwrap();
         let next = s2::next_batch(&acc, nullifiers).unwrap();
+        let txid = format!("0x{:064x}", log.batches.len() + 0xe1);
         log.batches.push(SettledBatch {
             nullifiers: nullifiers.to_vec(),
             spent_root_old: next.spent_root_old,
             spent_root_new: next.spent_root_new,
+            txid: Some(txid.clone()),
         });
         log.on_chain_spent_root = Some(next.spent_root_new);
+        txid
+    }
+
+    /// The vault as a log that never showed a settlement.
+    pub fn retract_everything(&self) {
+        *self.log.lock().unwrap() = SettledLog::default();
+    }
+
+    /// Each read of the log from now on takes `delay`, as a slow events command does.
+    pub fn slow(&self, delay: Duration) {
+        *self.delay.lock().unwrap() = delay;
+    }
+
+    pub fn second_source(&self, second: SecondSource) {
+        *self.second.lock().unwrap() = second;
+    }
+
+    /// Every release the second source was asked about.
+    pub fn asked(&self) -> Vec<Release> {
+        self.asked.lock().unwrap().clone()
     }
 
     pub fn spent_root(&self) -> [u8; 32] {
@@ -239,6 +281,10 @@ impl ChainLog for FakeChainLog {
         known: Vec<SettledBatch>,
     ) -> Result<RebuiltAccumulator, ChainSyncError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let delay = *self.delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         if self.answers.lock().unwrap().pop_front() == Some(false) {
             return Err(ChainSyncError::CommandFailed {
                 status: "exit status: 1".to_string(),
@@ -248,5 +294,43 @@ impl ChainLog for FakeChainLog {
         let mut log = self.log.lock().unwrap().clone();
         log.batches.extend(known);
         s2::rebuild_verified(&log).map_err(|e| ChainSyncError::Rebuild(e.to_string()))
+    }
+
+    async fn confirm_releases(
+        &self,
+        releases: &[Release],
+    ) -> Result<Confirmations, ChainSyncError> {
+        self.asked.lock().unwrap().extend(releases.iter().cloned());
+        let second = self.second.lock().unwrap().clone();
+        match second {
+            SecondSource::Down => Err(ChainSyncError::CommandFailed {
+                status: "exit status: 1".to_string(),
+                stderr: "confirmation RPC unreachable".to_string(),
+            }),
+            SecondSource::Disagrees(reason) => Ok(Confirmations {
+                confirmed: Vec::new(),
+                unconfirmed: releases
+                    .iter()
+                    .map(|r| Unconfirmed {
+                        nullifier: r.nullifier.clone(),
+                        txid: r.txid.clone(),
+                        reason: reason.clone(),
+                    })
+                    .collect(),
+            }),
+            SecondSource::Agrees => {
+                let log = self.log.lock().unwrap();
+                let shown = |r: &Release| {
+                    log.batches.iter().any(|b| {
+                        b.txid.as_deref() == Some(r.txid.as_str())
+                            && b.nullifiers.iter().any(|n| hex(n) == r.nullifier)
+                    })
+                };
+                Ok(Confirmations {
+                    confirmed: releases.iter().filter(|r| shown(r)).cloned().collect(),
+                    unconfirmed: Vec::new(),
+                })
+            }
+        }
     }
 }

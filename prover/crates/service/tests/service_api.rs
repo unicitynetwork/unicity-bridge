@@ -40,11 +40,22 @@ fn app(idle_wait: Duration, max_batch_size: usize) -> axum::Router {
     .0
 }
 
+/// A service with a relayer, which keeps proofs to itself until they settle.
 fn app_with(
     idle_wait: Duration,
     max_batch_size: usize,
     settler: ScriptedSettler,
     retry: RetryPolicy,
+) -> (axum::Router, ReturnStore) {
+    serving(idle_wait, max_batch_size, settler, retry, true)
+}
+
+fn serving(
+    idle_wait: Duration,
+    max_batch_size: usize,
+    settler: ScriptedSettler,
+    retry: RetryPolicy,
+    submits: bool,
 ) -> (axum::Router, ReturnStore) {
     let config = ServiceConfig {
         idle_wait,
@@ -73,6 +84,7 @@ fn app_with(
         intake: None,
         chain_events: ChainEvents::none(),
         drain: Drain::default(),
+        submits,
     });
     (app, store)
 }
@@ -88,6 +100,7 @@ fn charging(fee: FeePolicy, store: ReturnStore) -> axum::Router {
         intake: None,
         chain_events: ChainEvents::none(),
         drain: Drain::default(),
+        submits: false,
     })
 }
 
@@ -204,6 +217,7 @@ async fn a_full_queue_refuses_a_new_burn_before_holding_it() {
         intake: None,
         chain_events: ChainEvents::none(),
         drain: Drain::default(),
+        submits: false,
     });
     let held = post_return(&app, member(11, 0x61)).await;
     let (status, error) = submit(&app, member(12, 0x62)).await;
@@ -251,8 +265,10 @@ async fn a_draining_service_says_so_on_health_and_keeps_accepting_burns() {
         intake: None,
         chain_events: ChainEvents::none(),
         drain: drain.clone(),
+        submits: false,
     });
     assert_eq!(get_json(&app, "/health").await["draining"], false);
+    assert_eq!(get_json(&app, "/health").await["unconfirmedReleases"], 0);
     drain.start();
     assert_eq!(get_json(&app, "/health").await["draining"], true);
     let accepted = post_return(&app, member(11, 0x61)).await;
@@ -493,6 +509,73 @@ async fn nullifier_lookup_and_unknown_batch_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn a_service_with_a_relayer_keeps_a_proof_to_itself_until_the_burn_deadline_passes() {
+    let (app, _) = app_with(
+        Duration::ZERO,
+        1,
+        ScriptedSettler::skipping(),
+        RetryPolicy::default(),
+    );
+    // The fixture's burn pays the relayer a fee until 2030; until then its proof is the
+    // relayer's to submit.
+    let held = post_wire(&app, build_b1_direct_bridge_fixture().input).await;
+    // A burn without a deadline is anyone's to settle at once.
+    let open = post_wire(&app, member(11, 0x61)).await;
+    wait_status(&app, &held, "proven").await;
+    wait_status(&app, &open, "proven").await;
+
+    let held_batch = get_record(&app, &held).await["batchId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, body) = get(&app, &format!("/batches/{held_batch}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_published");
+    assert_eq!(body["error"]["recoverable"], true);
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("1900000000"));
+    assert!(body.get("proofBytes").is_none());
+
+    let open_batch = get_record(&app, &open).await["batchId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bundle = get_json(&app, &format!("/batches/{open_batch}")).await;
+    assert!(bundle["proofBytes"].is_string());
+
+    let (without_relayer, _) = serving(
+        Duration::ZERO,
+        1,
+        ScriptedSettler::skipping(),
+        RetryPolicy::default(),
+        false,
+    );
+    let held = post_wire(&without_relayer, build_b1_direct_bridge_fixture().input).await;
+    wait_status(&without_relayer, &held, "proven").await;
+    let batch = get_record(&without_relayer, &held).await["batchId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bundle = get_json(&without_relayer, &format!("/batches/{batch}")).await;
+    assert!(bundle["proofBytes"].is_string());
+}
+
+async fn get(app: &axum::Router, path: &str) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
 async fn post_wire(app: &axum::Router, input: bridge_return_guest::GuestInput) -> String {
     post_return(app, input).await["returnId"]
         .as_str()
@@ -584,6 +667,7 @@ fn configured_for_sepolia() -> (axum::Router, ReturnStore, Arc<EnvelopeIntake>) 
         intake: Some(intake.clone()),
         chain_events: ChainEvents::none(),
         drain: Drain::default(),
+        submits: false,
     });
     (app, store, intake)
 }

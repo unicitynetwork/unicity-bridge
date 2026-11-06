@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use bridge_return_host::s2::RebuiltAccumulator;
 
@@ -13,8 +13,9 @@ use crate::{
         retry::RetryPolicy,
     },
     ports::{ChainLog, ProofBackend, Settler},
+    sequencer::{Confirmations, Release},
     shutdown::Drain,
-    store::{hex32, BatchBundle, ErrorKind, ReturnStore, Taken},
+    store::{hex32, parse_hex32, BatchBundle, ErrorKind, ReturnStore, Taken},
     submitter::SubmitOutcome,
 };
 
@@ -26,6 +27,25 @@ const SYNC_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
 ];
+
+/// A settlement the relayer broadcast but saw no receipt for is looked for in the chain log
+/// after each of these delays: the log trails the head by the settlement's confirmations,
+/// and the transaction may still be waiting to be mined. The batch fails only if, after the
+/// last, the log shows it neither settled nor overtaken by another.
+const SETTLEMENT_CHECKS: [Duration; 5] = [
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(240),
+    Duration::from_secs(480),
+];
+
+/// A return whose nullifier the vault's log shows spent, by `txid` when the log names it.
+struct Released {
+    id: String,
+    nullifier: String,
+    txid: Option<String>,
+}
 
 pub struct Orchestrator<P, S, C> {
     store: ReturnStore,
@@ -75,6 +95,13 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         }
         let mut collect = true;
         while !drain.is_draining() {
+            self.recheck_releases().await;
+            // A recheck runs commands that can take minutes; a drain begun meanwhile starts
+            // no batch.
+            if drain.is_draining() {
+                break;
+            }
+            let recheck = self.store.read(|ledger| ledger.next_release_check());
             match self
                 .store
                 .take_next(&self.policy, self.clock.now_ms(), collect)
@@ -84,6 +111,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                     collect = false;
                 }
                 Taken::WaitUntil(at_ms) => {
+                    let at_ms = recheck.map_or(at_ms, |r| r.min(at_ms));
                     tokio::select! {
                         _ = self.store.changed() => {}
                         _ = self.clock.sleep_until_ms(at_ms) => {}
@@ -92,8 +120,15 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                     collect = true;
                 }
                 Taken::Idle => {
+                    let recheck = async {
+                        match recheck {
+                            Some(at_ms) => self.clock.sleep_until_ms(at_ms).await,
+                            None => std::future::pending().await,
+                        }
+                    };
                     tokio::select! {
                         _ = self.store.changed() => {}
+                        _ = recheck => {}
                         _ = drain.started() => {}
                     }
                     collect = true;
@@ -125,6 +160,10 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let burns: Vec<Burn> = self
             .store
             .read(|ledger| ledger.burns(&batch.members).into_iter().cloned().collect());
+        let nullifiers: HashMap<String, String> = burns
+            .iter()
+            .map(|b| (b.id.clone(), b.nullifier().to_string()))
+            .collect();
         let leaves: Vec<LeafToSettle> = burns.iter().filter_map(Burn::leaf_to_settle).collect();
         let rejected = match self.settler.simulate(&leaves).await {
             Ok(rejected) => rejected,
@@ -144,6 +183,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let assembled = match assembled {
             Ok(Ok(assembled)) => assembled,
             Ok(Err(AssembleError::AllExcluded(excluded))) => {
+                let excluded = self.confirmed(excluded, &nullifiers).await;
                 self.exclude(excluded);
                 return self.fail(
                     batch,
@@ -160,7 +200,10 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                 )
             }
         };
-        self.exclude(assembled.excluded.clone());
+        let excluded = self
+            .confirmed(assembled.excluded.clone(), &nullifiers)
+            .await;
+        self.exclude(excluded);
         let spent_root_old = hex32(&assembled.public_values.spent_root_old);
         let nullifiers: Vec<String> = assembled
             .leaves
@@ -206,19 +249,8 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let Some(acc) = self.synced(batch).await else {
             return Stage::Done;
         };
-        let nullifiers = batch.nullifiers();
-        let all_released = !nullifiers.is_empty()
-            && nullifiers
-                .iter()
-                .all(|n| acc.tree.non_membership_witness(n).is_none());
-        if all_released {
-            tracing::info!(batch_id = %batch.id, "batch already released on chain");
-            self.store.apply(Event::BatchSettled {
-                id: batch.id.clone(),
-                txid: None,
-                at_ms: self.clock.now_ms(),
-            });
-            return Stage::Done;
+        if all_released(batch, &acc) {
+            return self.released(batch, &acc).await;
         }
         if !batch.chains_onto(&acc.spent_root) {
             return self.rebase_or_fail(batch, "vault root moved after proving");
@@ -240,11 +272,227 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                 });
                 Stage::Done
             }
+            SubmitOutcome::Unconfirmed { txid } => self.await_settlement(batch, &txid).await,
             SubmitOutcome::StaleRoot => self.rebase_or_fail(batch, "vault: stale root"),
             SubmitOutcome::Failed { message } => {
                 self.fail(batch, ErrorKind::SubmissionFailed, message)
             }
         }
+    }
+
+    /// The relayer broadcast `txid` but could not read its receipt. The chain log is read on
+    /// [`SETTLEMENT_CHECKS`] until it shows the batch released or the vault root moved past
+    /// it; only when it shows neither is the batch failed, as a submission that never landed.
+    async fn await_settlement(&self, batch: &Batch, txid: &str) -> Stage {
+        tracing::warn!(
+            batch_id = %batch.id,
+            %txid,
+            "settlement broadcast but its receipt was not read; looking for it in the chain log"
+        );
+        for delay in SETTLEMENT_CHECKS {
+            tokio::time::sleep(delay).await;
+            let known = self.store.read(|ledger| ledger.settled_batches());
+            let acc = match self.chain.synced_accumulator(known).await {
+                Ok(acc) => acc,
+                Err(error) => {
+                    tracing::warn!(batch_id = %batch.id, %error, "chain log unreadable while looking for the settlement");
+                    continue;
+                }
+            };
+            if all_released(batch, &acc) {
+                return self.released(batch, &acc).await;
+            }
+            if !batch.chains_onto(&acc.spent_root) {
+                return self.rebase_or_fail(
+                    batch,
+                    "vault root moved while the settlement was unconfirmed",
+                );
+            }
+        }
+        let waited: u64 = SETTLEMENT_CHECKS.iter().map(Duration::as_secs).sum();
+        self.fail(
+            batch,
+            ErrorKind::SubmissionFailed,
+            format!("settlement {txid} was broadcast but the chain log does not show it after {waited}s"),
+        )
+    }
+
+    /// Every nullifier of the proven batch is spent on the vault, by a transaction the
+    /// service holds no receipt for. The batch settles if a second source confirms every
+    /// release in one transaction. Otherwise each member settles or waits on its own
+    /// confirmation, and the batch ends failed, so its transition is never taken for one the
+    /// vault made.
+    async fn released(&self, batch: &Batch, acc: &RebuiltAccumulator) -> Stage {
+        let members: Vec<Released> = self.store.read(|ledger| {
+            batch
+                .nullifiers()
+                .iter()
+                .filter_map(|n| {
+                    let member = ledger.by_nullifier(&hex32(n))?;
+                    member.in_batch(&batch.id).then(|| Released {
+                        id: member.burn.id.clone(),
+                        nullifier: hex32(n),
+                        txid: acc.txids.get(n).cloned(),
+                    })
+                })
+                .collect()
+        });
+        let verdicts = self.confirm(&members).await;
+        let confirmed: Vec<&str> = verdicts
+            .iter()
+            .filter_map(|(_, verdict)| match verdict {
+                Exclusion::AlreadySettled {
+                    txid: Some(txid),
+                    unconfirmed: None,
+                } => Some(txid.as_str()),
+                _ => None,
+            })
+            .collect();
+        let one_transaction = confirmed.first().filter(|first| {
+            confirmed.len() == verdicts.len()
+                && confirmed.iter().all(|t| t.eq_ignore_ascii_case(first))
+        });
+        if let Some(txid) = one_transaction {
+            tracing::info!(batch_id = %batch.id, %txid, "batch released on chain, confirmed by a second source");
+            self.store.apply(Event::BatchSettled {
+                id: batch.id.clone(),
+                txid: Some(txid.to_string()),
+                at_ms: self.clock.now_ms(),
+            });
+            return Stage::Done;
+        }
+        let message = format!(
+            "every member was released on chain without a receipt of the service's own; \
+             {} of {} confirmed by a second source",
+            confirmed.len(),
+            verdicts.len()
+        );
+        self.exclude(verdicts);
+        self.fail(batch, ErrorKind::ChainRejected, message)
+    }
+
+    /// Returns whose release the vault's log showed but no second source confirmed are
+    /// checked again once due: confirmed now, a return settles; unconfirmed, it waits for
+    /// the next check; no longer in the log, it is proven again.
+    async fn recheck_releases(&self) {
+        let now_ms = self.clock.now_ms();
+        let due = self.store.read(|ledger| ledger.releases_due(now_ms));
+        if due.is_empty() {
+            return;
+        }
+        let known = self.store.read(|ledger| ledger.settled_batches());
+        let acc = match self.chain.synced_accumulator(known).await {
+            Ok(acc) => acc,
+            Err(error) => {
+                let why = format!("the chain log could not be checked again: {error}");
+                let waiting = due
+                    .into_iter()
+                    .map(|(id, _)| {
+                        (
+                            id,
+                            Exclusion::AlreadySettled {
+                                txid: None,
+                                unconfirmed: Some(why.clone()),
+                            },
+                        )
+                    })
+                    .collect();
+                self.exclude(waiting);
+                return;
+            }
+        };
+        let mut released = Vec::new();
+        for (id, nullifier) in due {
+            match parse_hex32(&nullifier).filter(|n| acc.tree.non_membership_witness(n).is_none()) {
+                Some(n) => released.push(Released {
+                    id,
+                    txid: acc.txids.get(&n).cloned(),
+                    nullifier,
+                }),
+                None => {
+                    tracing::warn!(return_id = %id, "the vault log no longer shows the return released; proving it again");
+                    self.store.apply(Event::Requeued {
+                        id,
+                        at_ms: self.clock.now_ms(),
+                    });
+                }
+            }
+        }
+        let verdicts = self.confirm(&released).await;
+        self.exclude(verdicts);
+    }
+
+    /// Settle-or-wait verdicts for the members assembly found already released.
+    async fn confirmed(
+        &self,
+        excluded: Vec<(String, Exclusion)>,
+        nullifiers: &HashMap<String, String>,
+    ) -> Vec<(String, Exclusion)> {
+        let released: Vec<Released> = excluded
+            .iter()
+            .filter_map(|(id, exclusion)| match exclusion {
+                Exclusion::AlreadySettled { txid, .. } => Some(Released {
+                    id: id.clone(),
+                    nullifier: nullifiers.get(id)?.clone(),
+                    txid: txid.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        let mut verdicts: HashMap<String, Exclusion> =
+            self.confirm(&released).await.into_iter().collect();
+        excluded
+            .into_iter()
+            .map(|(id, exclusion)| {
+                let verdict = verdicts.remove(&id).unwrap_or(exclusion);
+                (id, verdict)
+            })
+            .collect()
+    }
+
+    /// Ask the second source about each release: a return settles in the transaction the
+    /// log names only once that source confirms the release there.
+    async fn confirm(&self, released: &[Released]) -> Vec<(String, Exclusion)> {
+        let asked: Vec<Release> = released
+            .iter()
+            .filter_map(|r| {
+                Some(Release {
+                    nullifier: r.nullifier.clone(),
+                    txid: r.txid.clone()?,
+                })
+            })
+            .collect();
+        let answer = if asked.is_empty() {
+            Ok(Confirmations::default())
+        } else {
+            self.chain.confirm_releases(&asked).await
+        };
+        released
+            .iter()
+            .map(|r| {
+                let unconfirmed = match (&r.txid, &answer) {
+                    (None, _) => Some("the vault log names no transaction for it".to_string()),
+                    (Some(txid), Ok(answer)) => answer
+                        .verdict(&Release {
+                            nullifier: r.nullifier.clone(),
+                            txid: txid.clone(),
+                        })
+                        .err(),
+                    (Some(_), Err(error)) => Some(error.to_string()),
+                };
+                match &unconfirmed {
+                    None => tracing::info!(return_id = %r.id, txid = ?r.txid, "release confirmed by a second source"),
+                    Some(why) => tracing::warn!(return_id = %r.id, txid = ?r.txid, %why, "release not confirmed by a second source; the return waits"),
+                }
+                (
+                    r.id.clone(),
+                    Exclusion::AlreadySettled {
+                        txid: r.txid.clone(),
+                        unconfirmed,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// The vault's accumulator, or `None` once the batch has been failed for want of it.
@@ -316,7 +564,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
 
     fn exclude(&self, excluded: Vec<(String, Exclusion)>) {
         for (id, reason) in excluded {
-            tracing::warn!(return_id = %id, ?reason, "return excluded from the batch");
+            tracing::warn!(return_id = %id, ?reason, "return excluded from proving");
             self.store.apply(Event::ReturnExcluded {
                 id,
                 reason,
@@ -328,4 +576,13 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
     fn reload(&self, batch_id: &str) -> Option<Batch> {
         self.store.read(|ledger| ledger.batch(batch_id).cloned())
     }
+}
+
+/// Whether the vault's log shows every nullifier of the proven batch spent.
+fn all_released(batch: &Batch, acc: &RebuiltAccumulator) -> bool {
+    let nullifiers = batch.nullifiers();
+    !nullifiers.is_empty()
+        && nullifiers
+            .iter()
+            .all(|n| acc.tree.non_membership_witness(n).is_none())
 }
