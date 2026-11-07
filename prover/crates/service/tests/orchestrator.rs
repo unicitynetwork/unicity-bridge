@@ -9,12 +9,14 @@ use bridge_return_service::{
         assembler::RejectionKind, batch::BatchStatus, policy::BatchPolicy, retry::RetryPolicy,
     },
     orchestrator::Orchestrator,
+    sequencer::Release,
     shutdown::{self, Drain, StopSignal, Stopped},
     store::{ErrorKind, ReturnRecord, ReturnStatus, ReturnStore},
     submitter::SubmitOutcome,
 };
 use support::{
-    burn_and_record, member, nullifier_of, FakeChainLog, ProveStep, ScriptedProver, ScriptedSettler,
+    burn_and_record, hex, member, nullifier_of, FakeChainLog, ProveStep, ScriptedProver,
+    ScriptedSettler, SecondSource,
 };
 use tokio::sync::mpsc;
 
@@ -592,17 +594,212 @@ async fn already_settled_member_is_excluded_and_rest_proceeds() {
         ScriptedProver::instant(),
         ScriptedSettler::settling("0xfeed"),
     );
-    h.chain
+    let txid = h
+        .chain
         .settle_externally(&[nullifier_of(&member(11, 0x61))]);
     h.accept("a", 11, 0x61);
     h.accept("b", 12, 0x62);
     h.reach("b", ReturnStatus::Settled).await;
     let a = h.record("a");
     assert_eq!(a.status, ReturnStatus::Settled);
-    assert_eq!(a.settle_txid, None);
+    assert_eq!(a.settle_txid.as_deref(), Some(txid.as_str()));
     assert!(a.message.contains("already released"));
+    assert_eq!(
+        h.chain.asked(),
+        vec![Release {
+            nullifier: hex(&nullifier_of(&member(11, 0x61))),
+            txid
+        }]
+    );
     assert_eq!(h.record("b").settle_txid.as_deref(), Some("0xfeed"));
     assert_eq!(h.settler.submitted()[0].leaves.len(), 1);
+}
+
+fn nullifiers_of(bundle: &bridge_return_service::store::BatchBundle) -> Vec<[u8; 32]> {
+    bundle
+        .leaves
+        .iter()
+        .map(|l| {
+            hex::decode(l.nullifier.trim_start_matches("0x"))
+                .unwrap()
+                .try_into()
+                .unwrap()
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_release_no_second_source_confirms_waits_and_settles_once_one_does() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain
+        .second_source(SecondSource::Disagrees("no such transaction".to_string()));
+    let txid = h
+        .chain
+        .settle_externally(&[nullifier_of(&member(11, 0x61))]);
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Submitted).await;
+    let a = h.record("a");
+    assert!(!a.terminal);
+    assert_eq!(a.success, None);
+    assert_eq!(a.settle_txid, None);
+    assert_eq!(a.attempts, 0);
+    assert!(a.message.contains(&txid), "{}", a.message);
+    assert!(a.message.contains("no such transaction"), "{}", a.message);
+    assert_eq!(h.store.health().unconfirmed_releases, 1);
+
+    h.chain.second_source(SecondSource::Down);
+    let chain = h.chain.clone();
+    advance_until(
+        move || chain.asked().len() == 2,
+        Duration::from_secs(10 * 60),
+    )
+    .await;
+    let a = h.record("a");
+    assert_eq!(a.status, ReturnStatus::Submitted);
+    assert!(a.message.contains("unreachable"), "{}", a.message);
+
+    h.chain.second_source(SecondSource::Agrees);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(10 * 60))
+        .await;
+    let a = h.record("a");
+    assert_eq!(a.settle_txid.as_deref(), Some(txid.as_str()));
+    assert_eq!(a.attempts, 0);
+    assert_eq!(h.store.health().unconfirmed_releases, 0);
+    assert_eq!(h.prover.calls(), 0);
+    assert!(h.settler.submitted().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_begun_while_a_release_is_rechecked_starts_no_batch() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain
+        .second_source(SecondSource::Disagrees("no such transaction".to_string()));
+    h.chain
+        .settle_externally(&[nullifier_of(&member(11, 0x61))]);
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Submitted).await;
+
+    h.chain.slow(Duration::from_secs(120));
+    let reads = h.chain.calls();
+    let chain = h.chain.clone();
+    advance_until(move || chain.calls() > reads, Duration::from_secs(10 * 60)).await;
+    h.accept("b", 12, 0x62);
+    h.drain.start();
+    let task = &h.task;
+    advance_until(|| task.is_finished(), Duration::from_secs(10 * 60)).await;
+    assert_eq!(h.status("b"), ReturnStatus::Queued);
+    assert_eq!(h.prover.calls(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_release_the_log_retracts_before_it_is_confirmed_is_proven_again() {
+    let h = Harness::simple(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+    );
+    h.chain
+        .second_source(SecondSource::Disagrees("no such transaction".to_string()));
+    h.chain
+        .settle_externally(&[nullifier_of(&member(11, 0x61))]);
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Submitted).await;
+    assert!(h.settler.submitted().is_empty());
+
+    h.chain.retract_everything();
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(10 * 60))
+        .await;
+    let a = h.record("a");
+    assert_eq!(a.settle_txid.as_deref(), Some("0xfeed"));
+    assert_eq!(a.attempts, 0);
+    assert_eq!(h.settler.submitted().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settlement_whose_receipt_was_not_read_settles_once_the_log_shows_it() {
+    let retry = RetryPolicy::default();
+    let chain = FakeChainLog::new();
+    let landed = chain.clone();
+    let settler = ScriptedSettler::skipping().then_with(move |bundle| SubmitOutcome::Unconfirmed {
+        txid: landed.settle_externally(&nullifiers_of(bundle)),
+    });
+    let h = Harness::start(
+        ReturnStore::memory(retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        settler,
+        chain,
+    );
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(5 * 60))
+        .await;
+    let a = h.record("a");
+    let asked = h.chain.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(a.settle_txid.as_deref(), Some(asked[0].txid.as_str()));
+    assert_eq!(a.attempts, 0);
+    assert_eq!(h.batch_of("a").status, BatchStatus::Settled);
+    assert_eq!(h.settler.submitted().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settlement_the_log_never_shows_fails_once_the_checks_run_out_and_the_retry_settles() {
+    let h = Harness::with_retry(
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed").then(SubmitOutcome::Unconfirmed {
+            txid: "0xlost".to_string(),
+        }),
+        retry(5, 3),
+    );
+    h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proven).await;
+    h.reach_in("a", ReturnStatus::Failed, Duration::from_secs(20 * 60))
+        .await;
+    let a = h.record("a");
+    assert_eq!(a.attempts, 1);
+    let failure = a.failure.unwrap();
+    assert_eq!(failure.kind, ErrorKind::SubmissionFailed);
+    assert!(failure.recoverable);
+    assert!(failure.message.contains("0xlost"), "{}", failure.message);
+
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(10 * 60))
+        .await;
+    assert_eq!(h.record("a").settle_txid.as_deref(), Some("0xfeed"));
+    assert_eq!(h.prover.calls(), 1);
+    assert_eq!(h.settler.submitted().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_settlement_overtaken_by_another_batch_is_proven_again() {
+    let retry = RetryPolicy::default();
+    let chain = FakeChainLog::new();
+    let rival = chain.clone();
+    let settler = ScriptedSettler::settling("0xfeed").then_with(move |_| {
+        rival.settle_externally(&[nullifier_of(&member(99, 0x70))]);
+        SubmitOutcome::Unconfirmed {
+            txid: "0xlost".to_string(),
+        }
+    });
+    let h = Harness::start(
+        ReturnStore::memory(retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        settler,
+        chain,
+    );
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(5 * 60))
+        .await;
+    let a = h.record("a");
+    assert_eq!(a.settle_txid.as_deref(), Some("0xfeed"));
+    assert_eq!(a.attempts, 0);
+    assert_eq!(h.batch_of("a").rebases, 1);
+    assert_eq!(h.prover.calls(), 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -883,7 +1080,7 @@ async fn restart_settles_proven_batch_found_on_chain() {
     let a_nullifier = h.accept("a", 11, 0x61);
     h.reach("a", ReturnStatus::Proven).await;
     h.stop().await;
-    chain.settle_externally(&[a_nullifier]);
+    let txid = chain.settle_externally(&[a_nullifier]);
 
     let h = Harness::start(
         reopen(dir.path(), retry),
@@ -893,9 +1090,48 @@ async fn restart_settles_proven_batch_found_on_chain() {
         chain,
     );
     h.reach("a", ReturnStatus::Settled).await;
-    assert_eq!(h.record("a").settle_txid, None);
+    assert_eq!(h.record("a").settle_txid.as_deref(), Some(txid.as_str()));
+    assert_eq!(h.batch_of("a").status, BatchStatus::Settled);
     assert_eq!(h.prover.calls(), 0);
     assert!(h.settler.submitted().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_proven_batch_released_without_confirmation_is_not_taken_for_settled() {
+    let dir = tempfile::tempdir().unwrap();
+    let retry = RetryPolicy::default();
+    let chain = FakeChainLog::new();
+    let h = Harness::start(
+        reopen(dir.path(), retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::skipping(),
+        chain.clone(),
+    );
+    let a_nullifier = h.accept("a", 11, 0x61);
+    h.reach("a", ReturnStatus::Proven).await;
+    h.stop().await;
+    let txid = chain.settle_externally(&[a_nullifier]);
+    chain.second_source(SecondSource::Disagrees("no such transaction".to_string()));
+
+    let h = Harness::start(
+        reopen(dir.path(), retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed"),
+        chain,
+    );
+    h.reach("a", ReturnStatus::Submitted).await;
+    assert_eq!(h.record("a").attempts, 0);
+    assert_eq!(h.batch_of("a").status, BatchStatus::Failed);
+    assert!(h.store.read(|ledger| ledger.settled_batches()).is_empty());
+    assert!(h.settler.submitted().is_empty());
+
+    h.chain.second_source(SecondSource::Agrees);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(10 * 60))
+        .await;
+    assert_eq!(h.record("a").settle_txid.as_deref(), Some(txid.as_str()));
+    assert_eq!(h.prover.calls(), 0);
 }
 
 #[tokio::test(start_paused = true)]

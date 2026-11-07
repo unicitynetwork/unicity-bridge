@@ -42,7 +42,9 @@ export interface ReturnRecord {
   readonly nextPollMs?: number;
   /** Batch the return landed in, once sequenced. */
   readonly batchId?: string;
-  /** `fulfillBatch` txid, on settle (denormalized from the batch). */
+  /** `fulfillBatch` txid, on settle (denormalized from the batch). A return the vault's
+   * log shows released by a transaction the service did not submit reads `submitted`, with
+   * no txid, until a second source confirms that transaction. */
   readonly settleTxid?: string;
   /** Typed failure detail for `failed`. */
   readonly failure?: ReturnFailure;
@@ -65,13 +67,19 @@ export interface ReturnServiceHealth {
   readonly provingSinceMs?: number | null;
   readonly lastProofMs?: number | null;
   readonly averageProofMs?: number | null;
+  /** Set once SIGTERM starts a drain. */
+  readonly draining?: boolean;
+  /** Returns the vault's log shows released that no second source has confirmed yet. */
+  readonly unconfirmedReleases?: number;
   readonly maxBatchSize: number;
   readonly idleWaitMs: number;
   /** `PrecheckOnly` | `Sp1Groth16`. */
   readonly proveMode: string;
 }
 
-/** The published on-chain bundle (07 §B4) — anyone can self-submit it. */
+/** The published on-chain bundle (07 §B4) — anyone can self-submit it. A service that
+ * submits its own settlements publishes it once the batch settles or every burn in it is
+ * past its deadline, and answers `not_published` (recoverable) before that. */
 export interface BatchBundle {
   readonly batchId: string;
   readonly mode: string;
@@ -123,7 +131,7 @@ export class ReturnServiceClient {
     );
   }
 
-  /** The published bundle for a batch (self-settle source). */
+  /** The published bundle for a batch (self-settle source); throws `not_published` until published. */
   public getBatch(batchId: string): Promise<BatchBundle> {
     return this.json<BatchBundle>('GET', `/batches/${encodeURIComponent(batchId)}`);
   }

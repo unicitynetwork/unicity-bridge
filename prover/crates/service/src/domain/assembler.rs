@@ -36,9 +36,32 @@ pub enum RejectionKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Exclusion {
-    AlreadySettled,
-    Rejected { message: String },
-    Invalid { message: String },
+    /// The vault's log shows the burn's nullifier spent, by `txid` when the log names it.
+    /// A release the service holds no receipt for settles the return only once a second
+    /// source confirms it; until then `unconfirmed` says why not. A journal line from
+    /// before these fields reads as a confirmed release with no txid.
+    AlreadySettled {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        txid: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unconfirmed: Option<String>,
+    },
+    Rejected {
+        message: String,
+    },
+    Invalid {
+        message: String,
+    },
+}
+
+impl Exclusion {
+    /// A release nothing has confirmed yet: what assembly finds in the vault's log.
+    pub fn released(txid: Option<String>) -> Self {
+        Self::AlreadySettled {
+            txid,
+            unconfirmed: Some("not yet checked against a second source".to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -178,12 +201,14 @@ fn admit(
             },
         });
     }
-    if input
+    if let Some(spent) = input
         .return_leaves
         .iter()
-        .any(|l| acc.tree.non_membership_witness(&l.nullifier).is_none())
+        .find(|l| acc.tree.non_membership_witness(&l.nullifier).is_none())
     {
-        return Err(Exclusion::AlreadySettled);
+        return Err(Exclusion::released(
+            acc.txids.get(&spent.nullifier).cloned(),
+        ));
     }
     if input
         .sorted_lock_refs
@@ -244,6 +269,7 @@ mod tests {
             nullifiers: nullifiers.to_vec(),
             spent_root_old: EMPTY_TREE_ROOT,
             spent_root_new,
+            txid: Some("0xfee1".to_string()),
         }])
         .unwrap()
     }
@@ -324,7 +350,10 @@ mod tests {
         assert_eq!(assembled.kept, vec!["b"]);
         assert_eq!(
             assembled.excluded,
-            vec![("a".to_string(), Exclusion::AlreadySettled)]
+            vec![(
+                "a".to_string(),
+                Exclusion::released(Some("0xfee1".to_string()))
+            )]
         );
         assert_eq!(assembled.public_values.batch_size, 1);
         assert!(s1::precheck_wire(&assembled.wire).is_ok());
@@ -460,7 +489,13 @@ mod tests {
         let acc = settled(&[nullifier(&a_input)]);
         match assemble(&[&a], &acc, &[]) {
             Err(AssembleError::AllExcluded(excluded)) => {
-                assert_eq!(excluded, vec![("a".to_string(), Exclusion::AlreadySettled)]);
+                assert_eq!(
+                    excluded,
+                    vec![(
+                        "a".to_string(),
+                        Exclusion::released(Some("0xfee1".to_string()))
+                    )]
+                );
             }
             other => panic!("expected AllExcluded, got {other:?}"),
         }

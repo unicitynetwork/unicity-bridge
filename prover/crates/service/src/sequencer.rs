@@ -14,19 +14,82 @@
 //!    (`spent_root = 0`). Correct only for a fresh vault / fixtures / tests.
 //!  - `command`: runs `BRIDGE_RETURN_EVENTS_CMD`, which must print the settlement
 //!    log JSON on stdout: `{ "batches": [{ nullifiers, spent_root_old,
-//!    spent_root_new }], "spent_root": <live vault spentRoot> }` — exactly what
+//!    spent_root_new, txid }], "spent_root": <live vault spentRoot> }` — exactly what
 //!    `relayer.js events` emits.
+//!
+//! A second command, `BRIDGE_RETURN_CONFIRM_CMD`, confirms releases the service holds no
+//! receipt for against a source other than the one the log came from (see
+//! [`ChainEvents::confirm_releases`]).
 
 use bridge_return_host::s2::{
     parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog,
 };
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+use crate::submitter::run_with_stdin;
 
 /// Chain-sync backend for the accumulator.
 #[derive(Clone)]
 pub struct ChainEvents {
     backend: Backend,
+    confirm: Option<String>,
     timeout: Duration,
+}
+
+/// A release the vault's log shows: a spent nullifier and the transaction it names.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Release {
+    pub nullifier: String,
+    pub txid: String,
+}
+
+/// What the confirmation command found: the releases it confirmed, and why it did not
+/// confirm the rest.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct Confirmations {
+    #[serde(default)]
+    pub confirmed: Vec<Release>,
+    #[serde(default)]
+    pub unconfirmed: Vec<Unconfirmed>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct Unconfirmed {
+    pub nullifier: String,
+    pub txid: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+impl Release {
+    fn is(&self, nullifier: &str, txid: &str) -> bool {
+        self.nullifier.eq_ignore_ascii_case(nullifier) && self.txid.eq_ignore_ascii_case(txid)
+    }
+}
+
+impl Confirmations {
+    /// `Ok` only for a release confirmed exactly as asked: the same nullifier in the same
+    /// transaction. Otherwise the reason the source gave, or that it gave none.
+    pub fn verdict(&self, release: &Release) -> Result<(), String> {
+        if self
+            .confirmed
+            .iter()
+            .any(|c| c.is(&release.nullifier, &release.txid))
+        {
+            return Ok(());
+        }
+        Err(self
+            .unconfirmed
+            .iter()
+            .find(|u| {
+                u.nullifier.eq_ignore_ascii_case(&release.nullifier)
+                    && u.txid.eq_ignore_ascii_case(&release.txid)
+            })
+            .map(|u| u.reason.clone())
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "the confirmation source did not confirm it".to_string()))
+    }
 }
 
 #[derive(Clone)]
@@ -36,20 +99,25 @@ enum Backend {
 }
 
 impl ChainEvents {
-    /// Build from `BRIDGE_RETURN_EVENTS_CMD` (a shell command). Empty/unset = `none`.
+    /// Build from `BRIDGE_RETURN_EVENTS_CMD` (a shell command; empty/unset = `none`) and
+    /// `BRIDGE_RETURN_CONFIRM_CMD`.
     pub fn from_env() -> Self {
-        match std::env::var("BRIDGE_RETURN_EVENTS_CMD") {
-            Ok(cmd) if !cmd.trim().is_empty() => Self {
-                backend: Backend::Command(cmd),
-                timeout: Duration::from_secs(600),
-            },
-            _ => Self::none(),
+        let command = |key: &str| std::env::var(key).ok().filter(|cmd| !cmd.trim().is_empty());
+        let backend = match command("BRIDGE_RETURN_EVENTS_CMD") {
+            Some(cmd) => Backend::Command(cmd),
+            None => Backend::None,
+        };
+        Self {
+            backend,
+            confirm: command("BRIDGE_RETURN_CONFIRM_CMD"),
+            timeout: Duration::from_secs(600),
         }
     }
 
     pub fn none() -> Self {
         Self {
             backend: Backend::None,
+            confirm: None,
             timeout: Duration::from_secs(600),
         }
     }
@@ -70,6 +138,44 @@ impl ChainEvents {
             Backend::None => "none (vault assumed pristine)",
             Backend::Command(_) => "command",
         }
+    }
+
+    /// How releases the service did not see settle are confirmed, for startup logs.
+    pub fn confirm_label(&self) -> &'static str {
+        match self.confirm {
+            None => "none (a release the service holds no receipt for never settles a return)",
+            Some(_) => "command",
+        }
+    }
+
+    /// Ask the confirmation command, which reads a source other than the events
+    /// command's, whether each release happened: `{"releases": [{nullifier, txid}]}` on
+    /// stdin, `{"confirmed": [{nullifier, txid}], "unconfirmed": [{nullifier, txid,
+    /// reason}]}` on stdout. Only an exact match in `confirmed` confirms a release.
+    pub async fn confirm_releases(
+        &self,
+        releases: &[Release],
+    ) -> Result<Confirmations, ChainSyncError> {
+        let Some(cmd) = &self.confirm else {
+            return Err(ChainSyncError::NoConfirmationSource);
+        };
+        let payload = serde_json::json!({ "releases": releases }).to_string();
+        let output = run_with_stdin(cmd, payload.as_bytes(), self.timeout)
+            .await
+            .map_err(ChainSyncError::Spawn)?;
+        if !output.status.success() {
+            return Err(ChainSyncError::CommandFailed {
+                status: output.status.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(stdout.trim()).map_err(|e| {
+            ChainSyncError::Decode(format!(
+                "confirm command stdout is not the expected JSON ({e}); got: {}",
+                snippet(stdout.trim()),
+            ))
+        })
     }
 
     /// Fetch the current settlement log and rebuild the accumulator, verifying the
@@ -158,6 +264,8 @@ pub enum ChainSyncError {
     Decode(String),
     #[error("{0}")]
     Rebuild(String),
+    #[error("no confirmation source is configured (BRIDGE_RETURN_CONFIRM_CMD)")]
+    NoConfirmationSource,
 }
 
 impl ChainSyncError {
@@ -176,8 +284,58 @@ mod tests {
     fn events(cmd: &str) -> ChainEvents {
         ChainEvents {
             backend: Backend::Command(cmd.to_string()),
+            confirm: None,
             timeout: Duration::from_secs(5),
         }
+    }
+
+    fn confirming(cmd: &str) -> ChainEvents {
+        ChainEvents {
+            confirm: Some(cmd.to_string()),
+            ..ChainEvents::none().with_timeout(Duration::from_secs(5))
+        }
+    }
+
+    fn release(nullifier: &str, txid: &str) -> Release {
+        Release {
+            nullifier: nullifier.to_string(),
+            txid: txid.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_release_confirmed_in_the_same_transaction_is_confirmed() {
+        let confirmations = confirming(
+            r#"grep -qF '"txid":"0xaa"' && echo '{"confirmed":[{"nullifier":"0x01","txid":"0xAA"},{"nullifier":"0x02","txid":"0xcc"}],"unconfirmed":[{"nullifier":"0x03","txid":"0xbb","reason":"no such transaction"}]}'"#,
+        )
+        .confirm_releases(&[release("0x01", "0xaa"), release("0x02", "0xbb")])
+        .await
+        .unwrap();
+        assert_eq!(confirmations.verdict(&release("0x01", "0xaa")), Ok(()));
+        assert!(confirmations.verdict(&release("0x02", "0xbb")).is_err());
+        assert_eq!(
+            confirmations.verdict(&release("0x03", "0xbb")),
+            Err("no such transaction".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_confirmation_command_nothing_is_confirmed() {
+        let err = ChainEvents::none()
+            .confirm_releases(&[release("0x01", "0xaa")])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChainSyncError::NoConfirmationSource), "{err}");
+        let err = confirming("cat >/dev/null; echo 'ETH_CONFIRM_RPC_URL not set' >&2; exit 1")
+            .confirm_releases(&[release("0x01", "0xaa")])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ETH_CONFIRM_RPC_URL"), "{err}");
+        let err = confirming("cat >/dev/null; echo nope")
+            .confirm_releases(&[release("0x01", "0xaa")])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChainSyncError::Decode(_)), "{err}");
     }
 
     #[tokio::test]

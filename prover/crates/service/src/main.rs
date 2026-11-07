@@ -50,8 +50,10 @@ async fn main() {
         std::process::exit(2);
     });
     tracing::info!("S4 submitter: {}", submitter.label());
+    let submits = submitter.submits();
     let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
+    tracing::info!("release confirmation: {}", chain_events.confirm_label());
     if !chain_events.is_live() {
         tracing::warn!(
             "no chain watcher (BRIDGE_RETURN_EVENTS_CMD unset) — the vault is assumed pristine \
@@ -127,6 +129,7 @@ async fn main() {
         intake: Some(intake),
         chain_events,
         drain,
+        submits,
     })
     .layer(
         TraceLayer::new_for_http()

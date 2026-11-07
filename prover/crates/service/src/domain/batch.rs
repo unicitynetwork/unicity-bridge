@@ -70,6 +70,7 @@ impl Batch {
             nullifiers: self.nullifiers(),
             spent_root_old: public_values.spent_root_old,
             spent_root_new: public_values.spent_root_new,
+            txid: bundle.settle_txid.clone(),
         })
     }
 

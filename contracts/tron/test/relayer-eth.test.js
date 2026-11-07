@@ -1,6 +1,6 @@
 const { expect } = require("chai");
 const hre = require("hardhat");
-const { settle, settledLog, simulate } = require("../scripts/relayer-eth.js");
+const { settle, settledLog, simulate, confirmReleases, confirmationProvider } = require("../scripts/relayer-eth.js");
 
 const TRUST_BASE_HASH = "0x72a67260a9ce50ccbd88c889334042bda509115f85ec352a5e50d8bf90c358c0";
 const LOCK_DOMAIN = "0x158b847f78b3910a5f5f42820de61abba1bf5ae1fbb29dabfba09118f393f932";
@@ -48,14 +48,15 @@ describe("relayer-eth against the vault", () => {
     const { recipient, asset, vault } = await deployBridge(false);
     const first = await craftBundle(vault, recipient, await lockOnce(vault, "a"), "a");
 
-    const { txid } = await settle(vault, first);
+    const { txid, confirmed } = await settle(vault, first);
     expect(txid).to.match(/^0x[0-9a-f]{64}$/);
+    expect(confirmed).to.equal(true);
     expect(await asset.balanceOf(recipient.address)).to.equal(AMOUNT);
     expect(await vault.spentRoot()).to.equal(first.spentRootNew);
 
     const log = await settledLog(vault, 0);
     expect(log.spent_root).to.equal(first.spentRootNew);
-    expect(log.batches).to.deep.equal([{ nullifiers: [first.leaves[0].nullifier], spent_root_old: ethers.ZeroHash, spent_root_new: first.spentRootNew }]);
+    expect(log.batches).to.deep.equal([{ nullifiers: [first.leaves[0].nullifier], spent_root_old: ethers.ZeroHash, spent_root_new: first.spentRootNew, txid }]);
 
     const second = await craftBundle(vault, recipient, await lockOnce(vault, "b"), "b");
     await settle(vault, second);
@@ -74,12 +75,58 @@ describe("relayer-eth against the vault", () => {
     const { recipient, vault } = await deployBridge(false);
     const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "d"), "d");
     let reported = false;
-    const settling = settle(vault, bundle, 3).then((r) => ((reported = true), r));
+    const settling = settle(vault, bundle, 3, { pollMs: 50 }).then((r) => ((reported = true), r));
     await new Promise((r) => setTimeout(r, 500));
     expect(reported).to.equal(false);
     await hre.network.provider.send("hardhat_mine", ["0x2"]);
     const { txid } = await settling;
     expect(txid).to.match(/^0x[0-9a-f]{64}$/);
+  });
+
+  // Stands in for the provider the receipt is read through, failing its first `failures`
+  // receipt reads the way a node's rate limit does.
+  function rateLimited(failures) {
+    let calls = 0;
+    return {
+      get calls() {
+        return calls;
+      },
+      getTransactionReceipt: async (hash) => {
+        calls += 1;
+        if (calls <= failures) throw Object.assign(new Error("Too Many Requests"), { code: "UNKNOWN_ERROR", shortMessage: "could not coalesce error" });
+        return ethers.provider.getTransactionReceipt(hash);
+      },
+      getBlockNumber: () => ethers.provider.getBlockNumber(),
+    };
+  }
+
+  it("reads the receipt again after a failed read and reports the settlement", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "k"), "k");
+    const provider = rateLimited(2);
+    const result = await settle(vault, bundle, 1, { provider, pollMs: 10 });
+    expect(result.confirmed).to.equal(true);
+    expect(provider.calls).to.equal(3);
+  });
+
+  it("reports a broadcast whose receipt it cannot read as unconfirmed, by its txid", async () => {
+    const { recipient, asset, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "l"), "l");
+    const result = await settle(vault, bundle, 1, { provider: rateLimited(Infinity), until: Date.now() + 200, pollMs: 20 });
+    expect(result).to.deep.equal({ txid: result.txid, confirmed: false });
+    expect(result.txid).to.match(/^0x[0-9a-f]{64}$/);
+    expect((await ethers.provider.getTransactionReceipt(result.txid)).status).to.equal(1);
+    expect(await asset.balanceOf(recipient.address)).to.equal(AMOUNT);
+  });
+
+  it("stops at its deadline even while a receipt read is still pending", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "o"), "o");
+    const stalled = { getTransactionReceipt: () => new Promise(() => {}), getBlockNumber: () => ethers.provider.getBlockNumber() };
+    const started = Date.now();
+    const result = await settle(vault, bundle, 1, { provider: stalled, until: Date.now() + 300, pollMs: 20 });
+    expect(result.confirmed).to.equal(false);
+    expect(Date.now() - started).to.be.below(2000);
   });
 
   it("reads the settled log and root only up to the height the confirmations make final", async () => {
@@ -151,6 +198,50 @@ describe("relayer-eth against the vault", () => {
     const tooMuch = { nullifier: ethers.id("n3"), recipient: recipient.address, amount: (AMOUNT * 5n).toString(), feeRecipient: ethers.ZeroAddress, feeAmount: "0", deadline: "0" };
     const { rejected } = await simulate(vault, [tooMuch]);
     expect(rejected).to.deep.equal([]);
+  });
+});
+
+describe("relayer-eth confirms a release on a second RPC", () => {
+  it("confirms a release in the transaction that emitted it, once it is deep enough", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "m"), "m");
+    const { txid } = await settle(vault, bundle);
+    const nullifier = bundle.leaves[0].nullifier;
+    const vaultAddress = await vault.getAddress();
+
+    const early = await confirmReleases(ethers.provider, vaultAddress, [{ nullifier, txid }], 3);
+    expect(early.confirmed).to.deep.equal([]);
+    expect(early.unconfirmed).to.deep.equal([{ nullifier, txid, reason: "1 of 3 confirmations" }]);
+    await hre.network.provider.send("hardhat_mine", ["0x2"]);
+    const final = await confirmReleases(ethers.provider, vaultAddress, [{ nullifier, txid }], 3);
+    expect(final).to.deep.equal({ confirmed: [{ nullifier, txid }], unconfirmed: [] });
+  });
+
+  it("does not confirm a release the transaction did not make, or a transaction it has no receipt for", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "n"), "n");
+    const { txid } = await settle(vault, bundle);
+    const vaultAddress = await vault.getAddress();
+    const other = ethers.id("nullifier-never-released");
+    const unknown = ethers.id("no such transaction");
+    const { confirmed, unconfirmed } = await confirmReleases(ethers.provider, vaultAddress, [
+      { nullifier: other, txid },
+      { nullifier: bundle.leaves[0].nullifier, txid: unknown },
+    ]);
+    expect(confirmed).to.deep.equal([]);
+    expect(unconfirmed.map((u) => u.reason)).to.deep.equal([
+      "the transaction emitted no Released event for the nullifier from the vault",
+      "the confirmation RPC has no receipt for the transaction",
+    ]);
+    const elsewhere = await confirmReleases(ethers.provider, ethers.ZeroAddress, [{ nullifier: bundle.leaves[0].nullifier, txid }]);
+    expect(elsewhere.confirmed).to.deep.equal([]);
+  });
+
+  it("refuses to confirm through no second RPC, or through the one the log came from", () => {
+    const rpc = "https://rpc.example/v1/";
+    expect(() => confirmationProvider({ rpc, chainId: 1 })).to.throw(/ETH_CONFIRM_RPC_URL not set/);
+    expect(() => confirmationProvider({ rpc, confirmRpc: "https://RPC.example/v1", chainId: 1 })).to.throw(/second, independent RPC/);
+    expect(confirmationProvider({ rpc, confirmRpc: "https://other.example", chainId: 1 })).to.be.an("object");
   });
 });
 

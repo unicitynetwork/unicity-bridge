@@ -15,10 +15,11 @@ use tower_http::cors::CorsLayer;
 
 use crate::{
     domain::{
+        batch::BatchStatus,
         burn::Burn,
         fee::{FeeQuote, FeeRefusal},
     },
-    store::{hex32, ReturnRecord, ReturnStatus},
+    store::{hex32, BatchBundle, ReturnRecord, ReturnStatus},
     AppState,
 };
 
@@ -45,6 +46,8 @@ pub struct HealthResponse {
     pub proving_since_ms: Option<u128>,
     pub last_proof_ms: Option<u128>,
     pub average_proof_ms: Option<u128>,
+    /// Returns the vault's log shows released that no second source has confirmed yet.
+    pub unconfirmed_releases: usize,
     pub max_batch_size: usize,
     pub idle_wait_ms: u128,
     pub prove_mode: String,
@@ -62,6 +65,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         proving_since_ms: health.proving_since_ms,
         last_proof_ms: health.last_proof_ms,
         average_proof_ms: health.average_proof_ms,
+        unconfirmed_releases: health.unconfirmed_releases,
         max_batch_size: state.config.max_batch_size,
         idle_wait_ms: state.config.idle_wait.as_millis(),
         prove_mode: format!("{:?}", state.config.prove_mode),
@@ -215,17 +219,28 @@ async fn get_return(
     state.store.get(&id).map(Json).ok_or(ApiError::NotFound(id))
 }
 
-/// `GET /batches/:id` — the published bundle (vkey, publicValues, proofBytes) for
-/// a proven batch; anyone can submit it to the vault (self-settle, §B4).
+/// `GET /batches/:id` — the bundle (vkey, publicValues, proofBytes) of a proven batch,
+/// which anyone can submit to the vault (self-settle, §B4). A service that submits its own
+/// settlements serves it once the batch has settled or every burn in it is past its
+/// deadline, when the spec leaves settling to anyone; before that a third party submitting
+/// it first would only race the service's own transaction. A service without a submitter
+/// serves it at once, since its returns settle only that way.
 async fn get_batch(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<crate::store::BatchBundle>, ApiError> {
-    state
+) -> Result<Json<BatchBundle>, ApiError> {
+    let (bundle, settled) = state
         .store
-        .get_batch(&id)
-        .map(Json)
-        .ok_or(ApiError::NotFound(id))
+        .read(|ledger| {
+            let batch = ledger.batch(&id)?;
+            Some((batch.bundle.clone()?, batch.status == BatchStatus::Settled))
+        })
+        .ok_or_else(|| ApiError::NotFound(id.clone()))?;
+    let open_at = bundle.self_settle_from_secs();
+    if state.submits && !settled && open_at.map_or(true, |at| state.clock.now_secs() <= at) {
+        return Err(ApiError::NotPublished(id, open_at));
+    }
+    Ok(Json(bundle))
 }
 
 async fn fees(State(state): State<Arc<AppState>>) -> Json<FeeQuote> {
@@ -249,8 +264,10 @@ pub enum ApiError {
     IntakeUnconfigured,
     #[error("the service already holds {0} unfinished returns; resubmit once some settle")]
     QueueFull(usize),
-    #[error("return not found: {0}")]
+    #[error("not found: {0}")]
     NotFound(String),
+    #[error("batch {0} is published once it settles or every burn in it is past its deadline{}", .1.map(|at| format!(" (unix time {at})")).unwrap_or_default())]
+    NotPublished(String, Option<u64>),
 }
 
 impl IntoResponse for ApiError {
@@ -263,7 +280,7 @@ impl IntoResponse for ApiError {
             ApiError::ChainUnsynced(_) | ApiError::IntakeUnconfigured | ApiError::QueueFull(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
-            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::NotFound(_) | ApiError::NotPublished(_, _) => StatusCode::NOT_FOUND,
         };
         let code = match &self {
             ApiError::BadRequest(code, _) | ApiError::FeeRefused(code, _) => *code,
@@ -273,6 +290,7 @@ impl IntoResponse for ApiError {
             ApiError::IntakeUnconfigured => "intake_unconfigured",
             ApiError::QueueFull(_) => "queue_full",
             ApiError::NotFound(_) => "not_found",
+            ApiError::NotPublished(_, _) => "not_published",
         };
         let recoverable = matches!(
             &self,
@@ -281,6 +299,7 @@ impl IntoResponse for ApiError {
                 | ApiError::ChainUnsynced(_)
                 | ApiError::IntakeUnconfigured
                 | ApiError::QueueFull(_)
+                | ApiError::NotPublished(_, _)
         );
         // Centralized so every rejection path (current and future) is audit-able
         // from the log alone — this is what "why did that submit fail" resolves

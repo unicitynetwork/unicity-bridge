@@ -17,6 +17,8 @@
 //! an EVM RPC) into [`SettledBatch`]s; this module owns only the accumulator math
 //! and reuses the same `sdk-ext` SMT the guest verifies against.
 
+use std::collections::HashMap;
+
 use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, ordered_insert_witnesses, NonMembershipWitness, NullifierTree,
     EMPTY_TREE_ROOT,
@@ -26,12 +28,23 @@ use crate::{HostError, Result};
 
 /// One settled batch, as read from the vault's events. `nullifiers` are the
 /// per-leaf `Released.nullifier` values **in the batch's leaf order**; the roots
-/// are the matching `BatchFulfilled` fields.
+/// are the matching `BatchFulfilled` fields, and `txid` the transaction that emitted
+/// them, when the source names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettledBatch {
     pub nullifiers: Vec<[u8; 32]>,
     pub spent_root_old: [u8; 32],
     pub spent_root_new: [u8; 32],
+    pub txid: Option<String>,
+}
+
+impl SettledBatch {
+    /// The same accumulator step: what one source names its transaction does not change it.
+    pub fn same_transition(&self, other: &SettledBatch) -> bool {
+        self.nullifiers == other.nullifiers
+            && self.spent_root_old == other.spent_root_old
+            && self.spent_root_new == other.spent_root_new
+    }
 }
 
 /// The decoded settlement log a chain watcher hands to S2: the ordered settled
@@ -46,8 +59,8 @@ pub struct SettledLog {
 
 /// Parse the settlement-log JSON emitted by a chain watcher (e.g.
 /// `relayer.js events`) into a [`SettledLog`]. Shape:
-/// `{ "batches": [{ "nullifiers": [hex…], "spent_root_old": hex, "spent_root_new": hex }],
-///    "spent_root": hex? }`. This is the single decoder shared by the `s2-rebuild`
+/// `{ "batches": [{ "nullifiers": [hex…], "spent_root_old": hex, "spent_root_new": hex,
+///    "txid": string? }], "spent_root": hex? }`. This is the single decoder shared by the `s2-rebuild`
 /// CLI and the live service, so both agree on the wire shape.
 pub fn parse_settled_log(json: &serde_json::Value) -> Result<SettledLog> {
     let err = |m: String| HostError::Check(m);
@@ -71,10 +84,17 @@ pub fn parse_settled_log(json: &serde_json::Value) -> Result<SettledLog> {
         .as_array()
         .ok_or_else(|| err("settlement log: missing `batches` array".to_string()))?
     {
+        let txid = match b.get("txid") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(t)) if t.is_empty() => None,
+            Some(serde_json::Value::String(t)) => Some(t.clone()),
+            Some(_) => return Err(err("settlement log: `txid` must be a string".to_string())),
+        };
         batches.push(SettledBatch {
             nullifiers: b32_arr(&b["nullifiers"])?,
             spent_root_old: b32(&b["spent_root_old"])?,
             spent_root_new: b32(&b["spent_root_new"])?,
+            txid,
         });
     }
     let on_chain_spent_root = match json.get("spent_root") {
@@ -95,19 +115,23 @@ pub struct RebuiltAccumulator {
     pub spent_root: [u8; 32],
     /// Total nullifiers spent so far (across all batches).
     pub spent_count: usize,
+    /// The transaction that spent each nullifier, for those whose batch a source named one for.
+    pub txids: HashMap<[u8; 32], String>,
 }
 
 /// Replay `batches` into the accumulator by following the root links from the
 /// empty tree: each step takes the batch whose `spentRootOld` is the current
 /// root and checks that its `spentRootNew` is what the accumulator computes.
-/// The input may come from more than one source and in any order; an identical
-/// duplicate is applied once. A batch no reached root continues, or two
-/// different batches continuing the same root, mean the log is incomplete or
-/// tampered — the relayer must not settle on top of an unverified state.
+/// The input may come from more than one source and in any order; a duplicate of
+/// the same transition is applied once, and takes the first txid any copy names. A
+/// batch no reached root continues, or two different batches continuing the same root,
+/// mean the log is incomplete or tampered — the relayer must not settle on top of an
+/// unverified state.
 pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
     let mut tree = NullifierTree::new();
     let mut root = EMPTY_TREE_ROOT;
     let mut spent_count = 0usize;
+    let mut txids = HashMap::new();
     let mut used = vec![false; batches.len()];
 
     while let Some(i) = next_link(batches, &used, &root)? {
@@ -129,9 +153,16 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
                 HostError::Check(format!("S2 batch {i}: duplicate nullifier replayed: {e:?}"))
             })?;
         }
+        let mut txid = None;
         for (j, other) in batches.iter().enumerate() {
-            if other == batch {
+            if other.same_transition(batch) {
                 used[j] = true;
+                txid = txid.or(other.txid.as_ref());
+            }
+        }
+        if let Some(txid) = txid {
+            for nullifier in &batch.nullifiers {
+                txids.insert(*nullifier, txid.clone());
             }
         }
         root = new_root;
@@ -150,6 +181,7 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         tree,
         spent_root: root,
         spent_count,
+        txids,
     })
 }
 
@@ -161,7 +193,7 @@ fn next_link(batches: &[SettledBatch], used: &[bool], root: &[u8; 32]) -> Result
         }
         match found {
             None => found = Some(i),
-            Some(f) if batches[f] == *batch => {}
+            Some(f) if batches[f].same_transition(batch) => {}
             Some(f) => {
                 return Err(HostError::Check(format!(
                     "S2 batches {f} and {i} both continue root 0x{} with different contents",

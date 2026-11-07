@@ -101,7 +101,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_STATE_DIR` | `/data/state` | the journal, on the `return-data` volume |
 | `BRIDGE_RETURN_MAX_BATCH_SIZE`, `BRIDGE_RETURN_MAX_BATCH_BYTES` | `8`, `8388608` | most burns, and most summed input bytes, in one proof |
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
-| `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events) that runs longer is killed and counts as a failed attempt |
+| `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events, confirm) that runs longer is killed and counts as a failed attempt. The relayers' `settle` stops waiting for the receipt 30 s before it and reports the transaction as unconfirmed (§8) |
 | `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` (the image sets its full path) | the command that prints the guest's verifying key at start, in a child process like the proofs, so the service itself loads no SP1 code |
 | `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout and an abandoned proof (§5, Stopping) kill all of it, so a restart never proves next to an orphan |
 | `BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` | `0` (`2640` in `docker-compose.yml`) | the most a drain waits for the batch in flight before it abandons the proof (§5, Stopping); `0` waits however long the batch takes. Keep it below the container's stop grace period, so the service abandons the proof itself, which costs no attempt, before Docker kills it, which costs one |
@@ -110,7 +110,8 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
-| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD` | the Node relayer, the Node relayer, the Node relayer | settlement, event scan and pre-simulation (lock refs, transfers) hooks; replaceable by any program with the same stdin/stdout contract. The service refuses to start without a simulate command |
+| `ETH_CONFIRM_RPC_URL`, `TRON_CONFIRM_RPC_URL` | none | a second RPC, independent of `ETH_RPC_URL`/`TRON_RPC_URL`, through which the relayer confirms a release the service did not see settle (§5). Unset, such a return stays `submitted` and is never marked settled |
+| `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD`, `BRIDGE_RETURN_CONFIRM_CMD` | the Node relayer | settlement, event scan, pre-simulation (lock refs, transfers) and release-confirmation hooks; replaceable by any program with the same stdin/stdout contract. The service refuses to start without a simulate command |
 | `BRIDGE_RETURN_MAX_PENDING` | `1000` | most returns held unfinished; beyond it a new burn is refused with `queue_full` (HTTP 503, recoverable) |
 | `BRIDGE_RETURN_BIND` | `0.0.0.0:8787` | listen address |
 | `SP1_WORKER_NUM_*` | `1` | single-worker proving; the only setting that fits a 16 GB host (`docs/dev-plan/03-status.md`) |
@@ -172,6 +173,19 @@ vault `ETH_VAULT` scanned from `ETH_VAULT_DEPLOY_BLOCK`) or `relayer.js`
 (Tron, TronWeb over `TRON_RPC_URL`). Both live in `contracts/tron/scripts`. The
 all-Rust submitter the plan calls for is not built; until it is, the container
 carries Node for this.
+
+The chain log comes from one RPC, so a release in it that the service did not
+submit itself (someone else submitted the public bundle first, or the relayer
+lost track of its own transaction) does not settle a return on its own say.
+`BRIDGE_RETURN_CONFIRM_CMD` checks the transaction the log names through
+`ETH_CONFIRM_RPC_URL` (`TRON_CONFIRM_RPC_URL`): it must have succeeded, be
+`ETH_SETTLE_CONFIRMATIONS` deep (on Tron, solidified), and carry the vault's
+`Released` event for the nullifier. Only then is the return `settled`, with that
+transaction as its `settleTxid`. Until then it reads `submitted`, the service asks
+again every 5 minutes at no attempt's cost, and a return whose release the log no
+longer shows is proven again. Point the second RPC at a different provider from
+the first: the same provider behind another URL confirms nothing it did not
+already say.
 
 The service settles for free unless `BRIDGE_RETURN_FEE_AMOUNT` is set. The fee
 is a flat amount of the bridged asset per burn. The owner's burn names it, the
@@ -269,7 +283,10 @@ never checked against Nile (§8).
   copy of unsettled burns for as long as the `return-data` volume lives; back
   the volume up if that copy matters.
 - **Proof bundles** land in `BRIDGE_RETURN_PROOF_DIR`. A bundle is public data;
-  anyone may submit it, and the wallet can fetch it from `/batches/:id`.
+  anyone may submit it. `/batches/:id` serves it once the batch has settled or
+  every burn in it is past its deadline, when the spec leaves settling to anyone;
+  before that a third party submitting it first would only make the relayer's own
+  transaction fail. A service without a submitter serves it at once.
 - **The accumulator** is reconstructable from the vault's `Released` and
   `BatchFulfilled` events alone. Nothing off chain needs a backup for it.
 - **The lock digests** are per-vault state on chain. Value locked in a vault
@@ -278,8 +295,8 @@ never checked against Nile (§8).
 ## 7. Monitoring
 
 `GET /health` returns `status`, `draining`, `queueDepth`, `activeBatch`, `activeBatchSize`,
-`provingSinceMs`, `lastProofMs`, `averageProofMs`, `maxBatchSize`, `idleWaitMs`, `proveMode`,
-`chainSync`. `GET /accumulator` returns `synced`, `spentRoot`, `spentCount`.
+`provingSinceMs`, `lastProofMs`, `averageProofMs`, `unconfirmedReleases`, `maxBatchSize`,
+`idleWaitMs`, `proveMode`, `chainSync`. `GET /accumulator` returns `synced`, `spentRoot`, `spentCount`.
 Logs are structured (`RUST_LOG`, default info). The journal itself is readable:
 `jq -c 'keys[0]' /data/state/journal.jsonl` lists the event types.
 
@@ -292,6 +309,9 @@ Worth alerting on:
   takes: proving is stuck or out of memory.
 - A batch proving for more than two proof times (`provingSinceMs` says when it
   started), or a return whose `failure.message` says it is parked.
+- `unconfirmedReleases` above zero for more than a few checks (5 minutes each):
+  the chain log shows a payout the second RPC does not confirm, or no second RPC
+  is configured. Each such return's `message` names the transaction.
 - Settlement account balance below a few settlements' worth of gas.
 - On chain: every `BatchFulfilled` should match a bundle the service wrote.
 
@@ -309,6 +329,8 @@ Worth alerting on:
 | Service restarted | the journal is replayed | nothing to do: queued burns stay queued, a proof the service abandoned to stop (§5, Stopping) re-runs at once without an attempt, one a crash cut off re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
 | Return `failed` with `proving_failed` saying the proving command `was killed by signal 9` (the Docker VM's `dmesg` shows an `oom-kill` of `bridge-return-h`) | the proof outgrew the memory limit: a live Sepolia USDC burn peaks at about 26 GiB, 23 GB killed it in a 24 GB WSL VM on 2026-09-23 | the service keeps running and retries with backoff; each kill counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS`. Size the limit for one proof's peak plus the service; keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours) |
 | Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process died while proving: a crash, an OOM kill of the service itself, or a SIGKILL (Docker's included, once the stop grace period runs out) | each such interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
+| Return `submitted`, its message saying the vault log shows it released in a transaction a second source has not confirmed | the service did not submit that release itself (someone submitted the public bundle first, or the relayer lost track of its own transaction), and `BRIDGE_RETURN_CONFIRM_CMD` could not confirm it: the second RPC is unset, the same endpoint as the first, down, behind, or disagrees | look the transaction up on an explorer. Paid: fix `ETH_CONFIRM_RPC_URL`, and the next check settles the return with that transaction. Not paid: the first RPC is wrong; replace `ETH_RPC_URL`, and once the log no longer shows the release the return is proven again |
+| Return `failed` with `submission_failed` saying a settlement `was broadcast but the chain log does not show it` | the relayer broadcast the settlement, could not read its receipt (it exited 75), and the vault log did not show the batch within 15 minutes: the transaction was dropped, is stuck, or reverted | the retry resubmits the same proof; if the first transaction lands meanwhile, the retry finds the batch released and settles it from the log |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
@@ -357,7 +379,12 @@ the same procedure as a program change.
 deployment file pins. In `sp1_groth16` mode the service makes the same
 comparison at start against `BRIDGE_DEPLOYMENT_CONFIG` and exits on a mismatch.
 `/app/sp1/vkey.txt` in the image shows the key. Replacing the container sends
-SIGTERM, so the deploy waits for the batch in flight to finish (§5, Stopping).
+SIGTERM, so the deploy waits for the batch in flight to finish (§5, Stopping). Set
+`ETH_CONFIRM_RPC_URL` (`TRON_CONFIRM_RPC_URL`) when moving to an image whose
+entrypoint sets `BRIDGE_RETURN_CONFIRM_CMD`: without it, a return released by a
+transaction the service did not submit stays `submitted` instead of `settled`.
+A journal written by such an image still loads in an older one, which reads an
+unconfirmed release as settled.
 
 ## 10. Known gaps before real value
 
@@ -419,8 +446,8 @@ sizes actually seen. On a pull-payment vault the operator collects it with
 
 **Letting the user pay the gas** is possible and needs larger changes.
 `fulfillBatch` accepts any sender and the service publishes each proof at
-`GET /batches/:id`, so the token owner can submit the settlement from their own
-wallet. The docs describe this only as the self-settle fallback that keeps
+`GET /batches/:id` (at once when it runs without a submitter), so the token
+owner can submit the settlement from their own wallet. The docs describe this only as the self-settle fallback that keeps
 funds from being stuck (`docs/spec/ZK_BACK3.md` §4 and §13,
 `prover/crates/service/README.md` under "S4 submitter"). Making it the normal
 path needs a wallet step that submits the proof and a service started without

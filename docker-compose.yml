@@ -43,10 +43,13 @@ services:
       ETH_VAULT_DEPLOY_BLOCK: ${ETH_VAULT_DEPLOY_BLOCK:-}
       ETH_SETTLE_CONFIRMATIONS: ${ETH_SETTLE_CONFIRMATIONS:-12}
       ETH_RPC_URL: ${ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      # A second, independent RPC: a release the service did not see settle is confirmed there.
+      ETH_CONFIRM_RPC_URL: ${ETH_CONFIRM_RPC_URL:-}
       ETH_CHAIN_ID: ${ETH_CHAIN_ID:-11155111}
       TRON_SK: ${TRON_SK:-}
       TRON_VAULT: ${TRON_VAULT:-}
       TRON_RPC_URL: ${TRON_RPC_URL:-https://nile.trongrid.io}
+      TRON_CONFIRM_RPC_URL: ${TRON_CONFIRM_RPC_URL:-}
     volumes:
       - sp1-artifacts:/root/.sp1
       - return-data:/data

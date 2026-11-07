@@ -1,7 +1,7 @@
 //! S2 accumulator-builder: rebuild from the event log, verify against the chain,
 //! and produce a valid next-batch transition — the operational multi-batch path.
 
-use bridge_return_host::s2::{next_batch, rebuild, SettledBatch};
+use bridge_return_host::s2::{next_batch, parse_settled_log, rebuild, SettledBatch};
 use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, ordered_insert_witnesses, verify_non_member, NullifierTree,
     EMPTY_TREE_ROOT,
@@ -30,6 +30,7 @@ fn settled_log(groups: &[Vec<[u8; 32]>]) -> Vec<SettledBatch> {
             nullifiers: g.clone(),
             spent_root_old: old,
             spent_root_new: new,
+            txid: None,
         });
         for n in g {
             tree.insert(*n).unwrap();
@@ -112,6 +113,51 @@ fn rebuild_applies_an_identical_duplicate_once() {
     let acc = rebuild(&with_duplicate).expect("rebuild");
     assert_eq!(acc.spent_count, 2);
     assert_eq!(acc.spent_root, all[1].spent_root_new);
+}
+
+#[test]
+fn rebuild_names_the_transaction_that_spent_each_nullifier() {
+    let mut log = settled_log(&[vec![key(1), key(2)], vec![key(3)]]);
+    log[0].txid = Some("0xaa".to_string());
+    let acc = rebuild(&log).expect("rebuild");
+    assert_eq!(acc.txids.get(&key(1)).map(String::as_str), Some("0xaa"));
+    assert_eq!(acc.txids.get(&key(2)).map(String::as_str), Some("0xaa"));
+    assert_eq!(acc.txids.get(&key(3)), None);
+}
+
+#[test]
+fn a_copy_without_a_txid_is_the_same_batch_and_the_named_txid_is_kept() {
+    let chain = {
+        let mut log = settled_log(&[vec![key(1)], vec![key(2)]]);
+        log[1].txid = Some("0xbb".to_string());
+        log
+    };
+    let journal_copy = settled_log(&[vec![key(1)], vec![key(2)]]).remove(1);
+    for batches in [
+        vec![chain[0].clone(), journal_copy.clone(), chain[1].clone()],
+        vec![chain[0].clone(), chain[1].clone(), journal_copy],
+    ] {
+        let acc = rebuild(&batches).expect("rebuild");
+        assert_eq!(acc.spent_count, 2);
+        assert_eq!(acc.txids.get(&key(2)).map(String::as_str), Some("0xbb"));
+    }
+}
+
+#[test]
+fn the_settlement_log_names_each_batch_txid_when_the_watcher_gives_one() {
+    let root = |b: u8| format!("0x{}", hex::encode([b; 32]));
+    let json = serde_json::json!({
+        "batches": [
+            { "nullifiers": [root(1)], "spent_root_old": root(0), "spent_root_new": root(2), "txid": "0xabc" },
+            { "nullifiers": [root(3)], "spent_root_old": root(2), "spent_root_new": root(4) },
+        ],
+    });
+    let log = parse_settled_log(&json).unwrap();
+    assert_eq!(log.batches[0].txid.as_deref(), Some("0xabc"));
+    assert_eq!(log.batches[1].txid, None);
+    let mut bad = json.clone();
+    bad["batches"][0]["txid"] = serde_json::json!(7);
+    assert!(parse_settled_log(&bad).is_err());
 }
 
 #[test]

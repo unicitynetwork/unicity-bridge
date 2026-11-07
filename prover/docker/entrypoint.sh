@@ -36,10 +36,12 @@ export BRIDGE_RETURN_BIND BRIDGE_DEPLOYMENT_CONFIG TRUST_BASE_PATH BRIDGE_RETURN
   echo "ETH_VAULT_DEPLOY_BLOCK=${ETH_VAULT_DEPLOY_BLOCK:-0}"
   echo "ETH_SETTLE_CONFIRMATIONS=${ETH_SETTLE_CONFIRMATIONS:-12}"
   echo "ETH_RPC_URL=${ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}"
+  echo "ETH_CONFIRM_RPC_URL=${ETH_CONFIRM_RPC_URL:-}"
   echo "ETH_CHAIN_ID=${ETH_CHAIN_ID:-11155111}"
   echo "TRON_SK=${TRON_SK:-}"
   echo "TRON_VAULT=${TRON_VAULT:-}"
   echo "TRON_RPC_URL=${TRON_RPC_URL:-https://nile.trongrid.io}"
+  echo "TRON_CONFIRM_RPC_URL=${TRON_CONFIRM_RPC_URL:-}"
 } > /app/.env
 export BRIDGE_HOST_BIN=/app/bin/bridge-return-host
 # Each proof runs in a child process, so its memory goes back to the OS when it exits.
@@ -50,7 +52,10 @@ export BRIDGE_RETURN_VKEY_CMD="${BRIDGE_RETURN_VKEY_CMD:-$BRIDGE_HOST_BIN sp1-vk
 : "${BRIDGE_RETURN_EVENTS_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} events}"
 # The lock-ref check before proving: the service refuses to start without it.
 : "${BRIDGE_RETURN_SIMULATE_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} simulate --stdin}"
-export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD BRIDGE_RETURN_SIMULATE_CMD
+# Confirms, through ETH_CONFIRM_RPC_URL / TRON_CONFIRM_RPC_URL, a release the service holds
+# no receipt for; until one confirms it, such a return is not settled.
+: "${BRIDGE_RETURN_CONFIRM_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} confirm --stdin}"
+export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD BRIDGE_RETURN_SIMULATE_CMD BRIDGE_RETURN_CONFIRM_CMD
 mkdir -p "$BRIDGE_RETURN_PROOF_DIR" "$BRIDGE_RETURN_STATE_DIR"
 echo "bridge-return-service: mode=$BRIDGE_RETURN_PROVE_MODE elf=$SP1_GUEST_ELF vkey=$(cat /app/sp1/vkey.txt 2>/dev/null || echo unknown)"
 exec /app/bin/bridge-return-service "$@"
