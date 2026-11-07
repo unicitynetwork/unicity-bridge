@@ -5,8 +5,8 @@ name: CI
 # the core derivations), and the npm workspaces, which are the TypeScript bridge
 # packages and the contracts (whose tests check the vectors the vault recomputes).
 #
-# The service image is built from main by bridge-out-service-image.yml; a pull
-# request builds it only when it touches what these tests do not compile.
+# The service image is built only from main and v* tags, by
+# bridge-out-service-image.yml; pull requests do not build it.
 
 on:
   pull_request:
