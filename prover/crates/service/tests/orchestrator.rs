@@ -890,8 +890,9 @@ async fn a_broadcast_settlement_the_chain_does_not_know_fails_and_the_retry_sett
     );
     h.accept("a", 11, 0x61);
     h.submitted("a").await;
-    tokio::time::sleep(Duration::from_secs(90)).await;
+    tokio::time::sleep(Duration::from_secs(9 * 60)).await;
     assert_eq!(h.status("a"), ReturnStatus::Proven);
+    assert_eq!(h.record("a").attempts, 0);
     h.reach_in("a", ReturnStatus::Failed, Duration::from_secs(5 * 60))
         .await;
     let a = h.record("a");
@@ -1129,13 +1130,78 @@ async fn an_unconfirmed_settlement_overtaken_by_another_batch_is_proven_again() 
         chain,
     );
     h.accept("a", 11, 0x61);
-    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(5 * 60))
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(20 * 60))
         .await;
     let a = h.record("a");
     assert_eq!(a.settle_txid.as_deref(), Some("0xfeed"));
     assert_eq!(a.attempts, 0);
     assert_eq!(h.batch_of("a").rebases, 1);
     assert_eq!(h.prover.calls(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settlement_that_reverts_behind_another_batch_is_proven_again_without_an_attempt() {
+    let retry = RetryPolicy::default();
+    let chain = FakeChainLog::new();
+    let rival = chain.clone();
+    let settler = ScriptedSettler::settling("0xfeed").then_with(move |_| {
+        rival.settle_externally(&[nullifier_of(&member(99, 0x70))]);
+        SubmitOutcome::Unconfirmed {
+            txid: "0xbehind".to_string(),
+        }
+    });
+    let h = Harness::start(
+        ReturnStore::memory(retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        settler,
+        chain,
+    );
+    h.chain.transaction("0xbehind", SettlementState::Reverted);
+    h.accept("a", 11, 0x61);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(2 * 60))
+        .await;
+    let a = h.record("a");
+    assert_eq!(a.settle_txid.as_deref(), Some("0xfeed"));
+    assert_eq!(a.attempts, 0);
+    assert_eq!(h.batch_of("a").rebases, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restart_while_the_relayer_still_waits_on_its_receipt_sends_nothing_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let retry = RetryPolicy::default();
+    let chain = FakeChainLog::new();
+    chain.transaction("0xslow", SettlementState::Pending);
+    let h = Harness::start(
+        reopen(dir.path(), retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xfeed").then_sign_and_hang("0xslow"),
+        chain.clone(),
+    );
+    h.accept("a", 11, 0x61);
+    h.submitted("a").await;
+    assert_eq!(h.batch_of("a").broadcast_txid.as_deref(), Some("0xslow"));
+    h.stop().await;
+
+    let h = Harness::start(
+        reopen(dir.path(), retry),
+        &config(0, retry),
+        ScriptedProver::instant(),
+        ScriptedSettler::settling("0xsecond"),
+        chain.clone(),
+    );
+    tokio::time::sleep(Duration::from_secs(10 * 60)).await;
+    assert!(h.settler.submitted().is_empty());
+    assert_eq!(h.status("a"), ReturnStatus::Proven);
+    assert_eq!(h.record("a").attempts, 0);
+
+    chain.transaction("0xslow", SettlementState::Confirmed);
+    h.reach_in("a", ReturnStatus::Settled, Duration::from_secs(10 * 60))
+        .await;
+    assert_eq!(h.record("a").settle_txid.as_deref(), Some("0xslow"));
+    assert!(h.settler.submitted().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

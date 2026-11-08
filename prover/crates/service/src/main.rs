@@ -32,6 +32,13 @@ async fn main() {
         std::process::exit(2);
     });
     tracing::info!("envelope intake enabled (deployment config + trust base loaded)");
+    // Checked before the journal is opened, so a deployment that cannot run them touches
+    // nothing.
+    let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
+    if let Err(err) = chain_events.check_commands().await {
+        eprintln!("refusing to start: {err}");
+        std::process::exit(2);
+    }
     let clock = Clock::default();
     let store = match &config.state_dir {
         Some(dir) => ReturnStore::open(dir, config.retry, clock.now_ms()).unwrap_or_else(|err| {
@@ -51,12 +58,7 @@ async fn main() {
     });
     tracing::info!("S4 submitter: {}", submitter.label());
     let submits = submitter.submits();
-    let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
-    if let Err(err) = chain_events.check_commands().await {
-        eprintln!("refusing to start: {err}");
-        std::process::exit(2);
-    }
     tracing::info!("release confirmation: {}", chain_events.confirm_label());
     tracing::info!("settlement lookup: {}", chain_events.receipt_label());
     if !chain_events.is_live() {

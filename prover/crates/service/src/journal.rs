@@ -67,7 +67,10 @@ fn read_events(file: File) -> io::Result<Vec<Event>> {
         }
         match serde_json::from_str(text) {
             Ok(event) => events.push(event),
-            Err(e) if index == last => {
+            // Only a line cut off mid-write is skipped. A complete line this binary cannot
+            // read (one a newer version wrote) is refused like any other: skipping it would
+            // drop the state it holds, all of it when it is the snapshot.
+            Err(e) if index == last && serde_json::from_str::<serde_json::Value>(text).is_err() => {
                 tracing::warn!(error = %e, "journal ends with a partial line; skipping it");
             }
             Err(e) => {
@@ -118,6 +121,19 @@ mod tests {
 
         let (_, events) = Journal::open(dir.path()).unwrap();
         assert_eq!(events, vec![requeued("a", 1)]);
+    }
+
+    #[test]
+    fn open_refuses_a_complete_last_line_it_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        fs::write(
+            &path,
+            "{\"requeued\":{\"id\":\"a\",\"at_ms\":1}}\n{\"batch_from_the_future\":{\"id\":\"b\"}}\n",
+        )
+        .unwrap();
+        let err = Journal::open(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Mutex, time::Duration};
 
 use bridge_return_host::s2::RebuiltAccumulator;
 
@@ -36,9 +36,10 @@ const SYNC_RETRY_DELAYS: [Duration; 3] = [
 const SETTLEMENT_CHECK_EVERY: Duration = Duration::from_secs(30);
 const SETTLEMENT_WAIT: Duration = Duration::from_secs(15 * 60);
 
-/// A node that does not know a transaction broadcast less than this long ago may not have
-/// seen it yet, so only an older one counts as dropped.
-const UNKNOWN_GRACE_MS: u128 = 2 * 60_000;
+/// A transaction the chain does not know may only be missing from the mempool of the node
+/// that answered, and a signed transaction whose nonce is unused can still land; it counts
+/// as dropped only once every lookup for this long has found it unknown.
+const UNKNOWN_FOR_MS: u128 = 10 * 60_000;
 
 /// A return whose nullifier the vault's log shows spent, by `txid` when the log names it.
 struct Released {
@@ -66,6 +67,9 @@ pub struct Orchestrator<P, S, C> {
     retry: RetryPolicy,
     clock: Clock,
     drain: Drain,
+    /// Since when each broadcast settlement has been found unknown at every lookup. Kept in
+    /// memory: a start counts afresh.
+    unknown_since: Mutex<HashMap<String, u128>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -109,6 +113,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
             retry,
             clock,
             drain: Drain::default(),
+            unknown_since: Mutex::new(HashMap::new()),
         }
     }
 
@@ -310,7 +315,21 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let Some(bundle) = &batch.bundle else {
             return Stage::Done;
         };
-        match self.settler.submit(bundle).await {
+        // The relayer prints the txid once it has signed the transaction, before sending it;
+        // journaled then, it survives whatever happens to the service or the relayer next,
+        // and no second transaction is ever sent for the batch while this one may land.
+        let signed = {
+            let (store, clock, id) = (self.store.clone(), self.clock.clone(), batch.id.clone());
+            move |txid: &str| {
+                tracing::info!(batch_id = %id, txid, "settlement signed; waiting on it");
+                store.apply(Event::BatchSubmitted {
+                    id: id.clone(),
+                    txid: txid.to_string(),
+                    at_ms: clock.now_ms(),
+                });
+            }
+        };
+        match self.settler.submit(bundle, &signed).await {
             SubmitOutcome::Skipped => {
                 tracing::info!(batch_id = %batch.id, "no submitter configured or no proof to settle; batch left proven");
                 Stage::Done
@@ -325,12 +344,13 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                 Stage::Done
             }
             SubmitOutcome::Unconfirmed { txid } => {
-                tracing::warn!(batch_id = %batch.id, %txid, "settlement broadcast but not seen to settle; waiting on it");
-                self.store.apply(Event::BatchSubmitted {
-                    id: batch.id.clone(),
-                    txid,
-                    at_ms: self.clock.now_ms(),
-                });
+                tracing::warn!(batch_id = %batch.id, %txid, "settlement not seen to settle; waiting on it");
+                let journaled = self
+                    .reload(&batch.id)
+                    .is_some_and(|b| b.broadcast_txid.as_deref() == Some(txid.as_str()));
+                if !journaled {
+                    signed(&txid);
+                }
                 self.await_settlement(&batch.id).await
             }
             SubmitOutcome::StaleRoot => self.rebase_or_fail(batch, "vault: stale root"),
@@ -400,7 +420,11 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         let Some(txid) = batch.broadcast_txid.as_deref() else {
             return Verdict::Wait("no broadcast transaction is recorded for it".to_string());
         };
-        match self.chain.settlement(txid).await {
+        let looked_up = self.chain.settlement(txid).await;
+        if !matches!(&looked_up, Ok(s) if s.state == SettlementState::Unknown) {
+            self.unknown_since.lock().unwrap().remove(&batch.id);
+        }
+        match looked_up {
             Ok(settlement) => match settlement.state {
                 SettlementState::Confirmed => Verdict::Settled(txid.to_string()),
                 SettlementState::Pending => Verdict::Wait(format!(
@@ -412,16 +436,29 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
                         .await
                 }
                 SettlementState::Unknown => {
-                    let broadcast = batch.broadcast_at_ms.unwrap_or(0);
-                    if self.clock.now_ms().saturating_sub(broadcast) < UNKNOWN_GRACE_MS {
-                        Verdict::Wait(format!("the chain does not know {txid} yet"))
-                    } else {
-                        self.refuted(
-                            batch,
-                            format!("settlement {txid} was dropped: the chain does not know it"),
-                        )
-                        .await
+                    let now = self.clock.now_ms();
+                    let since = *self
+                        .unknown_since
+                        .lock()
+                        .unwrap()
+                        .entry(batch.id.clone())
+                        .or_insert(now);
+                    if now.saturating_sub(since) < UNKNOWN_FOR_MS {
+                        return Verdict::Wait(format!("the chain does not know {txid}"));
                     }
+                    let verdict = self
+                        .refuted(
+                            batch,
+                            format!(
+                                "settlement {txid} was dropped: the chain has not known it for {} minutes",
+                                UNKNOWN_FOR_MS / 60_000
+                            ),
+                        )
+                        .await;
+                    if !matches!(verdict, Verdict::Wait(_)) {
+                        self.unknown_since.lock().unwrap().remove(&batch.id);
+                    }
+                    verdict
                 }
             },
             Err(ChainSyncError::NoReceiptSource) => self.by_log_alone(batch).await,

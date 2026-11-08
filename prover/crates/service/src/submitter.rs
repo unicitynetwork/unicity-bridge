@@ -1,7 +1,7 @@
 use std::{process::Stdio, time::Duration};
 
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::{
     domain::{assembler::Rejected, burn::LeafToSettle},
@@ -15,8 +15,8 @@ pub struct Submitter {
     timeout: Duration,
 }
 
-/// The submit command's exit status for a settlement it broadcast but saw no receipt for
-/// (EX_TEMPFAIL): stdout carries the txid, and the chain log settles or refutes it.
+/// The submit command's exit status for a settlement it broadcast but did not see settle
+/// (EX_TEMPFAIL): the service waits on the txid it printed.
 pub const UNCONFIRMED_EXIT: i32 = 75;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,8 +26,9 @@ pub enum SubmitOutcome {
     Submitted {
         txid: String,
     },
-    /// Broadcast, but the submitter could not read the receipt: the transaction may have
-    /// settled, be waiting to, or have been dropped.
+    /// The submitter printed the txid of a transaction it signed, and did not report it
+    /// settled: the transaction may have settled, be waiting to, have failed, or never have
+    /// gone out, which only a look at the chain tells.
     Unconfirmed {
         txid: String,
     },
@@ -102,10 +103,17 @@ impl Submitter {
         }
     }
 
-    pub async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
+    /// Run the submit command on `bundle`. `signed` is called with the txid as soon as the
+    /// command prints it, which the relayers do once they have signed the transaction and
+    /// before they send it, so the service can journal it while the command still runs.
+    pub async fn submit(
+        &self,
+        bundle: &BatchBundle,
+        signed: &(dyn Fn(&str) + Send + Sync),
+    ) -> SubmitOutcome {
         match &self.submit_cmd {
             None => SubmitOutcome::Skipped,
-            Some(cmd) => run_submit_command(cmd, bundle, self.timeout).await,
+            Some(cmd) => run_submit_command(cmd, bundle, self.timeout, signed).await,
         }
     }
 
@@ -121,35 +129,96 @@ fn env_command(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|cmd| !cmd.trim().is_empty())
 }
 
-async fn run_submit_command(cmd: &str, bundle: &BatchBundle, timeout: Duration) -> SubmitOutcome {
+/// The first line the command prints is the settlement's txid, handed to `signed` the moment
+/// it arrives. Once there is one, only exit 0 (settled) or a stale root decides the outcome
+/// by the exit status: a timeout, exit 75 or any other failure leaves the transaction to be
+/// looked up, since it may have gone out whatever made the command stop.
+async fn run_submit_command(
+    cmd: &str,
+    bundle: &BatchBundle,
+    timeout: Duration,
+    signed: &(dyn Fn(&str) + Send + Sync),
+) -> SubmitOutcome {
     if !bundle.has_proof() {
         return SubmitOutcome::Skipped;
     }
     let payload = serde_json::to_string(bundle).expect("BatchBundle always serializes");
     tracing::debug!(batch_id = %bundle.batch_id, cmd, "spawning S4 submit command");
-    let output = match run_with_stdin(cmd, payload.as_bytes(), timeout).await {
-        Ok(output) => output,
-        Err(e) => return SubmitOutcome::Failed { message: e },
+    let mut child = match spawn_with_stdin(cmd, payload.as_bytes()).await {
+        Ok(child) => child,
+        Err(message) => return SubmitOutcome::Failed { message },
     };
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let txid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if output.status.code() == Some(UNCONFIRMED_EXIT) && !txid.is_empty() {
-        return SubmitOutcome::Unconfirmed { txid };
-    }
-    if !output.status.success() {
-        if stderr.contains("stale root") {
-            return SubmitOutcome::StaleRoot;
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = tokio::spawn(async move {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text).await;
+        text
+    });
+    let mut txid: Option<String> = None;
+    let finished = tokio::time::timeout(timeout, async {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim();
+            if txid.is_none() && !line.is_empty() {
+                txid = Some(line.to_string());
+                signed(line);
+            }
         }
-        return SubmitOutcome::Failed {
-            message: format!("submit command exited {}: {stderr}", output.status),
+        child.wait().await
+    })
+    .await;
+    if finished.is_err() {
+        let _ = child.start_kill();
+    }
+    let stderr = tokio::time::timeout(Duration::from_secs(5), stderr)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let status = match finished {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => {
+            return match txid {
+                Some(txid) => SubmitOutcome::Unconfirmed { txid },
+                None => SubmitOutcome::Failed {
+                    message: format!("command wait failed: {e}"),
+                },
+            }
+        }
+        Err(_) => {
+            return match txid {
+                Some(txid) => SubmitOutcome::Unconfirmed { txid },
+                None => SubmitOutcome::Failed {
+                    message: format!("command timed out after {}s", timeout.as_secs()),
+                },
+            }
+        }
+    };
+    if status.success() {
+        return match txid {
+            Some(txid) => SubmitOutcome::Submitted { txid },
+            None => SubmitOutcome::Failed {
+                message: "submit command exited 0 but printed no txid".to_string(),
+            },
         };
     }
-    if txid.is_empty() {
-        return SubmitOutcome::Failed {
-            message: "submit command exited 0 but printed no txid".to_string(),
-        };
+    if stderr.contains("stale root") {
+        return SubmitOutcome::StaleRoot;
     }
-    SubmitOutcome::Submitted { txid }
+    match txid {
+        Some(txid) => {
+            if status.code() != Some(UNCONFIRMED_EXIT) {
+                tracing::warn!(batch_id = %bundle.batch_id, %txid, %status, %stderr, "submit command failed after signing; the transaction is looked up");
+            }
+            SubmitOutcome::Unconfirmed { txid }
+        }
+        None => SubmitOutcome::Failed {
+            message: format!("submit command exited {status}: {stderr}"),
+        },
+    }
 }
 
 async fn run_simulate_command(
@@ -173,11 +242,7 @@ async fn run_simulate_command(
         .map_err(|e| SimulateError::Decode(format!("{e}; got: {}", snippet(stdout.trim()))))
 }
 
-pub(crate) async fn run_with_stdin(
-    cmd: &str,
-    payload: &[u8],
-    timeout: Duration,
-) -> Result<std::process::Output, String> {
+async fn spawn_with_stdin(cmd: &str, payload: &[u8]) -> Result<tokio::process::Child, String> {
     let mut child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -193,6 +258,15 @@ pub(crate) async fn run_with_stdin(
             .await
             .map_err(|e| format!("write to command failed: {e}"))?;
     }
+    Ok(child)
+}
+
+pub(crate) async fn run_with_stdin(
+    cmd: &str,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let child = spawn_with_stdin(cmd, payload).await?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(output) => output.map_err(|e| format!("command wait failed: {e}")),
         Err(_) => Err(format!("command timed out after {}s", timeout.as_secs())),
@@ -240,7 +314,7 @@ mod tests {
     async fn run_command_is_cut_off_after_the_timeout() {
         let outcome = submitter("sleep 5")
             .with_timeout(Duration::from_millis(200))
-            .submit(&bundle())
+            .submit(&bundle(), &|_| {})
             .await;
         assert!(
             matches!(&outcome, SubmitOutcome::Failed { message } if message.contains("timed out")),
@@ -251,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn submit_without_command_is_skipped() {
         assert_eq!(
-            Submitter::none().submit(&bundle()).await,
+            Submitter::none().submit(&bundle(), &|_| {}).await,
             SubmitOutcome::Skipped
         );
         assert_eq!(Submitter::none().label(), "none");
@@ -260,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn run_command_reports_the_txid() {
         let outcome = submitter("cat >/dev/null; echo 0xabc")
-            .submit(&bundle())
+            .submit(&bundle(), &|_| {})
             .await;
         assert_eq!(
             outcome,
@@ -273,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn run_command_maps_stale_root_stderr() {
         let outcome = submitter("cat >/dev/null; echo 'vault: stale root' >&2; exit 1")
-            .submit(&bundle())
+            .submit(&bundle(), &|_| {})
             .await;
         assert_eq!(outcome, SubmitOutcome::StaleRoot);
     }
@@ -282,7 +356,7 @@ mod tests {
     async fn a_settlement_broadcast_without_a_receipt_is_unconfirmed_not_failed() {
         let outcome =
             submitter("cat >/dev/null; echo 0xabc; echo 'receipt unreadable' >&2; exit 75")
-                .submit(&bundle())
+                .submit(&bundle(), &|_| {})
                 .await;
         assert_eq!(
             outcome,
@@ -291,7 +365,7 @@ mod tests {
             }
         );
         let outcome = submitter("cat >/dev/null; echo 'nothing broadcast' >&2; exit 75")
-            .submit(&bundle())
+            .submit(&bundle(), &|_| {})
             .await;
         assert!(
             matches!(&outcome, SubmitOutcome::Failed { message } if message.contains("nothing broadcast")),
@@ -300,9 +374,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_txid_printed_before_the_command_stops_leaves_the_settlement_to_be_looked_up() {
+        let seen = std::sync::Mutex::new(Vec::new());
+        let signed = |txid: &str| seen.lock().unwrap().push(txid.to_string());
+        let hung = submitter("cat >/dev/null; echo 0xabc; sleep 5; echo 0xdef")
+            .with_timeout(Duration::from_millis(300))
+            .submit(&bundle(), &signed)
+            .await;
+        assert_eq!(
+            hung,
+            SubmitOutcome::Unconfirmed {
+                txid: "0xabc".to_string()
+            }
+        );
+        let failed = submitter("cat >/dev/null; echo 0xabc; echo 'reverted on chain' >&2; exit 1")
+            .submit(&bundle(), &signed)
+            .await;
+        assert_eq!(
+            failed,
+            SubmitOutcome::Unconfirmed {
+                txid: "0xabc".to_string()
+            }
+        );
+        let stale = submitter("cat >/dev/null; echo 0xabc; echo 'vault: stale root' >&2; exit 1")
+            .submit(&bundle(), &signed)
+            .await;
+        assert_eq!(stale, SubmitOutcome::StaleRoot);
+        assert_eq!(*seen.lock().unwrap(), vec!["0xabc"; 3]);
+    }
+
+    #[tokio::test]
+    async fn the_txid_is_handed_over_while_the_command_still_runs() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let signed = move |txid: &str| {
+            tx.send((txid.to_string(), std::time::Instant::now()))
+                .unwrap()
+        };
+        let started = std::time::Instant::now();
+        let outcome = submitter("cat >/dev/null; echo 0xabc; sleep 1")
+            .submit(&bundle(), &signed)
+            .await;
+        assert_eq!(
+            outcome,
+            SubmitOutcome::Submitted {
+                txid: "0xabc".to_string()
+            }
+        );
+        let (txid, at) = rx.recv().unwrap();
+        assert_eq!(txid, "0xabc");
+        assert!(at.duration_since(started) < Duration::from_millis(800));
+        assert!(started.elapsed() >= Duration::from_secs(1));
+    }
+
+    #[tokio::test]
     async fn run_command_reports_other_failures() {
         let outcome = submitter("cat >/dev/null; echo boom >&2; exit 1")
-            .submit(&bundle())
+            .submit(&bundle(), &|_| {})
             .await;
         assert!(matches!(outcome, SubmitOutcome::Failed { message } if message.contains("boom")));
     }
@@ -312,7 +439,7 @@ mod tests {
         let mut no_proof = bundle();
         no_proof.proof_bytes = "0x".to_string();
         let outcome = submitter("cat >/dev/null; echo 0xabc")
-            .submit(&no_proof)
+            .submit(&no_proof, &|_| {})
             .await;
         assert_eq!(outcome, SubmitOutcome::Skipped);
     }

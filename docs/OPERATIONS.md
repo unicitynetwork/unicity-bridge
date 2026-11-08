@@ -110,7 +110,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `SP1_GUEST_ELF` | `/app/sp1/bridge-return-sp1-guest` | the program whose key the vault holds; checked against the deployment's `vkey` at start |
 | `BRIDGE_RETURN_PROOF_DIR` | `/data/proofs` | proof bundles |
 | `TRON_SK`, `TRON_VAULT`, `TRON_RPC_URL` | none, none, Nile | settlement and chain sync, through the relayer |
-| `ETH_CONFIRM_RPC_URL`, `TRON_CONFIRM_RPC_URL` | none | a second RPC, independent of `ETH_RPC_URL`/`TRON_RPC_URL`, through which the relayer confirms a release the service did not see settle (§5). The image's entrypoint always sets `BRIDGE_RETURN_CONFIRM_CMD`, so without this the service refuses to start |
+| `ETH_CONFIRM_RPC_URL`, `TRON_CONFIRM_RPC_URL` | none | a second RPC, independent of `ETH_RPC_URL`/`TRON_RPC_URL`, through which the relayer confirms a release the service did not see settle (§5). The image's entrypoint sets `BRIDGE_RETURN_CONFIRM_CMD`, so without this the service refuses to start; set `BRIDGE_RETURN_CONFIRM_CMD` empty to run without a second RPC, in which case such returns stay `submitted` |
 | `BRIDGE_RETURN_SUBMIT_CMD`, `BRIDGE_RETURN_EVENTS_CMD`, `BRIDGE_RETURN_SIMULATE_CMD`, `BRIDGE_RETURN_CONFIRM_CMD`, `BRIDGE_RETURN_RECEIPT_CMD` | the Node relayer | settlement, event scan, pre-simulation (lock refs, transfers), release-confirmation and settlement-lookup hooks; replaceable by any program with the same stdin/stdout contract (a replacement events command must name each batch's `txid`). The service refuses to start without a simulate command, and when a configured confirmation or receipt command cannot run |
 | `BRIDGE_RETURN_MAX_PENDING` | `1000` | most returns held unfinished; beyond it a new burn is refused with `queue_full` (HTTP 503, recoverable) |
 | `BRIDGE_RETURN_BIND` | `0.0.0.0:8787` | listen address |
@@ -188,16 +188,19 @@ no longer shows is proven again. Point the second RPC at a different provider fr
 the first: the same provider behind another URL confirms nothing it did not
 already say.
 
-A settlement the relayer broadcast but did not see settle (it exits 75 with the
-txid, typically because the RPC rate-limited its receipt reads) is journaled as
-`batch_submitted`, and the service waits on that transaction rather than sending
-another: `BRIDGE_RETURN_RECEIPT_CMD` looks it up through `ETH_RPC_URL` every 30 s
-for 15 minutes, with no other batch started meanwhile, then every 5 minutes while
-other batches run. The batch settles once the transaction is final; it fails as
+The relayer prints a settlement's txid as soon as it has signed it, before sending
+it, and the service journals it as `batch_submitted` then. If the relayer does not
+report the settlement settled (it exits 75 because the RPC rate-limited its receipt
+reads, fails, or outlasts its timeout), or the service restarts meanwhile, the
+service waits on that transaction rather than sending another:
+`BRIDGE_RETURN_RECEIPT_CMD` looks it up through `ETH_RPC_URL` every 30 s for 15
+minutes, with no other batch started meanwhile, then every 5 minutes while other
+batches run. The batch settles once the transaction is final; it fails as
 `submission_failed`, charging its members an attempt, only once the transaction
-reverted or the chain no longer knows it and the vault log shows the batch neither
-released by another transaction nor overtaken. Reads that fail cost nothing. A
-restart looks the transaction up again, and a drain does not wait for it.
+reverted, or the chain has not known it at any lookup for 10 minutes, and the vault
+log shows the batch neither released by another transaction nor overtaken (overtaken,
+it is re-proven at no attempt's cost). Reads that fail cost nothing, and a drain
+does not wait for the lookups.
 
 The service settles for free unless `BRIDGE_RETURN_FEE_AMOUNT` is set. The fee
 is a flat amount of the bridged asset per burn. The owner's burn names it, the
@@ -324,9 +327,10 @@ Worth alerting on:
 - `unconfirmedReleases` above zero for more than a few checks (5 minutes each):
   the chain log shows a payout the second RPC does not confirm, or no second RPC
   is configured. Each such return's `message` names the transaction.
-- `unconfirmedSettlements` above zero for more than about 20 minutes: a
-  settlement transaction is stuck unmined (gas price, a nonce gap) or
-  `ETH_RPC_URL` cannot be read. Its members' `message` names the transaction.
+- `unconfirmedSettlements` above zero for more than about 20 minutes (it is 1
+  while any settlement is in flight): a settlement transaction is stuck unmined
+  (gas price, a nonce gap) or `ETH_RPC_URL` cannot be read. Its members'
+  `message` names the transaction.
 - Settlement account balance below a few settlements' worth of gas.
 - On chain: every `BatchFulfilled` should match a bundle the service wrote.
 
@@ -345,8 +349,8 @@ Worth alerting on:
 | Return `failed` with `proving_failed` saying the proving command `was killed by signal 9` (the Docker VM's `dmesg` shows an `oom-kill` of `bridge-return-h`) | the proof outgrew the memory limit: a live Sepolia USDC burn peaks at about 26 GiB, 23 GB killed it in a 24 GB WSL VM on 2026-09-23 | the service keeps running and retries with backoff; each kill counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS`. Size the limit for one proof's peak plus the service; keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours) |
 | Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process died while proving: a crash, an OOM kill of the service itself, or a SIGKILL (Docker's included, once the stop grace period runs out) | each such interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
 | Return `submitted`, its message saying the vault log shows it released in a transaction a second source has not confirmed | the service did not submit that release itself (someone submitted the public bundle first, or the relayer lost track of its own transaction), and `BRIDGE_RETURN_CONFIRM_CMD` could not confirm it: the second RPC is unset, the same endpoint as the first, down, behind, or disagrees | look the transaction up on an explorer. Paid: fix `ETH_CONFIRM_RPC_URL`, and the next check settles the return with that transaction. Not paid: the first RPC is wrong; replace `ETH_RPC_URL`, and once the log no longer shows the release the return is proven again |
-| Return `proven`, its message saying `Settlement 0x… broadcast; waiting to see it settle`, and `unconfirmedSettlements` above zero | the relayer broadcast the settlement but did not see it settle (it exited 75), and the transaction is still pending, or the receipt command cannot read it | nothing is charged while it waits. Look the transaction up on an explorer: pending, it settles the batch once mined (if it is stuck, replace it at the same nonce; the vault accepts only one settlement of the batch); mined, check `ETH_RPC_URL` and `BRIDGE_RETURN_RECEIPT_CMD` |
-| Return `failed` with `submission_failed` saying a settlement `reverted on chain` or `was dropped` | the relayer broadcast the settlement, which then reverted or vanished from the chain, and the vault log shows the batch neither released nor overtaken | the retry resubmits the same proof |
+| Return `proven`, its message saying `Settlement 0x… broadcast; waiting to see it settle`, and `unconfirmedSettlements` above zero for long | the relayer signed and sent the settlement but did not see it settle, and the transaction is still pending, or the receipt command cannot read it | nothing is charged while it waits. Look the transaction up on an explorer: pending, it settles the batch once mined (if it is stuck, replace it at the same nonce; the vault accepts only one settlement of the batch); mined, check `ETH_RPC_URL` and `BRIDGE_RETURN_RECEIPT_CMD` |
+| Return `failed` with `submission_failed` saying a settlement `reverted on chain` or `was dropped` | the relayer signed the settlement, which then reverted, or which the chain did not know at any lookup for 10 minutes (never sent, refused, or dropped from the mempool), and the vault log shows the batch neither released nor overtaken | the retry resubmits the same proof; a dropped transaction that lands later anyway makes the retry find the batch released, and it settles from the log |
 | Settlement reverts with `vault: stale root` | another batch settled first, or the event scan lagged | the service re-proves the same batch on the new root, up to `BRIDGE_RETURN_MAX_REBASES` times, then fails it recoverably |
 | Settlement fails with `OUT_OF_TIME: CPU timeout` and is charged the whole fee limit | the network's per-transaction CPU limit (`getMaxCpuTimeOfOneTx`) is below what the Groth16 verification needs. Nile lowered it from 160 ms to 80 ms by proposal 20699 on 2026-09-08; the July settlement ran under 160 ms, and since the change even the repository's published bundle times out in a free `verifyProof` call | nothing on the service side; stop the service so retries do not each pay the fee limit, keep `feeLimit` in `relayer.js` just above a real settlement's cost so a timeout is cheap, and check the free `verifyProof` call before starting again; a retry reuses the proof |
 | Settlement reverts with `vault: trust base not allowed` | the validator set changed and the new hash is not allow-listed | admin allow-lists it (§9); proofs under the old set still settle if that hash remains allowed |
@@ -405,13 +409,19 @@ relayers do: since the image that confirms releases, a log without it leaves eve
 release the service did not submit `submitted`, a breaking change for such a
 command.
 
-Rolling back to an older image has limits. An image from before release
-confirmation reads an unconfirmed release as settled, without the second-source
-check, and treats a `submitted` return in the journal's snapshot as neither pending
-nor done, so it never moves again. An image from before `batch_submitted` refuses to
-load a journal that holds one, or a `submitted` batch. Roll back only while `/health`
-shows `unconfirmedReleases` and `unconfirmedSettlements` at 0, after one restart of
-the current image has compacted the journal.
+Rolling back to an older image has limits, and getting them wrong can lose the
+ledger. An image from before release confirmation reads an unconfirmed release as
+settled, without the second-source check, and treats a `submitted` return in the
+journal's snapshot as neither pending nor done, so it never moves again. An image
+from before `batch_submitted` cannot read that event or a `submitted` batch, and
+skips a last journal line it cannot read as if a write had been cut off: a trailing
+`batch_submitted` line is dropped, so the batch is sent again, and a journal
+compacted to one snapshot line holding a `submitted` batch is dropped whole, so the
+older image starts with an empty ledger and compacts that. Roll back only while
+`/health` shows `unconfirmedReleases` and `unconfirmedSettlements` at 0, and only
+after a restart of the current image has compacted the journal in that state; copy
+`journal.jsonl` aside first. Images from this one on refuse a complete line they
+cannot read instead of skipping it.
 
 ## 10. Known gaps before real value
 

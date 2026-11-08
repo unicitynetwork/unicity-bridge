@@ -113,9 +113,15 @@ impl ProofBackend for ScriptedProver {
 
 type Outcome = Box<dyn FnOnce(&BatchBundle) -> SubmitOutcome + Send>;
 
+enum Step {
+    Outcome(Outcome),
+    /// Prints the txid, as the relayers do once they have signed, and never ends.
+    SignAndHang(String),
+}
+
 #[derive(Clone)]
 pub struct ScriptedSettler {
-    outcomes: Arc<Mutex<VecDeque<Outcome>>>,
+    outcomes: Arc<Mutex<VecDeque<Step>>>,
     fallback: SubmitOutcome,
     rejected: Arc<Mutex<Vec<Rejected>>>,
     submitted: Arc<Mutex<Vec<BatchBundle>>>,
@@ -149,7 +155,20 @@ impl ScriptedSettler {
         self,
         outcome: impl FnOnce(&BatchBundle) -> SubmitOutcome + Send + 'static,
     ) -> Self {
-        self.outcomes.lock().unwrap().push_back(Box::new(outcome));
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push_back(Step::Outcome(Box::new(outcome)));
+        self
+    }
+
+    /// The next submission signs `txid` and then never returns, as a relayer still waiting
+    /// on its receipt does when the service stops.
+    pub fn then_sign_and_hang(self, txid: &str) -> Self {
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push_back(Step::SignAndHang(txid.to_string()));
         self
     }
 
@@ -171,13 +190,25 @@ impl ScriptedSettler {
 }
 
 impl Settler for ScriptedSettler {
-    async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
+    async fn submit(
+        &self,
+        bundle: &BatchBundle,
+        signed: &(dyn Fn(&str) + Send + Sync),
+    ) -> SubmitOutcome {
         self.submitted.lock().unwrap().push(bundle.clone());
         let next = self.outcomes.lock().unwrap().pop_front();
-        match next {
-            Some(outcome) => outcome(bundle),
+        let outcome = match next {
+            Some(Step::Outcome(outcome)) => outcome(bundle),
+            Some(Step::SignAndHang(txid)) => {
+                signed(&txid);
+                return std::future::pending().await;
+            }
             None => self.fallback.clone(),
+        };
+        if let SubmitOutcome::Submitted { txid } | SubmitOutcome::Unconfirmed { txid } = &outcome {
+            signed(txid);
         }
+        outcome
     }
 
     async fn simulate(&self, _leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {

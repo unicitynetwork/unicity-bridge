@@ -300,6 +300,8 @@ async function settleFromStdin() {
   // node refusing it (other than as a duplicate of one it holds) fails the settlement.
   const signed = await tw.trx.sign(built.transaction);
   const id = built.transaction.txID;
+  // The id goes to stdout before the transaction is sent; the service journals it then.
+  await new Promise((resolve) => process.stdout.write(`${id}\n`, resolve));
   let sent;
   try {
     sent = await tw.trx.sendRawTransaction(signed);
@@ -325,7 +327,7 @@ async function settleFromStdin() {
   }
   if (!(info && info.receipt)) {
     console.error(`broadcast ${id}, but saw no receipt for it; the service waits on it`);
-    exitWith(id, UNCONFIRMED_EXIT);
+    exitWith("", UNCONFIRMED_EXIT);
     return;
   }
   const ok = info.receipt.result === "SUCCESS";
@@ -338,7 +340,6 @@ async function settleFromStdin() {
     process.exit(1);
   }
   console.error(`settled: https://nile.tronscan.org/#/transaction/${id}`);
-  process.stdout.write(id);
 }
 
 // TronWeb reports a node's refusal as hex-encoded text.

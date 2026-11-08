@@ -119,15 +119,15 @@ cargo run -p bridge-return-service --release
 | `BRIDGE_RETURN_SUBMIT_CMD` | — | S4 submitter command (see below). Unset = `none`. |
 | `BRIDGE_RETURN_EVENTS_CMD` | — | Chain log command (`relayer-eth.js events` or `relayer.js events`). Unset assumes a pristine vault. A replacement must name each batch's `txid`: a release the log names no transaction for is never confirmed. |
 | `BRIDGE_RETURN_SIMULATE_CMD` | — | Settlement pre-simulation command: lock-ref and transfer checks (see below). **Required.** |
-| `BRIDGE_RETURN_CONFIRM_CMD` | — | Confirms, on a second source, a release the chain log shows but the service holds no receipt for (`relayer-eth.js confirm --stdin`, which reads `ETH_CONFIRM_RPC_URL`). Unset, such a return stays `submitted` and is not checked again (see below). |
-| `BRIDGE_RETURN_RECEIPT_CMD` | — | Looks up a settlement the relayer broadcast without seeing it settle (`relayer-eth.js receipt --stdin`, through `ETH_RPC_URL`). Unset, only the chain log decides such a settlement (see below). |
+| `BRIDGE_RETURN_CONFIRM_CMD` | — | Confirms, on a second source, a release the chain log shows but the service holds no receipt for (`relayer-eth.js confirm --stdin`, which reads `ETH_CONFIRM_RPC_URL`). Unset or empty, such a return stays `submitted` and is not checked again (see below). The image sets it unless it is set, even to an empty value. |
+| `BRIDGE_RETURN_RECEIPT_CMD` | — | Looks up a settlement the relayer signed without seeing it settle (`relayer-eth.js receipt --stdin`, through `ETH_RPC_URL`). Unset or empty, only the chain log decides such a settlement (see below). |
 | `BRIDGE_RETURN_MAX_PENDING` | `1000` | Most returns held unfinished (queued, proving, awaiting settlement or a retry); beyond it `POST /returns` refuses a new burn with `queue_full` (HTTP 503, recoverable). |
 | `RUST_LOG` | — | e.g. `bridge_return_service=info`. |
 
 `BRIDGE_DEPLOYMENT_CONFIG`, `TRUST_BASE_PATH` and `BRIDGE_RETURN_SIMULATE_CMD` are
-required: the service refuses to start without them (exit 2). It also refuses to start
-when a configured confirmation or receipt command cannot run: each is run once at
-startup on nothing to check (for `relayer-eth.js confirm`, a missing
+required: the service refuses to start without them (exit 2). It also refuses to start,
+before it opens the journal, when a configured confirmation or receipt command cannot
+run: each is run once at startup on nothing to check (for `relayer-eth.js confirm`, a missing
 `ETH_CONFIRM_RPC_URL` or one equal to `ETH_RPC_URL` fails it). It admits a burn only through the wallet envelope, which
 it verifies against that trust base. A pre-assembled `wireInput` is refused with
 `raw_witness_refused` (HTTP 400), since nothing would pin its trust base to the
@@ -216,30 +216,33 @@ without touching the queue:
   **self-settleable** by anyone, so the principal is never stuck (06 §A1.2).
 - **`command`**: set `BRIDGE_RETURN_SUBMIT_CMD` to a program that receives the
   bundle JSON (`{batchId, mode, vkey, publicValues, proofBytes, leaves, lockRefs}`)
-  on **stdin**, submits `fulfillBatch`, and prints the settle **txid** on stdout
-  (exit 0). Exit **75** with the txid on stdout means the transaction was
-  broadcast but not seen to settle. The service journals `batch_submitted` with
-  the txid and waits on that transaction, never sending another for the batch: it
-  looks it up through `BRIDGE_RETURN_RECEIPT_CMD` every 30 s for up to 15 minutes,
-  starting no other batch meanwhile, and then every 5 minutes while other batches
-  run. Settled, the batch settles with that txid. Reverted, or unknown to the chain
-  2 minutes after the broadcast, it will not settle the batch, and the chain log
-  decides: the batch settles if every member was released (confirmed as below), is
-  re-proven if the vault root moved past it, and only otherwise fails as
-  `submission_failed`. A transaction still pending, or one nothing can read, decides
-  nothing and costs nothing: the batch waits, its members `proven`, and `/health`
-  counts it in `unconfirmedSettlements`. A restart looks the transaction up again
-  instead of resubmitting, and a drain does not wait for it. Without a receipt
-  command only the chain log decides (released, or overtaken), so a transaction that
-  never lands leaves the batch waiting. A non-zero exit
-  whose stderr contains `stale root` makes the service re-prove the batch on the
-  new root; any other failure schedules a retry that reuses the proof. The
-  relayers sign the settlement before sending it, so its txid is known even when
-  the send fails without an answer, and send the same transaction again after such
-  a failure; only a node refusing it outright fails the submission. They then poll
-  the receipt themselves, reading it again after a failed request, and stop 30 s
-  before `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` so the txid still reaches the
-  service. This is the seam for the existing
+  on **stdin**, submits `fulfillBatch`, and prints the settlement's **txid** on
+  stdout, exiting 0 once it has settled. The txid may come early, on a line of its
+  own, and the relayers print it as soon as they have signed the transaction,
+  before sending it: the service journals `batch_submitted` with it at once. From
+  then on the service never sends another transaction for the batch while that one
+  may land, and only exit 0 (settled) or a stderr containing `stale root` decides
+  the outcome by the exit status. Exit **75** (sent, not seen to settle), any other
+  failure, a timeout, or a restart of the service leaves the batch waiting on that
+  transaction: it is looked up through `BRIDGE_RETURN_RECEIPT_CMD` every 30 s for
+  up to 15 minutes after the command ends, with no other batch started meanwhile,
+  and then every 5 minutes while other batches run. Settled, the batch settles with
+  that txid. Reverted, or unknown to the chain at every lookup for 10 minutes, it
+  will not settle the batch, and the chain log decides: the batch settles if every
+  member was released (confirmed as below), is re-proven if the vault root moved
+  past it, and only otherwise fails as `submission_failed`. A transaction still
+  pending, or one nothing can read, decides nothing and costs nothing: the batch
+  waits, its members `proven`, and `/health` counts it in `unconfirmedSettlements`
+  (as it does every settlement in flight). A drain does not wait for the lookups.
+  Without a receipt command only the chain log decides (released, or overtaken), so
+  a transaction that never lands leaves the batch waiting. Before a txid is
+  printed, a non-zero exit whose stderr contains `stale root` makes the service
+  re-prove the batch on the new root, and any other failure schedules a retry that
+  reuses the proof. The relayers send the signed transaction alone, send it again
+  after a failure a repeat can clear, bound each send and their receipt reads by a
+  deadline 30 s before `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS`, and then exit 75 with
+  the txid already printed.
+  This is the seam for the existing
   `contracts/tron/scripts/relayer-eth.js settle` (Ethereum family), `relayer.js settle` (Tron) and for the all-Rust submitter (07 §B7).
 
 Example (wrapping the proven relayer):
@@ -339,16 +342,19 @@ the return instead of looping), a batch whose settlement was broadcast is looked
 up by its transaction and never resubmitted, a proven batch is settled or
 resubmitted after a chain check, scheduled retries keep their schedule. The
 journal is one JSON object per line (`jq -c 'keys[0]' journal.jsonl` lists the
-event types) and is compacted to one snapshot line at start. The **burned blob**
+event types) and is compacted to one snapshot line at start. A complete line the
+service cannot read, one a newer version wrote, stops it from starting; only a last
+line cut off mid-write is skipped. The **burned blob**
 is still the claim, and the wallet still resubmits it on a 404. Monitor:
 `/health` (queue depth, the active batch, its size and start, the last proof
 duration, `unconfirmedReleases`, `unconfirmedSettlements`), `/accumulator`
 (SYNCED), last settle txid. An `unconfirmedReleases` above zero that does not
 clear within a few checks means the chain log and the second source disagree
 about a payout, or that no second source is configured: check the transaction a
-`submitted` return's message names on an explorer. An `unconfirmedSettlements`
-above zero for more than a few minutes means a settlement transaction is stuck
-unmined or its RPC cannot be read: the members' message names the transaction.
+`submitted` return's message names on an explorer. `unconfirmedSettlements` is 1
+while a settlement is in flight; above zero for more than about 20 minutes, a
+settlement transaction is stuck unmined or its RPC cannot be read: the members'
+message names the transaction.
 A return waiting on confirmation journals a `return_excluded` with
 `already_settled` and an `unconfirmed` reason when it starts waiting and whenever
 a check finds something new; a check that finds the same adds nothing. Failure

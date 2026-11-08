@@ -140,15 +140,16 @@ function leafTuple(l) {
   return [l.nullifier, l.recipient, BigInt(l.amount), l.feeRecipient, BigInt(l.feeAmount), BigInt(l.deadline)];
 }
 
-// The settlement is signed before it is sent, so its txid is known whatever becomes of the
-// send, and from then on it is reported by that txid whatever the reads say: `confirmed` is
-// false when no receipt with `confirmations` was read by `until`. Only a revert, before the
-// send or in the receipt, or a node refusing the transaction outright fails it.
+// The settlement is signed before it is sent, and `onSigned` gets its txid then, so it is
+// known whatever becomes of the send; from then on it is reported by that txid whatever the
+// reads say: `confirmed` is false when no receipt with `confirmations` was read by `until`.
+// Only a revert, before the send or in the receipt, or a node refusing the transaction
+// outright fails it.
 async function settle(
   vault,
   bundle,
   confirmations = 1,
-  { provider, sender, until = Infinity, pollMs = RECEIPT_POLL_MS, retry = RPC_RETRY } = {},
+  { provider, sender, until = Infinity, pollMs = RECEIPT_POLL_MS, retry = RPC_RETRY, onSigned = () => {} } = {},
 ) {
   const leaves = (bundle.leaves || []).map(leafTuple);
   const lockRefs = (bundle.lockRefs || []).map((r) => [BigInt(r.nonce), r.digest]);
@@ -161,7 +162,8 @@ async function settle(
     throw new Error(`fulfillBatch rejected: ${revertReason(vault, e)}`);
   }
   const txid = ethers.Transaction.from(signed).hash;
-  await broadcast(sender ?? signer.provider, signed, retry);
+  await onSigned(txid);
+  await broadcast(sender ?? signer.provider, signed, retry, until);
   const receipt = await receiptOf(provider ?? signer.provider, txid, confirmations, { until, pollMs });
   if (!receipt) return { txid, confirmed: false };
   if (receipt.status !== 1) {
@@ -186,15 +188,16 @@ function alreadySent(e) {
 // a node that holds it already says so. A node refusing the transaction itself (funds, fees)
 // fails the settlement, since it never went out. Resolves to whether a node acknowledged it;
 // when no node answered, the transaction may still have gone out, and its receipt decides.
-async function broadcast(sender, signed, retry = RPC_RETRY) {
+// No send outlasts `until`.
+async function broadcast(sender, signed, retry = RPC_RETRY, until = Infinity) {
   for (let attempt = 0; ; attempt++) {
     try {
-      await sender.send("eth_sendRawTransaction", [signed]);
+      await beforeDeadline(sender.send("eth_sendRawTransaction", [signed]), until);
       return true;
     } catch (e) {
       if (alreadySent(e)) return true;
       if (!TRANSIENT_RPC_ERRORS.has(e.code)) throw new Error(`fulfillBatch refused by the node: ${e.shortMessage || e.message}`);
-      if (attempt >= retry.retries) {
+      if (attempt >= retry.retries || Date.now() >= until) {
         console.error(`relayer-eth: the settlement was sent without an answer (${e.shortMessage || e.message}); its receipt decides whether it went out`);
         return false;
       }
@@ -378,16 +381,19 @@ async function main() {
   } else if (cmd === "settle" && stdin) {
     const bundle = JSON.parse(await readStdin());
     console.error(`relayer-eth settle: batch ${bundle.batchId}, ${(bundle.leaves || []).length} leaf(ves) on vault ${address}`);
-    const result = await settle(vault, bundle, settleConfirmations, { until: ctx.settleUntil });
+    // The txid goes to stdout, on a line of its own, as soon as the transaction is signed and
+    // before it is sent: the service journals it then, and waits on that transaction if this
+    // process stops for any reason before it reports the settlement.
+    const onSigned = (txid) => new Promise((resolve) => process.stdout.write(`${txid}\n`, resolve));
+    const result = await settle(vault, bundle, settleConfirmations, { until: ctx.settleUntil, onSigned });
     if (!result.confirmed) {
       console.error(
         `broadcast ${result.txid}, but no receipt with ${settleConfirmations} confirmation(s) could be read; the service waits on it`,
       );
-      exitWith(result.txid, UNCONFIRMED_EXIT);
+      exitWith("", UNCONFIRMED_EXIT);
       return;
     }
     console.error(`settled in block ${result.blockNumber}, gas ${result.gasUsed}: ${result.txid}`);
-    process.stdout.write(result.txid);
   } else if (cmd === "simulate" && stdin) {
     const payload = JSON.parse(await readStdin());
     process.stdout.write(JSON.stringify(await simulate(vault, payload.leaves || [], settleConfirmations)));

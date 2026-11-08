@@ -19,7 +19,12 @@ pub trait ProofBackend: Send + Sync + 'static {
 }
 
 pub trait Settler: Send + Sync + 'static {
-    fn submit(&self, bundle: &BatchBundle) -> impl Future<Output = SubmitOutcome> + Send;
+    /// Submit the bundle; `signed` receives the settlement's txid as soon as it is known.
+    fn submit(
+        &self,
+        bundle: &BatchBundle,
+        signed: &(dyn Fn(&str) + Send + Sync),
+    ) -> impl Future<Output = SubmitOutcome> + Send;
 
     fn simulate(
         &self,
@@ -57,8 +62,12 @@ impl ProofBackend for Prover {
 }
 
 impl Settler for Submitter {
-    async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
-        Submitter::submit(self, bundle).await
+    async fn submit(
+        &self,
+        bundle: &BatchBundle,
+        signed: &(dyn Fn(&str) + Send + Sync),
+    ) -> SubmitOutcome {
+        Submitter::submit(self, bundle, signed).await
     }
 
     async fn simulate(&self, leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {

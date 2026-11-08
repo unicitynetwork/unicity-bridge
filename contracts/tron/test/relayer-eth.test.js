@@ -181,6 +181,30 @@ describe("relayer-eth against the vault", () => {
     expect(await ethers.provider.getTransactionReceipt(result.txid)).to.equal(null);
   });
 
+  it("hands over the txid it signed before sending it", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "w"), "w");
+    const order = [];
+    const sender = sending(async (call, send) => {
+      order.push("send");
+      return send();
+    });
+    const result = await settle(relayer(vault), bundle, 1, { sender, retry: fast, pollMs: 10, onSigned: (txid) => order.push(txid) });
+    expect(order).to.deep.equal([result.txid, "send"]);
+    expect(result.confirmed).to.equal(true);
+  });
+
+  it("gives up on a send that never answers at its deadline, by the txid it signed", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "x"), "x");
+    const sender = sending(() => new Promise(() => {}));
+    const started = Date.now();
+    const result = await settle(relayer(vault), bundle, 1, { sender, retry: fast, until: Date.now() + 300, pollMs: 20 });
+    expect(result.confirmed).to.equal(false);
+    expect(result.txid).to.match(/^0x[0-9a-f]{64}$/);
+    expect(Date.now() - started).to.be.below(2000);
+  });
+
   it("fails a settlement the node refuses outright", async () => {
     const { recipient, vault } = await deployBridge(false);
     const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "t"), "t");
