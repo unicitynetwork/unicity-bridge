@@ -53,7 +53,12 @@ async fn main() {
     let submits = submitter.submits();
     let chain_events = ChainEvents::from_env().with_timeout(config.command_timeout);
     tracing::info!("accumulator chain-sync: {}", chain_events.label());
+    if let Err(err) = chain_events.check_commands().await {
+        eprintln!("refusing to start: {err}");
+        std::process::exit(2);
+    }
     tracing::info!("release confirmation: {}", chain_events.confirm_label());
+    tracing::info!("settlement lookup: {}", chain_events.receipt_label());
     if !chain_events.is_live() {
         tracing::warn!(
             "no chain watcher (BRIDGE_RETURN_EVENTS_CMD unset) — the vault is assumed pristine \

@@ -4,7 +4,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const ethers = require("ethers");
 const { loadEnv } = require("./env.js");
-const { groupBatches, hex32, releaseLogged, beforeDeadline, exitWith } = require("./relayer-lib.js");
+const { groupBatches, hex32, releaseLogged, beforeDeadline, exitWith, commandDeadline, UNCONFIRMED_EXIT } = require("./relayer-lib.js");
 
 const VAULT_ABI = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "artifacts/contracts/UnicityBridgeVault.sol/UnicityBridgeVault.json"), "utf8"),
@@ -39,15 +39,10 @@ const TRANSIENT_RPC_ERRORS = new Set([
 const HOST_BIN =
   process.env.BRIDGE_HOST_BIN || path.join(__dirname, "..", "..", "..", "prover", "target", "debug", "bridge-return-host");
 const RELEASED_TOPIC = ethers.id("Released(bytes32,address,uint256,address,uint256,uint64)");
-// `settle` exits with this status (EX_TEMPFAIL) when it broadcast the settlement but could
-// not read its receipt in time: stdout still carries the txid, and the service settles or
-// refutes the batch from the vault's log instead of failing it.
-const UNCONFIRMED_EXIT = 75;
 const RECEIPT_POLL_MS = 4000;
-// The service kills a command after BRIDGE_RETURN_COMMAND_TIMEOUT_SECS (600 unless set);
-// the receipt wait ends this long before that, so the txid still reaches the service.
-const STARTED_MS = Date.now();
-const TIMEOUT_MARGIN_MS = 30_000;
+// A second RPC can trail the one the log came from by a block or two, so a release it shows
+// short of depth only is read again once after a block's time before it goes unconfirmed.
+const CONFIRM_CATCH_UP_MS = 15_000;
 
 function context() {
   const env = loadEnv();
@@ -55,7 +50,9 @@ function context() {
   const chainId = Number(env.ETH_CHAIN_ID || 11155111);
   if (!env.ETH_VAULT) throw new Error("ETH_VAULT not set in .env");
   const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });
-  const signer = env.ETH_SK ? new ethers.NonceManager(new ethers.Wallet(env.ETH_SK, provider)) : null;
+  // A Wallet, which signs a transaction before sending it, so the settlement's hash is known
+  // whatever becomes of the send.
+  const signer = env.ETH_SK ? new ethers.Wallet(env.ETH_SK, provider) : null;
   const vault = new ethers.Contract(env.ETH_VAULT, [...VAULT_ABI, ...VERIFIER_ERRORS], signer ?? provider);
   return {
     rpc,
@@ -65,7 +62,7 @@ function context() {
     vault,
     fromBlock: Number(env.ETH_VAULT_DEPLOY_BLOCK || 0),
     settleConfirmations: Number(env.ETH_SETTLE_CONFIRMATIONS || 12),
-    settleUntil: STARTED_MS + Number(env.BRIDGE_RETURN_COMMAND_TIMEOUT_SECS || 600) * 1000 - TIMEOUT_MARGIN_MS,
+    settleUntil: commandDeadline(),
   };
 }
 
@@ -143,25 +140,90 @@ function leafTuple(l) {
   return [l.nullifier, l.recipient, BigInt(l.amount), l.feeRecipient, BigInt(l.feeAmount), BigInt(l.deadline)];
 }
 
-// Once broadcast, the settlement is reported by its txid whatever the receipt reads say:
-// `confirmed` is false when no receipt with `confirmations` was read by `until`, and only a
-// receipt that shows a revert fails it.
-async function settle(vault, bundle, confirmations = 1, { provider, until = Infinity, pollMs = RECEIPT_POLL_MS } = {}) {
+// The settlement is signed before it is sent, so its txid is known whatever becomes of the
+// send, and from then on it is reported by that txid whatever the reads say: `confirmed` is
+// false when no receipt with `confirmations` was read by `until`. Only a revert, before the
+// send or in the receipt, or a node refusing the transaction outright fails it.
+async function settle(
+  vault,
+  bundle,
+  confirmations = 1,
+  { provider, sender, until = Infinity, pollMs = RECEIPT_POLL_MS, retry = RPC_RETRY } = {},
+) {
   const leaves = (bundle.leaves || []).map(leafTuple);
   const lockRefs = (bundle.lockRefs || []).map((r) => [BigInt(r.nonce), r.digest]);
-  let tx;
+  const signer = vault.runner;
+  let signed;
   try {
-    tx = await vault.fulfillBatch(bundle.publicValues, bundle.proofBytes, leaves, lockRefs);
+    const request = await vault.fulfillBatch.populateTransaction(bundle.publicValues, bundle.proofBytes, leaves, lockRefs);
+    signed = await signer.signTransaction(await retried("settlement preparation", () => signer.populateTransaction(request), retry));
   } catch (e) {
     throw new Error(`fulfillBatch rejected: ${revertReason(vault, e)}`);
   }
-  const reader = provider ?? vault.runner.provider ?? vault.runner;
-  const receipt = await receiptOf(reader, tx.hash, confirmations, { until, pollMs });
-  if (!receipt) return { txid: tx.hash, confirmed: false };
+  const txid = ethers.Transaction.from(signed).hash;
+  await broadcast(sender ?? signer.provider, signed, retry);
+  const receipt = await receiptOf(provider ?? signer.provider, txid, confirmations, { until, pollMs });
+  if (!receipt) return { txid, confirmed: false };
   if (receipt.status !== 1) {
-    throw new Error(`fulfillBatch tx ${tx.hash} reverted on chain`);
+    throw new Error(`fulfillBatch tx ${txid} reverted on chain`);
   }
-  return { txid: tx.hash, confirmed: true, gasUsed: receipt.gasUsed, blockNumber: receipt.blockNumber };
+  return { txid, confirmed: true, gasUsed: receipt.gasUsed, blockNumber: receipt.blockNumber };
+}
+
+function rpcMessage(e) {
+  return [e.shortMessage, e.message, e.info?.error?.message, e.error?.message].filter(Boolean).join(" ");
+}
+
+// How a node answers a signed transaction it already holds, or whose nonce is already spent.
+function alreadySent(e) {
+  return e.code === "NONCE_EXPIRED" || /already known|known transaction|already imported|nonce too low/i.test(rpcMessage(e));
+}
+
+// Sends the signed settlement with eth_sendRawTransaction alone. ethers' broadcastTransaction
+// reads the block number and the network alongside the send and throws if either read fails,
+// though the transaction has gone out, which reported a settlement in flight as failed. After
+// a failure a repeat can clear, the same signed transaction is sent again: it has one hash, and
+// a node that holds it already says so. A node refusing the transaction itself (funds, fees)
+// fails the settlement, since it never went out. Resolves to whether a node acknowledged it;
+// when no node answered, the transaction may still have gone out, and its receipt decides.
+async function broadcast(sender, signed, retry = RPC_RETRY) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await sender.send("eth_sendRawTransaction", [signed]);
+      return true;
+    } catch (e) {
+      if (alreadySent(e)) return true;
+      if (!TRANSIENT_RPC_ERRORS.has(e.code)) throw new Error(`fulfillBatch refused by the node: ${e.shortMessage || e.message}`);
+      if (attempt >= retry.retries) {
+        console.error(`relayer-eth: the settlement was sent without an answer (${e.shortMessage || e.message}); its receipt decides whether it went out`);
+        return false;
+      }
+      console.error(`relayer-eth: sending the settlement failed (${e.shortMessage || e.message}); sending it again, ${attempt + 1} of ${retry.retries}`);
+      await new Promise((r) => setTimeout(r, retry.delayMs * 2 ** attempt));
+    }
+  }
+}
+
+// What each settlement transaction's receipt says through `provider`, the RPC the log comes
+// from: "confirmed" once it succeeded `confirmations` deep, "reverted" once it failed that
+// deep, "pending" while it is shallower or known to the node unmined, and "unknown" when the
+// node has neither its receipt nor the transaction.
+async function settlementStates(provider, txids, confirmations = 1, retry = RPC_RETRY) {
+  if (!txids.length) return { settlements: [] };
+  const head = await retried("block number", () => provider.getBlockNumber(), retry);
+  const settlements = [];
+  for (const txid of txids) {
+    const receipt = await retried(`receipt of ${txid}`, () => provider.getTransactionReceipt(txid), retry);
+    if (receipt) {
+      const depth = Math.max(head - receipt.blockNumber + 1, 0);
+      const state = depth < confirmations ? "pending" : receipt.status === 1 ? "confirmed" : "reverted";
+      settlements.push({ txid, state, confirmations: depth });
+      continue;
+    }
+    const tx = await retried(`transaction ${txid}`, () => provider.getTransaction(txid), retry);
+    settlements.push({ txid, state: tx ? "pending" : "unknown", confirmations: 0 });
+  }
+  return { settlements };
 }
 
 // Polls for the receipt rather than calling tx.wait(): the block poller tx.wait() starts
@@ -186,8 +248,27 @@ async function receiptOf(provider, hash, confirmations, { until, pollMs }) {
 
 // Each release (a nullifier and the transaction the settlement log names for it) is
 // confirmed only if `provider` holds that transaction's receipt, succeeded, at least
-// `confirmations` deep, with the vault's Released event for the nullifier in its logs.
-async function confirmReleases(provider, vaultAddress, releases, confirmations = 1, retry = RPC_RETRY) {
+// `confirmations` deep, with the vault's Released event for the nullifier in its logs. A
+// release short of depth only is read again once after `catchUpMs`. No releases means
+// nothing is read: the service asks that at startup to see that the command runs.
+async function confirmReleases(provider, vaultAddress, releases, confirmations = 1, retry = RPC_RETRY, catchUpMs = CONFIRM_CATCH_UP_MS) {
+  if (!releases.length) return { confirmed: [], unconfirmed: [] };
+  const first = await checkReleases(provider, vaultAddress, releases, confirmations, retry);
+  const shallow = first.unconfirmed.filter((u) => u.shallow);
+  if (!shallow.length || !(catchUpMs > 0)) return withoutDepthMarks(first);
+  await new Promise((r) => setTimeout(r, catchUpMs));
+  const again = await checkReleases(provider, vaultAddress, shallow, confirmations, retry);
+  return withoutDepthMarks({
+    confirmed: [...first.confirmed, ...again.confirmed],
+    unconfirmed: [...first.unconfirmed.filter((u) => !u.shallow), ...again.unconfirmed],
+  });
+}
+
+function withoutDepthMarks({ confirmed, unconfirmed }) {
+  return { confirmed, unconfirmed: unconfirmed.map(({ nullifier, txid, reason }) => ({ nullifier, txid, reason })) };
+}
+
+async function checkReleases(provider, vaultAddress, releases, confirmations, retry) {
   const head = await retried("block number", () => provider.getBlockNumber(), retry);
   const confirmed = [];
   const unconfirmed = [];
@@ -203,8 +284,8 @@ async function confirmReleases(provider, vaultAddress, releases, confirmations =
           : depth < confirmations
             ? `${depth} of ${confirmations} confirmations`
             : null;
-    if (reason) unconfirmed.push({ nullifier, txid, reason });
-    else confirmed.push({ nullifier, txid });
+    if (!reason) confirmed.push({ nullifier, txid });
+    else unconfirmed.push({ nullifier, txid, reason, shallow: !!receipt && reason.endsWith(" confirmations") });
   }
   return { confirmed, unconfirmed };
 }
@@ -300,7 +381,7 @@ async function main() {
     const result = await settle(vault, bundle, settleConfirmations, { until: ctx.settleUntil });
     if (!result.confirmed) {
       console.error(
-        `broadcast ${result.txid}, but no receipt with ${settleConfirmations} confirmation(s) could be read; the service looks for it in the vault's log`,
+        `broadcast ${result.txid}, but no receipt with ${settleConfirmations} confirmation(s) could be read; the service waits on it`,
       );
       exitWith(result.txid, UNCONFIRMED_EXIT);
       return;
@@ -315,13 +396,28 @@ async function main() {
     const out = await confirmReleases(confirmationProvider(ctx), address, releases, settleConfirmations);
     console.error(`relayer-eth confirm: ${out.confirmed.length} of ${releases.length} release(s) confirmed on the second RPC`);
     process.stdout.write(JSON.stringify(out));
+  } else if (cmd === "receipt" && stdin) {
+    const { txids = [] } = JSON.parse(await readStdin());
+    const out = await settlementStates(ctx.provider, txids, settleConfirmations);
+    console.error(`relayer-eth receipt: ${out.settlements.map((s) => `${s.txid} ${s.state}`).join(", ") || "nothing asked"}`);
+    process.stdout.write(JSON.stringify(out));
   } else {
-    console.error("usage: relayer-eth.js events | scan | settle --stdin | simulate --stdin | confirm --stdin");
+    console.error("usage: relayer-eth.js events | scan | settle --stdin | simulate --stdin | confirm --stdin | receipt --stdin");
     process.exit(2);
   }
 }
 
-module.exports = { settledLog, settle, simulate, confirmReleases, confirmationProvider, normalizeLog, VAULT_ABI, VERIFIER_ERRORS };
+module.exports = {
+  settledLog,
+  settle,
+  simulate,
+  confirmReleases,
+  confirmationProvider,
+  settlementStates,
+  normalizeLog,
+  VAULT_ABI,
+  VERIFIER_ERRORS,
+};
 
 if (require.main === module) {
   main().catch((e) => {

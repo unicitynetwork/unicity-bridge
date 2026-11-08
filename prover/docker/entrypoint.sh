@@ -55,7 +55,10 @@ export BRIDGE_RETURN_VKEY_CMD="${BRIDGE_RETURN_VKEY_CMD:-$BRIDGE_HOST_BIN sp1-vk
 # Confirms, through ETH_CONFIRM_RPC_URL / TRON_CONFIRM_RPC_URL, a release the service holds
 # no receipt for; until one confirms it, such a return is not settled.
 : "${BRIDGE_RETURN_CONFIRM_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} confirm --stdin}"
-export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD BRIDGE_RETURN_SIMULATE_CMD BRIDGE_RETURN_CONFIRM_CMD
+# Looks up a settlement the relayer broadcast without seeing it settle, so the service waits
+# on that transaction and fails the batch only once it is known not to land.
+: "${BRIDGE_RETURN_RECEIPT_CMD:=node /app/contracts/tron/scripts/${BRIDGE_RELAYER} receipt --stdin}"
+export BRIDGE_RETURN_SUBMIT_CMD BRIDGE_RETURN_EVENTS_CMD BRIDGE_RETURN_SIMULATE_CMD BRIDGE_RETURN_CONFIRM_CMD BRIDGE_RETURN_RECEIPT_CMD
 mkdir -p "$BRIDGE_RETURN_PROOF_DIR" "$BRIDGE_RETURN_STATE_DIR"
 echo "bridge-return-service: mode=$BRIDGE_RETURN_PROVE_MODE elf=$SP1_GUEST_ELF vkey=$(cat /app/sp1/vkey.txt 2>/dev/null || echo unknown)"
 exec /app/bin/bridge-return-service "$@"

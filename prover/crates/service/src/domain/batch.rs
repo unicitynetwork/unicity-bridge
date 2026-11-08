@@ -15,6 +15,16 @@ pub struct Batch {
     pub spent_root_old: Option<String>,
     pub formed_at_ms: u128,
     pub proven_at_ms: Option<u128>,
+    /// The settlement transaction the relayer broadcast without seeing it settle, and when
+    /// the service learned of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broadcast_txid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broadcast_at_ms: Option<u128>,
+    /// When a broadcast settlement is next checked. Kept in memory only: a start checks every
+    /// broadcast settlement at once.
+    #[serde(skip)]
+    pub check_at_ms: Option<u128>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -22,6 +32,9 @@ pub struct Batch {
 pub enum BatchStatus {
     Proving,
     Proven,
+    /// Proven, and its settlement broadcast as `broadcast_txid`, which has not yet been seen
+    /// to settle or fail.
+    Submitted,
     Settled,
     Failed,
     Interrupted,
@@ -44,6 +57,9 @@ impl Batch {
             spent_root_old: None,
             formed_at_ms: at_ms,
             proven_at_ms: None,
+            broadcast_txid: None,
+            broadcast_at_ms: None,
+            check_at_ms: None,
         }
     }
 

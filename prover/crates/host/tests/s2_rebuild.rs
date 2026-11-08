@@ -140,7 +140,18 @@ fn a_copy_without_a_txid_is_the_same_batch_and_the_named_txid_is_kept() {
         let acc = rebuild(&batches).expect("rebuild");
         assert_eq!(acc.spent_count, 2);
         assert_eq!(acc.txids.get(&key(2)).map(String::as_str), Some("0xbb"));
+        assert_eq!(acc.batches, chain);
     }
+}
+
+#[test]
+fn rebuild_keeps_each_transition_it_replayed_in_chain_order() {
+    let log = settled_log(&[vec![key(1), key(2)], vec![key(3)]]);
+    let acc = rebuild(&[log[1].clone(), log[0].clone()]).expect("rebuild");
+    assert_eq!(acc.batches, log);
+    let other = settled_log(&[vec![key(1), key(2), key(4)]]).remove(0);
+    assert!(acc.batches.iter().any(|b| b.same_transition(&log[0])));
+    assert!(!acc.batches.iter().any(|b| b.same_transition(&other)));
 }
 
 #[test]

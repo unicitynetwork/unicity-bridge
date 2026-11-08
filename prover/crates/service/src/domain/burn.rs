@@ -73,6 +73,10 @@ pub struct Return {
     pub seq: u64,
     pub burn: Burn,
     pub record: ReturnRecord,
+    /// The transaction the vault's log names for a release no second source has confirmed
+    /// yet, so a recheck asks about it without reading the log again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_in: Option<String>,
 }
 
 impl Return {
@@ -127,6 +131,7 @@ mod tests {
             seq: 1,
             burn,
             record,
+            released_in: None,
         }
     }
 

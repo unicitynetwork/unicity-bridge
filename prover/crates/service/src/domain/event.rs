@@ -25,6 +25,14 @@ pub enum Event {
         spent_root_old: String,
         at_ms: u128,
     },
+    /// The relayer broadcast the batch's settlement as `txid` but did not see it settle:
+    /// the service waits on that transaction, across a restart too, and never sends another
+    /// for the batch while it does.
+    BatchSubmitted {
+        id: String,
+        txid: String,
+        at_ms: u128,
+    },
     BatchSettled {
         id: String,
         txid: Option<String>,

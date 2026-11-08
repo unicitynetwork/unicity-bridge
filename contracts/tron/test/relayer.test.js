@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const hre = require("hardhat");
-const { hex32, normalizeEvent, groupBatches, releaseLogged } = require("../scripts/relayer-lib.js");
-const { lockRejections, confirmReleases } = require("../scripts/relayer.js");
+const { hex32, normalizeEvent, groupBatches, releaseLogged, commandDeadline, TIMEOUT_MARGIN_MS } = require("../scripts/relayer-lib.js");
+const { lockRejections, confirmReleases, settlementStates } = require("../scripts/relayer.js");
 
 const R = (n) => "0x" + n.toString(16).padStart(64, "0");
 
@@ -171,5 +171,47 @@ describe("S4 relayer — confirming a release on a second node", () => {
       "the transaction emitted no Released event for the nullifier from the vault",
     ]);
     expect(asked[0]).to.equal("11".repeat(32));
+  });
+});
+
+describe("S4 relayer — what became of a settlement transaction", () => {
+  it("reads a solidified transaction as final, one only the full node knows as pending, and one neither knows as unknown", async () => {
+    const solidified = {
+      ["11".repeat(32)]: { id: "11".repeat(32), receipt: { result: "SUCCESS" } },
+      ["22".repeat(32)]: { id: "22".repeat(32), receipt: { result: "REVERT" } },
+    };
+    const mempool = { ["33".repeat(32)]: { txID: "33".repeat(32) } };
+    const transactionInfo = async (id) => solidified[id] ?? {};
+    const transaction = async (id) => {
+      if (mempool[id]) return mempool[id];
+      throw new Error("Transaction not found");
+    };
+    const txids = ["0x" + "11".repeat(32), "22".repeat(32), "33".repeat(32), "44".repeat(32)];
+    expect(await settlementStates(transactionInfo, transaction, txids)).to.deep.equal({
+      settlements: [
+        { txid: txids[0], state: "confirmed", confirmations: 1 },
+        { txid: txids[1], state: "reverted", confirmations: 1 },
+        { txid: txids[2], state: "pending", confirmations: 0 },
+        { txid: txids[3], state: "unknown", confirmations: 0 },
+      ],
+    });
+    const unreachable = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+    let err;
+    try {
+      await settlementStates(async () => ({}), unreachable, ["55".repeat(32)]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).to.include("ECONNREFUSED");
+    expect(await settlementStates(unreachable, unreachable, [])).to.deep.equal({ settlements: [] });
+  });
+});
+
+describe("S4 relayer — the deadline both relayers report by", () => {
+  it("ends the margin before the service's command timeout, from the service's environment", () => {
+    expect(commandDeadline({}, 1_000)).to.equal(1_000 + 600_000 - TIMEOUT_MARGIN_MS);
+    expect(commandDeadline({ BRIDGE_RETURN_COMMAND_TIMEOUT_SECS: "120" }, 1_000)).to.equal(1_000 + 120_000 - TIMEOUT_MARGIN_MS);
   });
 });

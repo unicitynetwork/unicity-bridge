@@ -129,6 +129,7 @@ mod tests {
                 public_values,
                 created_at_ms,
             ),
+            released_in: None,
         }
     }
 

@@ -13,8 +13,18 @@ use super::{
 use crate::store::{BatchBundle, ErrorKind, ReturnFailure, ReturnRecord, ReturnStatus};
 
 /// How long a release the vault's log shows waits before a second source is asked again
-/// to confirm it.
+/// to confirm it, and a broadcast settlement nobody has seen settle before it is looked up
+/// again.
 pub const RELEASE_RECHECK_MS: u128 = 5 * 60_000;
+
+/// A release the vault's log shows that no second source has confirmed, due for a check:
+/// the return, its nullifier, and the transaction the log named for it, if any.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WaitingRelease {
+    pub id: String,
+    pub nullifier: String,
+    pub txid: Option<String>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +45,7 @@ pub struct Health {
     pub last_proof_ms: Option<u128>,
     pub average_proof_ms: Option<u128>,
     pub unconfirmed_releases: usize,
+    pub unconfirmed_settlements: usize,
 }
 
 impl Ledger {
@@ -50,6 +61,7 @@ impl Ledger {
                 spent_root_old,
                 at_ms,
             } => self.prove(&id, bundle, spent_root_old, at_ms),
+            Event::BatchSubmitted { id, txid, at_ms } => self.submit(&id, txid, at_ms),
             Event::BatchSettled { id, txid, at_ms } => self.settle(&id, txid, at_ms),
             Event::BatchFailed {
                 id,
@@ -98,8 +110,8 @@ impl Ledger {
     }
 
     /// Returns whose release the vault's log shows but no second source has confirmed,
-    /// due for another check at `now_ms`: `(id, nullifier)`.
-    pub fn releases_due(&self, now_ms: u128) -> Vec<(String, String)> {
+    /// due for another check at `now_ms`.
+    pub fn releases_due(&self, now_ms: u128) -> Vec<WaitingRelease> {
         let mut due: Vec<&Return> = self
             .returns
             .values()
@@ -107,8 +119,25 @@ impl Ledger {
             .collect();
         due.sort_by_key(|r| r.seq);
         due.into_iter()
-            .map(|r| (r.burn.id.clone(), r.record.nullifier.clone()))
+            .map(|r| WaitingRelease {
+                id: r.burn.id.clone(),
+                nullifier: r.record.nullifier.clone(),
+                txid: r.released_in.clone(),
+            })
             .collect()
+    }
+
+    /// Batches whose settlement was broadcast and has been seen neither to settle nor to
+    /// fail, due for a check at `now_ms`, oldest first.
+    pub fn settlements_due(&self, now_ms: u128) -> Vec<Batch> {
+        let mut due: Vec<&Batch> = self
+            .batches
+            .values()
+            .filter(|b| b.status == BatchStatus::Submitted)
+            .filter(|b| b.check_at_ms.map_or(true, |t| now_ms >= t))
+            .collect();
+        due.sort_by_key(|b| b.formed_at_ms);
+        due.into_iter().cloned().collect()
     }
 
     /// When the next unconfirmed release is due for a check.
@@ -118,6 +147,51 @@ impl Ledger {
             .filter(|r| r.awaits_confirmation())
             .map(|r| r.record.not_before_ms.unwrap_or(0))
             .min()
+    }
+
+    /// When the next broadcast settlement is due for a check.
+    pub fn next_settlement_check(&self) -> Option<u128> {
+        self.batches
+            .values()
+            .filter(|b| b.status == BatchStatus::Submitted)
+            .map(|b| b.check_at_ms.unwrap_or(0))
+            .min()
+    }
+
+    /// Whether the journal must keep `event`. A check that finds a release waiting on the
+    /// same transaction for the same reason changes nothing but when it is checked next,
+    /// which a start redoes at once; journaling it would add a line per check for as long as
+    /// the release waits.
+    pub fn journals(&self, event: &Event) -> bool {
+        let Event::ReturnExcluded {
+            id,
+            reason:
+                Exclusion::AlreadySettled {
+                    txid,
+                    unconfirmed: Some(why),
+                },
+            ..
+        } = event
+        else {
+            return true;
+        };
+        let Some(entry) = self.returns.get(id) else {
+            return true;
+        };
+        !(entry.awaits_confirmation()
+            && entry.released_in == *txid
+            && entry.record.message == waiting_message(txid.as_deref(), why))
+    }
+
+    /// Check a broadcast settlement again at `at_ms`. Kept in memory only.
+    pub fn reschedule_settlement(&mut self, batch_id: &str, at_ms: u128) {
+        if let Some(batch) = self
+            .batches
+            .get_mut(batch_id)
+            .filter(|b| b.status == BatchStatus::Submitted)
+        {
+            batch.check_at_ms = Some(at_ms);
+        }
     }
 
     pub fn burns(&self, ids: &[String]) -> Vec<&Burn> {
@@ -229,6 +303,11 @@ impl Ledger {
                 .values()
                 .filter(|r| r.awaits_confirmation())
                 .count(),
+            unconfirmed_settlements: self
+                .batches
+                .values()
+                .filter(|b| b.status == BatchStatus::Submitted)
+                .count(),
         }
     }
 
@@ -246,6 +325,7 @@ impl Ledger {
                 seq: self.accepted,
                 burn,
                 record,
+                released_in: None,
             },
         );
     }
@@ -256,6 +336,7 @@ impl Ledger {
             return;
         };
         if entry.awaits_confirmation() {
+            entry.released_in = None;
             let record = &mut entry.record;
             record.not_before_ms = None;
             record.failure = None;
@@ -316,6 +397,26 @@ impl Ledger {
         }
     }
 
+    fn submit(&mut self, id: &str, txid: String, at_ms: u128) {
+        let Some(batch) = self.batches.get_mut(id) else {
+            tracing::warn!(
+                batch_id = id,
+                "submitted event for an unknown batch ignored"
+            );
+            return;
+        };
+        batch.status = BatchStatus::Submitted;
+        batch.broadcast_txid = Some(txid.clone());
+        batch.broadcast_at_ms = Some(at_ms);
+        batch.check_at_ms = None;
+        let message = format!("Settlement {txid} broadcast; waiting to see it settle");
+        for entry in self.members_of(id) {
+            entry
+                .record
+                .transition_with(ReturnStatus::Proven, at_ms, &message);
+        }
+    }
+
     fn settle(&mut self, id: &str, txid: Option<String>, at_ms: u128) {
         let Some(batch) = self.batches.get_mut(id) else {
             tracing::warn!(batch_id = id, "settled event for an unknown batch ignored");
@@ -358,6 +459,9 @@ impl Ledger {
         batch.bundle = None;
         batch.spent_root_old = None;
         batch.proven_at_ms = None;
+        batch.broadcast_txid = None;
+        batch.broadcast_at_ms = None;
+        batch.check_at_ms = None;
         batch.status = BatchStatus::Proving;
         for entry in self.members_of(id) {
             entry.record.transition_with(
@@ -394,6 +498,13 @@ impl Ledger {
             tracing::warn!(id, "exclusion for an unknown return ignored");
             return;
         };
+        entry.released_in = match &reason {
+            Exclusion::AlreadySettled {
+                txid,
+                unconfirmed: Some(_),
+            } => txid.clone(),
+            _ => None,
+        };
         let record = &mut entry.record;
         match reason {
             Exclusion::AlreadySettled {
@@ -413,14 +524,7 @@ impl Ledger {
                 txid,
                 unconfirmed: Some(why),
             } => {
-                let released = match &txid {
-                    Some(txid) => format!("released in {txid}"),
-                    None => "released".to_string(),
-                };
-                let message = format!(
-                    "The vault log shows this return {released}; it settles once a second \
-                     source confirms that ({why})"
-                );
+                let message = waiting_message(txid.as_deref(), &why);
                 record.not_before_ms = Some(at_ms + RELEASE_RECHECK_MS);
                 // A check that finds the same as the last adds nothing to the audit trail,
                 // which would otherwise grow by one entry per check for as long as it waits.
@@ -456,6 +560,17 @@ impl Ledger {
             .values_mut()
             .filter(move |r| ids.contains(&r.burn.id) && r.in_batch(&batch_id))
     }
+}
+
+fn waiting_message(txid: Option<&str>, why: &str) -> String {
+    let released = match txid {
+        Some(txid) => format!("released in {txid}"),
+        None => "released".to_string(),
+    };
+    format!(
+        "The vault log shows this return {released}; it settles once a second source \
+         confirms that ({why})"
+    )
 }
 
 fn requeue_after_stop(record: &mut ReturnRecord, at_ms: u128) {
@@ -1044,10 +1159,32 @@ mod tests {
         assert!(ledger.releases_due(400 + RELEASE_RECHECK_MS - 1).is_empty());
         assert_eq!(
             ledger.releases_due(400 + RELEASE_RECHECK_MS),
-            vec![("a".to_string(), record.nullifier.clone())]
+            vec![WaitingRelease {
+                id: "a".to_string(),
+                nullifier: record.nullifier.clone(),
+                txid: Some("0xfeed".to_string()),
+            }]
         );
 
         let trail = record.events.len();
+        let same = Event::ReturnExcluded {
+            id: "a".to_string(),
+            reason: Exclusion::AlreadySettled {
+                txid: Some("0xfeed".to_string()),
+                unconfirmed: Some("no such transaction".to_string()),
+            },
+            at_ms: 450,
+        };
+        assert!(!ledger.journals(&same));
+        let moved = Event::ReturnExcluded {
+            id: "a".to_string(),
+            reason: Exclusion::AlreadySettled {
+                txid: Some("0xbeef".to_string()),
+                unconfirmed: Some("no such transaction".to_string()),
+            },
+            at_ms: 450,
+        };
+        assert!(ledger.journals(&moved));
         released(&mut ledger, "a", "0xfeed", Some("no such transaction"), 450);
         let again = ledger.record("a").unwrap();
         assert_eq!(again.events.len(), trail);
@@ -1069,6 +1206,108 @@ mod tests {
         assert_eq!(record.settle_txid.as_deref(), Some("0xfeed"));
         assert_eq!(ledger.next_release_check(), None);
         assert_eq!(ledger.health().unconfirmed_releases, 0);
+        assert_eq!(ledger.get("a").unwrap().released_in, None);
+    }
+
+    fn submitted(ledger: &mut Ledger, batch_id: &str, txid: &str, at_ms: u128) {
+        ledger.apply(
+            Event::BatchSubmitted {
+                id: batch_id.to_string(),
+                txid: txid.to_string(),
+                at_ms,
+            },
+            &retry(),
+        );
+    }
+
+    #[test]
+    fn a_broadcast_settlement_holds_its_members_unfinished_and_uncharged_until_it_is_decided() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100)]);
+        let batch_id = formed(&mut ledger, &["a"], 300);
+        proven(&mut ledger, &batch_id, &[[0xA; 32]], 400);
+        submitted(&mut ledger, &batch_id, "0xfeed", 500);
+
+        let batch = ledger.batch(&batch_id).unwrap();
+        assert_eq!(batch.status, BatchStatus::Submitted);
+        assert_eq!(batch.broadcast_txid.as_deref(), Some("0xfeed"));
+        assert_eq!(batch.broadcast_at_ms, Some(500));
+        assert!(!batch.is_unsettled_proof());
+        assert!(ledger.unsettled_proofs().is_empty());
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Proven);
+        assert_eq!(record.attempts, 0);
+        assert_eq!(record.settle_txid, None);
+        assert!(record.message.contains("0xfeed"), "{}", record.message);
+        assert!(ledger.pending().is_empty());
+        assert_eq!(ledger.health().unconfirmed_settlements, 1);
+        assert_eq!(ledger.health().unconfirmed_releases, 0);
+        assert!(ledger.releases_due(u128::MAX).is_empty());
+
+        assert_eq!(ledger.settlements_due(500).len(), 1);
+        assert_eq!(ledger.next_settlement_check(), Some(0));
+        assert_eq!(ledger.next_release_check(), None);
+        ledger.reschedule_settlement(&batch_id, 900);
+        assert!(ledger.settlements_due(899).is_empty());
+        assert_eq!(ledger.settlements_due(900)[0].id, batch_id);
+        assert_eq!(ledger.next_settlement_check(), Some(900));
+
+        let line = serde_json::to_string(&Event::Snapshot(Box::new(ledger.clone()))).unwrap();
+        let Event::Snapshot(reloaded) = serde_json::from_str(&line).unwrap() else {
+            panic!("not a snapshot");
+        };
+        assert_eq!(reloaded.batch(&batch_id).unwrap().check_at_ms, None);
+        assert_eq!(reloaded.settlements_due(0).len(), 1);
+
+        ledger.apply(
+            Event::BatchSettled {
+                id: batch_id.clone(),
+                txid: Some("0xfeed".to_string()),
+                at_ms: 600,
+            },
+            &retry(),
+        );
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Settled);
+        assert_eq!(record.settle_txid.as_deref(), Some("0xfeed"));
+        assert_eq!(ledger.health().unconfirmed_settlements, 0);
+        assert_eq!(ledger.next_settlement_check(), None);
+    }
+
+    #[test]
+    fn a_broadcast_settlement_that_fails_charges_its_members_and_a_rebase_forgets_it() {
+        let mut ledger = ledger_with(vec![accepted("a", 0xA, 1, 100), accepted("b", 0xB, 2, 100)]);
+        let failing = formed(&mut ledger, &["a"], 300);
+        proven(&mut ledger, &failing, &[[0xA; 32]], 400);
+        submitted(&mut ledger, &failing, "0xlost", 500);
+        ledger.apply(
+            Event::BatchFailed {
+                id: failing.clone(),
+                kind: ErrorKind::SubmissionFailed,
+                message: "settlement 0xlost reverted".to_string(),
+                at_ms: 600,
+            },
+            &retry(),
+        );
+        let record = ledger.record("a").unwrap();
+        assert_eq!(record.status, ReturnStatus::Failed);
+        assert_eq!(record.attempts, 1);
+        assert_eq!(ledger.health().unconfirmed_settlements, 0);
+
+        let rebased = formed(&mut ledger, &["b"], 700);
+        proven(&mut ledger, &rebased, &[[0xB; 32]], 800);
+        submitted(&mut ledger, &rebased, "0xstale", 900);
+        ledger.apply(
+            Event::BatchRebased {
+                id: rebased.clone(),
+                at_ms: 1_000,
+            },
+            &retry(),
+        );
+        let batch = ledger.batch(&rebased).unwrap();
+        assert_eq!(batch.status, BatchStatus::Proving);
+        assert_eq!(batch.broadcast_txid, None);
+        assert_eq!(ledger.record("b").unwrap().status, ReturnStatus::Proving);
+        assert_eq!(ledger.record("b").unwrap().attempts, 0);
     }
 
     #[test]
@@ -1296,6 +1535,7 @@ mod tests {
                 last_proof_ms: Some(5_000),
                 average_proof_ms: Some(4_000),
                 unconfirmed_releases: 0,
+                unconfirmed_settlements: 0,
             }
         );
     }
