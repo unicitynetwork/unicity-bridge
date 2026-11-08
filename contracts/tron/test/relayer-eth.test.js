@@ -205,6 +205,18 @@ describe("relayer-eth against the vault", () => {
     expect(Date.now() - started).to.be.below(2000);
   });
 
+  it("waits between sends no longer than its deadline allows", async () => {
+    const { recipient, vault } = await deployBridge(false);
+    const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "y"), "y");
+    const sender = sending(async () => {
+      throw timeout();
+    });
+    const started = Date.now();
+    const result = await settle(relayer(vault), bundle, 1, { sender, retry: { retries: 3, delayMs: 5_000 }, until: Date.now() + 300, pollMs: 20 });
+    expect(result.confirmed).to.equal(false);
+    expect(Date.now() - started).to.be.below(2000);
+  });
+
   it("fails a settlement the node refuses outright", async () => {
     const { recipient, vault } = await deployBridge(false);
     const bundle = await craftBundle(vault, recipient, await lockOnce(vault, "t"), "t");

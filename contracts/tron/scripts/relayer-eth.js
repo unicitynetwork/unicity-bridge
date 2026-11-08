@@ -202,7 +202,7 @@ async function broadcast(sender, signed, retry = RPC_RETRY, until = Infinity) {
         return false;
       }
       console.error(`relayer-eth: sending the settlement failed (${e.shortMessage || e.message}); sending it again, ${attempt + 1} of ${retry.retries}`);
-      await new Promise((r) => setTimeout(r, retry.delayMs * 2 ** attempt));
+      await new Promise((r) => setTimeout(r, Math.max(Math.min(retry.delayMs * 2 ** attempt, until - Date.now()), 0)));
     }
   }
 }
