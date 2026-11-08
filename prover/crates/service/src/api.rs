@@ -48,6 +48,8 @@ pub struct HealthResponse {
     pub average_proof_ms: Option<u128>,
     /// Returns the vault's log shows released that no second source has confirmed yet.
     pub unconfirmed_releases: usize,
+    /// Batches whose settlement was broadcast and has been seen neither to settle nor to fail.
+    pub unconfirmed_settlements: usize,
     pub max_batch_size: usize,
     pub idle_wait_ms: u128,
     pub prove_mode: String,
@@ -66,6 +68,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         last_proof_ms: health.last_proof_ms,
         average_proof_ms: health.average_proof_ms,
         unconfirmed_releases: health.unconfirmed_releases,
+        unconfirmed_settlements: health.unconfirmed_settlements,
         max_batch_size: state.config.max_batch_size,
         idle_wait_ms: state.config.idle_wait.as_millis(),
         prove_mode: format!("{:?}", state.config.prove_mode),

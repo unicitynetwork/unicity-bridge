@@ -295,6 +295,16 @@ impl ReturnStore {
         stopped
     }
 
+    /// Check the batch's broadcast settlement again at `at_ms`. Kept in memory only: a start
+    /// checks every broadcast settlement at once.
+    pub fn reschedule_settlement(&self, batch_id: &str, at_ms: u128) {
+        self.inner
+            .lock()
+            .expect("store poisoned")
+            .ledger
+            .reschedule_settlement(batch_id, at_ms);
+    }
+
     pub fn read<T>(&self, f: impl FnOnce(&Ledger) -> T) -> T {
         f(&self.inner.lock().expect("store poisoned").ledger)
     }
@@ -325,9 +335,11 @@ impl ReturnStore {
 
 impl Inner {
     fn commit(&mut self, event: Event) {
-        if let Err(e) = self.journal.append(&event) {
-            tracing::error!(error = %e, "journal append failed; the state directory is unusable");
-            std::process::exit(70);
+        if self.ledger.journals(&event) {
+            if let Err(e) = self.journal.append(&event) {
+                tracing::error!(error = %e, "journal append failed; the state directory is unusable");
+                std::process::exit(70);
+            }
         }
         self.ledger.apply(event, &self.retry);
     }

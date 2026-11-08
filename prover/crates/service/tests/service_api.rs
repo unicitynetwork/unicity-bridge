@@ -268,7 +268,9 @@ async fn a_draining_service_says_so_on_health_and_keeps_accepting_burns() {
         submits: false,
     });
     assert_eq!(get_json(&app, "/health").await["draining"], false);
-    assert_eq!(get_json(&app, "/health").await["unconfirmedReleases"], 0);
+    let health = get_json(&app, "/health").await;
+    assert_eq!(health["unconfirmedReleases"], 0);
+    assert_eq!(health["unconfirmedSettlements"], 0);
     drain.start();
     assert_eq!(get_json(&app, "/health").await["draining"], true);
     let accepted = post_return(&app, member(11, 0x61)).await;

@@ -71,6 +71,8 @@ export interface ReturnServiceHealth {
   readonly draining?: boolean;
   /** Returns the vault's log shows released that no second source has confirmed yet. */
   readonly unconfirmedReleases?: number;
+  /** Batches whose settlement was broadcast and has been seen neither to settle nor to fail. */
+  readonly unconfirmedSettlements?: number;
   readonly maxBatchSize: number;
   readonly idleWaitMs: number;
   /** `PrecheckOnly` | `Sp1Groth16`. */

@@ -12,6 +12,21 @@
 
 "use strict";
 
+/// The status `settle --stdin` exits with when it broadcast the settlement but did not see
+/// it settle (EX_TEMPFAIL): stdout still carries the txid, and the service waits on that
+/// transaction instead of failing the batch.
+const UNCONFIRMED_EXIT = 75;
+/// The service kills a command BRIDGE_RETURN_COMMAND_TIMEOUT_SECS (600 unless set) after
+/// starting it, a value the relayer inherits from the service's environment. A relayer's
+/// reads end this long before that, so what it has to report still reaches the service.
+const TIMEOUT_MARGIN_MS = 30_000;
+const STARTED_MS = Date.now();
+
+/// When a relayer started at `startedMs` must have reported, in ms since the epoch.
+function commandDeadline(env = process.env, startedMs = STARTED_MS) {
+  return startedMs + Number(env.BRIDGE_RETURN_COMMAND_TIMEOUT_SECS || 600) * 1000 - TIMEOUT_MARGIN_MS;
+}
+
 /// Normalize anything (hex with/without 0x, decimal string, number, bigint) to a
 /// 0x-prefixed 32-byte hex string.
 function hex32(x) {
@@ -127,4 +142,14 @@ function exitWith(text, status) {
   process.stdout.write(text, () => process.exit(status));
 }
 
-module.exports = { hex32, normalizeEvent, groupBatches, releaseLogged, beforeDeadline, exitWith };
+module.exports = {
+  hex32,
+  normalizeEvent,
+  groupBatches,
+  releaseLogged,
+  beforeDeadline,
+  exitWith,
+  commandDeadline,
+  UNCONFIRMED_EXIT,
+  TIMEOUT_MARGIN_MS,
+};

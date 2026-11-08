@@ -19,7 +19,9 @@
 //!
 //! A second command, `BRIDGE_RETURN_CONFIRM_CMD`, confirms releases the service holds no
 //! receipt for against a source other than the one the log came from (see
-//! [`ChainEvents::confirm_releases`]).
+//! [`ChainEvents::confirm_releases`]). A third, `BRIDGE_RETURN_RECEIPT_CMD`, reads a
+//! settlement transaction the relayer broadcast without seeing it settle (see
+//! [`ChainEvents::settlement`]).
 
 use bridge_return_host::s2::{
     parse_settled_log, rebuild_verified, RebuiltAccumulator, SettledBatch, SettledLog,
@@ -34,7 +36,37 @@ use crate::submitter::run_with_stdin;
 pub struct ChainEvents {
     backend: Backend,
     confirm: Option<String>,
+    receipt: Option<String>,
     timeout: Duration,
+}
+
+/// What the receipt command read of a settlement transaction, through the RPC the log comes
+/// from.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct Settlement {
+    pub txid: String,
+    pub state: SettlementState,
+    /// How deep the transaction is mined; 0 when it is not.
+    #[serde(default)]
+    pub confirmations: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettlementState {
+    /// Mined, succeeded, and as deep as the settlement confirmations ask.
+    Confirmed,
+    /// Known to the node but not mined yet, or mined but not yet that deep.
+    Pending,
+    /// Mined and failed, as deep as the settlement confirmations ask.
+    Reverted,
+    /// Neither mined nor known to the node.
+    Unknown,
+}
+
+#[derive(Deserialize)]
+struct Settlements {
+    settlements: Vec<Settlement>,
 }
 
 /// A release the vault's log shows: a spent nullifier and the transaction it names.
@@ -99,8 +131,8 @@ enum Backend {
 }
 
 impl ChainEvents {
-    /// Build from `BRIDGE_RETURN_EVENTS_CMD` (a shell command; empty/unset = `none`) and
-    /// `BRIDGE_RETURN_CONFIRM_CMD`.
+    /// Build from `BRIDGE_RETURN_EVENTS_CMD` (a shell command; empty/unset = `none`),
+    /// `BRIDGE_RETURN_CONFIRM_CMD` and `BRIDGE_RETURN_RECEIPT_CMD`.
     pub fn from_env() -> Self {
         let command = |key: &str| std::env::var(key).ok().filter(|cmd| !cmd.trim().is_empty());
         let backend = match command("BRIDGE_RETURN_EVENTS_CMD") {
@@ -110,6 +142,7 @@ impl ChainEvents {
         Self {
             backend,
             confirm: command("BRIDGE_RETURN_CONFIRM_CMD"),
+            receipt: command("BRIDGE_RETURN_RECEIPT_CMD"),
             timeout: Duration::from_secs(600),
         }
     }
@@ -118,6 +151,7 @@ impl ChainEvents {
         Self {
             backend: Backend::None,
             confirm: None,
+            receipt: None,
             timeout: Duration::from_secs(600),
         }
     }
@@ -148,6 +182,92 @@ impl ChainEvents {
         }
     }
 
+    /// How a settlement broadcast without a receipt is looked up, for startup logs.
+    pub fn receipt_label(&self) -> &'static str {
+        match self.receipt {
+            None => {
+                "none (a settlement broadcast without a receipt settles only from the vault log, \
+                 and one that never lands is never failed)"
+            }
+            Some(_) => "command",
+        }
+    }
+
+    /// Whether a second source is configured to confirm releases through.
+    pub fn confirms(&self) -> bool {
+        self.confirm.is_some()
+    }
+
+    /// Run the confirmation and receipt commands, where configured, on nothing to check: a
+    /// command that cannot run (a missing or repeated RPC URL, a script that does not start)
+    /// fails here, at startup, instead of on every release it is asked about.
+    pub async fn check_commands(&self) -> Result<(), String> {
+        if let Some(cmd) = &self.confirm {
+            let output = self
+                .run_json(cmd, serde_json::json!({ "releases": [] }))
+                .await
+                .map_err(|e| format!("BRIDGE_RETURN_CONFIRM_CMD cannot run: {e}"))?;
+            serde_json::from_str::<Confirmations>(output.trim()).map_err(|e| {
+                format!(
+                    "BRIDGE_RETURN_CONFIRM_CMD answered no releases with something else ({e}): {}",
+                    snippet(output.trim())
+                )
+            })?;
+        }
+        if let Some(cmd) = &self.receipt {
+            let output = self
+                .run_json(cmd, serde_json::json!({ "txids": [] }))
+                .await
+                .map_err(|e| format!("BRIDGE_RETURN_RECEIPT_CMD cannot run: {e}"))?;
+            serde_json::from_str::<Settlements>(output.trim()).map_err(|e| {
+                format!("BRIDGE_RETURN_RECEIPT_CMD answered no transactions with something else ({e}): {}", snippet(output.trim()))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Read the settlement transaction `txid` through the RPC the log comes from:
+    /// `{"txids": [txid]}` on stdin, `{"settlements": [{txid, state, confirmations}]}` on
+    /// stdout.
+    pub async fn settlement(&self, txid: &str) -> Result<Settlement, ChainSyncError> {
+        let Some(cmd) = &self.receipt else {
+            return Err(ChainSyncError::NoReceiptSource);
+        };
+        let stdout = self
+            .run_json(cmd, serde_json::json!({ "txids": [txid] }))
+            .await?;
+        let answer: Settlements = serde_json::from_str(stdout.trim()).map_err(|e| {
+            ChainSyncError::Decode(format!(
+                "receipt command stdout is not the expected JSON ({e}); got: {}",
+                snippet(stdout.trim()),
+            ))
+        })?;
+        answer
+            .settlements
+            .into_iter()
+            .find(|s| s.txid.eq_ignore_ascii_case(txid))
+            .ok_or_else(|| {
+                ChainSyncError::Decode(format!("receipt command said nothing about {txid}"))
+            })
+    }
+
+    async fn run_json(
+        &self,
+        cmd: &str,
+        input: serde_json::Value,
+    ) -> Result<String, ChainSyncError> {
+        let output = run_with_stdin(cmd, input.to_string().as_bytes(), self.timeout)
+            .await
+            .map_err(ChainSyncError::Spawn)?;
+        if !output.status.success() {
+            return Err(ChainSyncError::CommandFailed {
+                status: output.status.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     /// Ask the confirmation command, which reads a source other than the events
     /// command's, whether each release happened: `{"releases": [{nullifier, txid}]}` on
     /// stdin, `{"confirmed": [{nullifier, txid}], "unconfirmed": [{nullifier, txid,
@@ -159,17 +279,9 @@ impl ChainEvents {
         let Some(cmd) = &self.confirm else {
             return Err(ChainSyncError::NoConfirmationSource);
         };
-        let payload = serde_json::json!({ "releases": releases }).to_string();
-        let output = run_with_stdin(cmd, payload.as_bytes(), self.timeout)
-            .await
-            .map_err(ChainSyncError::Spawn)?;
-        if !output.status.success() {
-            return Err(ChainSyncError::CommandFailed {
-                status: output.status.to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = self
+            .run_json(cmd, serde_json::json!({ "releases": releases }))
+            .await?;
         serde_json::from_str(stdout.trim()).map_err(|e| {
             ChainSyncError::Decode(format!(
                 "confirm command stdout is not the expected JSON ({e}); got: {}",
@@ -266,6 +378,8 @@ pub enum ChainSyncError {
     Rebuild(String),
     #[error("no confirmation source is configured (BRIDGE_RETURN_CONFIRM_CMD)")]
     NoConfirmationSource,
+    #[error("no receipt command is configured (BRIDGE_RETURN_RECEIPT_CMD)")]
+    NoReceiptSource,
 }
 
 impl ChainSyncError {
@@ -285,8 +399,69 @@ mod tests {
         ChainEvents {
             backend: Backend::Command(cmd.to_string()),
             confirm: None,
+            receipt: None,
             timeout: Duration::from_secs(5),
         }
+    }
+
+    fn reading(cmd: &str) -> ChainEvents {
+        ChainEvents {
+            receipt: Some(cmd.to_string()),
+            ..ChainEvents::none().with_timeout(Duration::from_secs(5))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_settlement_is_read_as_the_receipt_command_reports_it() {
+        let settlement = reading(
+            r#"grep -qF '{"txids":["0xaa"]}' && echo '{"settlements":[{"txid":"0xbb","state":"confirmed","confirmations":12},{"txid":"0xAA","state":"pending","confirmations":3}]}'"#,
+        )
+        .settlement("0xaa")
+        .await
+        .unwrap();
+        assert_eq!(settlement.state, SettlementState::Pending);
+        assert_eq!(settlement.confirmations, 3);
+
+        let err = reading(r#"cat >/dev/null; echo '{"settlements":[]}'"#)
+            .settlement("0xaa")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChainSyncError::Decode(_)), "{err}");
+        let err = reading("cat >/dev/null; echo 'rate limited' >&2; exit 1")
+            .settlement("0xaa")
+            .await
+            .unwrap_err();
+        assert!(err.is_unavailable(), "{err}");
+        let err = ChainEvents::none().settlement("0xaa").await.unwrap_err();
+        assert!(matches!(err, ChainSyncError::NoReceiptSource), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_or_receipt_command_that_cannot_run_is_found_at_startup() {
+        assert_eq!(ChainEvents::none().check_commands().await, Ok(()));
+        let working = ChainEvents {
+            confirm: Some(
+                r#"grep -qF '{"releases":[]}' && echo '{"confirmed":[],"unconfirmed":[]}'"#
+                    .to_string(),
+            ),
+            receipt: Some(r#"grep -qF '{"txids":[]}' && echo '{"settlements":[]}'"#.to_string()),
+            ..ChainEvents::none().with_timeout(Duration::from_secs(5))
+        };
+        assert_eq!(working.check_commands().await, Ok(()));
+
+        let err = confirming(
+            "cat >/dev/null; echo 'ETH_CONFIRM_RPC_URL not set: no second RPC' >&2; exit 1",
+        )
+        .check_commands()
+        .await
+        .unwrap_err();
+        assert!(err.contains("BRIDGE_RETURN_CONFIRM_CMD"), "{err}");
+        assert!(err.contains("ETH_CONFIRM_RPC_URL not set"), "{err}");
+        let err = reading("cat >/dev/null; echo usage")
+            .check_commands()
+            .await
+            .unwrap_err();
+        assert!(err.contains("BRIDGE_RETURN_RECEIPT_CMD"), "{err}");
     }
 
     fn confirming(cmd: &str) -> ChainEvents {

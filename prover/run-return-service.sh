@@ -19,6 +19,9 @@ export BRIDGE_RETURN_SIMULATE_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $
 # A release the service holds no receipt for settles a return only once this confirms it
 # through ETH_CONFIRM_RPC_URL / TRON_CONFIRM_RPC_URL (in .env), a second RPC.
 export BRIDGE_RETURN_CONFIRM_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER confirm --stdin"
+# A settlement the relayer broadcast without seeing it settle is looked up through this, and
+# the batch fails only once its transaction is known not to land.
+export BRIDGE_RETURN_RECEIPT_CMD="PATH=\"$HOME/relayer-node/bin:\$PATH\" node $ROOT/contracts/tron/scripts/$RELAYER receipt --stdin"
 export BRIDGE_RETURN_STATE_DIR="$ROOT/prover/target/bridge-return-service/state"
 export BRIDGE_RETURN_IDLE_WAIT_SECS=0
 export BRIDGE_RETURN_MAX_BATCH_SIZE=8

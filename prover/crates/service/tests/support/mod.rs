@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -23,7 +23,7 @@ use bridge_return_service::{
     },
     ports::{ChainLog, ProofBackend, Settler},
     prover::{ProofBundle, ProverError},
-    sequencer::{ChainSyncError, Confirmations, Release, Unconfirmed},
+    sequencer::{ChainSyncError, Confirmations, Release, Settlement, SettlementState, Unconfirmed},
     store::{BatchBundle, ReturnRecord},
     submitter::{SimulateError, SubmitOutcome},
 };
@@ -113,9 +113,15 @@ impl ProofBackend for ScriptedProver {
 
 type Outcome = Box<dyn FnOnce(&BatchBundle) -> SubmitOutcome + Send>;
 
+enum Step {
+    Outcome(Outcome),
+    /// Prints the txid, as the relayers do once they have signed, and never ends.
+    SignAndHang(String),
+}
+
 #[derive(Clone)]
 pub struct ScriptedSettler {
-    outcomes: Arc<Mutex<VecDeque<Outcome>>>,
+    outcomes: Arc<Mutex<VecDeque<Step>>>,
     fallback: SubmitOutcome,
     rejected: Arc<Mutex<Vec<Rejected>>>,
     submitted: Arc<Mutex<Vec<BatchBundle>>>,
@@ -149,7 +155,20 @@ impl ScriptedSettler {
         self,
         outcome: impl FnOnce(&BatchBundle) -> SubmitOutcome + Send + 'static,
     ) -> Self {
-        self.outcomes.lock().unwrap().push_back(Box::new(outcome));
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push_back(Step::Outcome(Box::new(outcome)));
+        self
+    }
+
+    /// The next submission signs `txid` and then never returns, as a relayer still waiting
+    /// on its receipt does when the service stops.
+    pub fn then_sign_and_hang(self, txid: &str) -> Self {
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push_back(Step::SignAndHang(txid.to_string()));
         self
     }
 
@@ -171,13 +190,25 @@ impl ScriptedSettler {
 }
 
 impl Settler for ScriptedSettler {
-    async fn submit(&self, bundle: &BatchBundle) -> SubmitOutcome {
+    async fn submit(
+        &self,
+        bundle: &BatchBundle,
+        signed: &(dyn Fn(&str) + Send + Sync),
+    ) -> SubmitOutcome {
         self.submitted.lock().unwrap().push(bundle.clone());
         let next = self.outcomes.lock().unwrap().pop_front();
-        match next {
-            Some(outcome) => outcome(bundle),
+        let outcome = match next {
+            Some(Step::Outcome(outcome)) => outcome(bundle),
+            Some(Step::SignAndHang(txid)) => {
+                signed(&txid);
+                return std::future::pending().await;
+            }
             None => self.fallback.clone(),
+        };
+        if let SubmitOutcome::Submitted { txid } | SubmitOutcome::Unconfirmed { txid } = &outcome {
+            signed(txid);
         }
+        outcome
     }
 
     async fn simulate(&self, _leaves: &[LeafToSettle]) -> Result<Vec<Rejected>, SimulateError> {
@@ -197,14 +228,50 @@ pub enum SecondSource {
     Down,
 }
 
-#[derive(Clone, Default)]
+/// How the receipt command answers for a settlement transaction.
+#[derive(Clone, Debug, Default)]
+pub enum Receipts {
+    /// A transaction the fake vault's log names is confirmed; any other is as scripted with
+    /// [`FakeChainLog::transaction`], or unknown.
+    #[default]
+    Read,
+    /// Every read fails, as an RPC that rate-limits does.
+    Down,
+    /// No receipt command is configured.
+    Absent,
+}
+
+#[derive(Clone)]
 pub struct FakeChainLog {
     log: Arc<Mutex<SettledLog>>,
     answers: Arc<Mutex<VecDeque<bool>>>,
     calls: Arc<AtomicUsize>,
     second: Arc<Mutex<SecondSource>>,
+    confirms: Arc<Mutex<bool>>,
     asked: Arc<Mutex<Vec<Release>>>,
     delay: Arc<Mutex<Duration>>,
+    receipts: Arc<Mutex<Receipts>>,
+    transactions: Arc<Mutex<HashMap<String, SettlementState>>>,
+    looked_up: Arc<Mutex<Vec<String>>>,
+    unreadable: Arc<Mutex<bool>>,
+}
+
+impl Default for FakeChainLog {
+    fn default() -> Self {
+        Self {
+            log: Arc::default(),
+            answers: Arc::default(),
+            calls: Arc::default(),
+            second: Arc::default(),
+            confirms: Arc::new(Mutex::new(true)),
+            asked: Arc::default(),
+            delay: Arc::default(),
+            receipts: Arc::default(),
+            transactions: Arc::default(),
+            looked_up: Arc::default(),
+            unreadable: Arc::default(),
+        }
+    }
 }
 
 pub fn hex(bytes: &[u8; 32]) -> String {
@@ -218,18 +285,51 @@ impl FakeChainLog {
 
     /// Settle `nullifiers` in a transaction of their own, and name it.
     pub fn settle_externally(&self, nullifiers: &[[u8; 32]]) -> String {
+        let txid = format!("0x{:064x}", self.log.lock().unwrap().batches.len() + 0xe1);
+        self.settle_as(nullifiers, &txid);
+        txid
+    }
+
+    /// Settle `nullifiers` in the transaction `txid`.
+    pub fn settle_as(&self, nullifiers: &[[u8; 32]], txid: &str) {
         let mut log = self.log.lock().unwrap();
         let acc = s2::rebuild(&log.batches).unwrap();
         let next = s2::next_batch(&acc, nullifiers).unwrap();
-        let txid = format!("0x{:064x}", log.batches.len() + 0xe1);
+        let txid = txid.to_string();
         log.batches.push(SettledBatch {
             nullifiers: nullifiers.to_vec(),
             spent_root_old: next.spent_root_old,
             spent_root_new: next.spent_root_new,
-            txid: Some(txid.clone()),
+            txid: Some(txid),
         });
         log.on_chain_spent_root = Some(next.spent_root_new);
-        txid
+    }
+
+    /// What the receipt command reads of `txid` while the log does not name it.
+    pub fn transaction(&self, txid: &str, state: SettlementState) {
+        self.transactions
+            .lock()
+            .unwrap()
+            .insert(txid.to_string(), state);
+    }
+
+    pub fn receipts(&self, receipts: Receipts) {
+        *self.receipts.lock().unwrap() = receipts;
+    }
+
+    /// Every settlement transaction the receipt command was asked about.
+    pub fn looked_up(&self) -> Vec<String> {
+        self.looked_up.lock().unwrap().clone()
+    }
+
+    /// Every read of the log fails until this is called with `false`.
+    pub fn unreadable(&self, unreadable: bool) {
+        *self.unreadable.lock().unwrap() = unreadable;
+    }
+
+    /// No confirmation command is configured.
+    pub fn no_second_source(&self) {
+        *self.confirms.lock().unwrap() = false;
     }
 
     /// The vault as a log that never showed a settlement.
@@ -285,7 +385,9 @@ impl ChainLog for FakeChainLog {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        if self.answers.lock().unwrap().pop_front() == Some(false) {
+        if self.answers.lock().unwrap().pop_front() == Some(false)
+            || *self.unreadable.lock().unwrap()
+        {
             return Err(ChainSyncError::CommandFailed {
                 status: "exit status: 1".to_string(),
                 stderr: "request timeout (code=TIMEOUT, version=6.16.0)".to_string(),
@@ -301,6 +403,9 @@ impl ChainLog for FakeChainLog {
         releases: &[Release],
     ) -> Result<Confirmations, ChainSyncError> {
         self.asked.lock().unwrap().extend(releases.iter().cloned());
+        if !*self.confirms.lock().unwrap() {
+            return Err(ChainSyncError::NoConfirmationSource);
+        }
         let second = self.second.lock().unwrap().clone();
         match second {
             SecondSource::Down => Err(ChainSyncError::CommandFailed {
@@ -332,5 +437,51 @@ impl ChainLog for FakeChainLog {
                 })
             }
         }
+    }
+
+    fn confirms(&self) -> bool {
+        *self.confirms.lock().unwrap()
+    }
+
+    async fn settlement(&self, txid: &str) -> Result<Settlement, ChainSyncError> {
+        self.looked_up.lock().unwrap().push(txid.to_string());
+        let receipts = self.receipts.lock().unwrap().clone();
+        match receipts {
+            Receipts::Absent => return Err(ChainSyncError::NoReceiptSource),
+            Receipts::Down => {
+                return Err(ChainSyncError::CommandFailed {
+                    status: "exit status: 1".to_string(),
+                    stderr: "Too Many Requests (code=UNKNOWN_ERROR, version=6.16.0)".to_string(),
+                })
+            }
+            Receipts::Read => {}
+        }
+        let logged = self
+            .log
+            .lock()
+            .unwrap()
+            .batches
+            .iter()
+            .any(|b| b.txid.as_deref() == Some(txid));
+        let state = if logged {
+            SettlementState::Confirmed
+        } else {
+            self.transactions
+                .lock()
+                .unwrap()
+                .get(txid)
+                .copied()
+                .unwrap_or(SettlementState::Unknown)
+        };
+        let confirmations = match state {
+            SettlementState::Confirmed | SettlementState::Reverted => 12,
+            SettlementState::Pending => 3,
+            SettlementState::Unknown => 0,
+        };
+        Ok(Settlement {
+            txid: txid.to_string(),
+            state,
+            confirmations,
+        })
     }
 }

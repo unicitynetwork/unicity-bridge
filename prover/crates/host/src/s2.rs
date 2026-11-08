@@ -117,6 +117,9 @@ pub struct RebuiltAccumulator {
     pub spent_count: usize,
     /// The transaction that spent each nullifier, for those whose batch a source named one for.
     pub txids: HashMap<[u8; 32], String>,
+    /// The transitions replayed, in chain order, one per distinct batch, each with the
+    /// first txid any copy of it names.
+    pub batches: Vec<SettledBatch>,
 }
 
 /// Replay `batches` into the accumulator by following the root links from the
@@ -132,6 +135,7 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
     let mut root = EMPTY_TREE_ROOT;
     let mut spent_count = 0usize;
     let mut txids = HashMap::new();
+    let mut replayed = Vec::new();
     let mut used = vec![false; batches.len()];
 
     while let Some(i) = next_link(batches, &used, &root)? {
@@ -165,6 +169,10 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
                 txids.insert(*nullifier, txid.clone());
             }
         }
+        replayed.push(SettledBatch {
+            txid: txid.cloned(),
+            ..batch.clone()
+        });
         root = new_root;
         spent_count += batch.nullifiers.len();
     }
@@ -182,6 +190,7 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         spent_root: root,
         spent_count,
         txids,
+        batches: replayed,
     })
 }
 
