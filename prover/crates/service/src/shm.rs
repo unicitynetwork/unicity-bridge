@@ -26,6 +26,8 @@ pub struct Sp1Shm {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Cleared {
     pub removed: usize,
+    /// The memory the removed files held: their allocated size, not their length, since
+    /// SP1's guest memory file is a sparse file terabytes long.
     pub bytes: u64,
     /// SP1 files left because a live process has them open or mapped.
     pub in_use: usize,
@@ -67,7 +69,7 @@ impl Sp1Shm {
                 continue;
             };
             if metadata.is_file() {
-                candidates.push((name, FileId::of(&metadata), metadata.len()));
+                candidates.push((name, FileId::of(&metadata), metadata.blocks() * 512));
             }
         }
         let mut cleared = Cleared::default();
@@ -274,6 +276,11 @@ mod tests {
     #[test]
     fn sp1_names_are_told_from_others() {
         for name in [
+            // What a SIGKILLed SP1 6.3.1 prover left in a container's /dev/shm.
+            "sp1_dxpcLYoSRAiTXh9D2BUD_w==_m",
+            "sp1_dxpcLYoSRAiTXh9D2BUD_w==_t",
+            "sem.sp1_dxpcLYoSRAiTXh9D2BUD_w==_t_empty",
+            "sem.sp1_dxpcLYoSRAiTXh9D2BUD_w==_t_filled",
             "sp1_AbCdEfGhIjKl-_mNoPqRsT==_m",
             "sp1_AbCdEfGhIjKl-_mNoPqRsT==_t",
             "sem.sp1_AbCdEfGhIjKl-_mNoPqRsT==_t_filled",
@@ -310,14 +317,7 @@ mod tests {
 
         let cleared = Sp1Shm::new(dir.path(), proc).clear_stale().unwrap();
 
-        assert_eq!(
-            cleared,
-            Cleared {
-                removed: 7,
-                bytes: 7 * 4096,
-                in_use: 1
-            }
-        );
+        assert_eq!((cleared.removed, cleared.in_use), (7, 1));
         assert!(stale.iter().all(|p| !p.exists()));
         assert!(open[0].exists(), "a file this process has open stays");
         assert!(open[1..].iter().all(|p| !p.exists()));
@@ -333,6 +333,22 @@ mod tests {
         let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
         assert_eq!(makedev(major, minor), dev);
         format!("{major:02x}:{minor:02x} {}", metadata.ino())
+    }
+
+    #[test]
+    fn what_a_removed_file_held_is_its_allocated_size() {
+        let dir = tempfile::tempdir().unwrap();
+        // Like SP1's guest memory: a terabyte long, a page written.
+        let memory = File::create(dir.path().join(format!("{ID}_m"))).unwrap();
+        memory.set_len(1 << 40).unwrap();
+        std::os::unix::fs::FileExt::write_at(&memory, &[1u8; 4096], 0).unwrap();
+        drop(memory);
+        let proc = proc_showing(&dir.path().join("view"), &[]);
+
+        let cleared = Sp1Shm::new(dir.path(), proc).clear_stale().unwrap();
+
+        assert_eq!(cleared.removed, 1);
+        assert!(cleared.bytes < 1 << 20, "{cleared:?}");
     }
 
     #[test]
