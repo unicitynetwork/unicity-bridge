@@ -9,6 +9,7 @@ pub mod orchestrator;
 pub mod ports;
 pub mod prover;
 pub mod sequencer;
+pub mod shm;
 pub mod shutdown;
 pub mod store;
 pub mod submitter;

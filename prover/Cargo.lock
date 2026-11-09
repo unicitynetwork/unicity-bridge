@@ -403,6 +403,8 @@ dependencies = [
  "serde_json",
  "sp1-sdk",
  "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
  "unicity-token",
 ]
 

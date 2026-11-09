@@ -6,6 +6,7 @@ pub mod s1;
 pub mod s2;
 #[cfg(feature = "sp1")]
 pub mod sp1;
+pub mod sp1_log;
 
 use bridge_return_core::{
     burn_transition_id, coin_id, config_hash, domain_tag, lock_digest, nullifier,

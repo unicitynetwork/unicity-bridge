@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use bridge_return_host::s1;
+use bridge_return_host::{s1, sp1_log::FATAL_TASK_EXIT};
 use nix::{
     sys::signal::{killpg, Signal},
     unistd::Pid,
@@ -17,6 +17,7 @@ use tokio::process::Command;
 use crate::{
     config::{ProveMode, ServiceConfig},
     domain::guest::{GuestKeyError, VaultGuestKey},
+    shm::Sp1Shm,
 };
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct Prover {
     config: ServiceConfig,
     /// The process group of the proof in flight, so a shutdown can take it down with the service.
     active: Arc<Mutex<Option<Pid>>>,
+    shm: Sp1Shm,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +48,7 @@ impl Prover {
         Self {
             config,
             active: Arc::new(Mutex::new(None)),
+            shm: Sp1Shm::default(),
         }
     }
 
@@ -172,9 +175,13 @@ impl Prover {
     }
 
     /// The child leads its own process group, so a timeout or a shutdown kills everything the
-    /// command started, not only the shell in front of it.
+    /// command started, not only the shell in front of it. A failed attempt kills what the
+    /// command left running, too: SP1's executor outlives a prover that exits on a fatal task
+    /// error.
     async fn run_prove_command(&self, elf: &Path, paths: &ProofPaths) -> Result<(), ProverError> {
         let _ = fs::remove_file(&paths.info);
+        // What a killed prover left in /dev/shm would leave this one too little room.
+        self.clear_stale_shm(&paths.batch_id).await;
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(format!("{} \"$@\"", self.config.prove_cmd))
@@ -197,30 +204,59 @@ impl Prover {
             limit => tokio::time::timeout(limit, child.wait()).await,
         };
         self.active.lock().expect("prover state").take();
-        let status = match waited {
-            Ok(status) => status?,
-            Err(_) => {
-                if let Some(group) = group {
-                    let _ = killpg(group, Signal::SIGKILL);
-                }
-                return Err(ProverError::Command(format!(
-                    "proving {} timed out after {}s",
-                    paths.batch_id,
-                    self.config.prove_timeout.as_secs()
-                )));
+        let failure = match waited {
+            Ok(Ok(status)) if status.success() => return Ok(()),
+            Ok(Ok(status)) => {
+                let ended = match status.code() {
+                    Some(FATAL_TASK_EXIT) => format!(
+                        "exited with status {FATAL_TASK_EXIT}, which bridge-return-host uses when \
+                         SP1 fails a task the proof needs"
+                    ),
+                    Some(code) => format!("exited with status {code}"),
+                    None => format!("was killed by signal {}", status.signal().unwrap_or(0)),
+                };
+                ProverError::Command(format!(
+                    "the proving command for {} {ended}; see the log above for its output",
+                    paths.batch_id
+                ))
             }
+            Ok(Err(err)) => ProverError::Io(err),
+            Err(_) => ProverError::Command(format!(
+                "proving {} timed out after {}s",
+                paths.batch_id,
+                self.config.prove_timeout.as_secs()
+            )),
         };
-        if status.success() {
-            return Ok(());
+        if let Some(group) = group {
+            let _ = killpg(group, Signal::SIGKILL);
         }
-        let ended = match status.code() {
-            Some(code) => format!("exited with status {code}"),
-            None => format!("was killed by signal {}", status.signal().unwrap_or(0)),
-        };
-        Err(ProverError::Command(format!(
-            "the proving command for {} {ended}; see the log above for its output",
-            paths.batch_id
-        )))
+        self.clear_stale_shm(&paths.batch_id).await;
+        Err(failure)
+    }
+
+    /// Remove the SP1 shared-memory files no process holds, off the runtime: it reads every
+    /// process's open files and mappings.
+    async fn clear_stale_shm(&self, batch_id: &str) {
+        let shm = self.shm.clone();
+        match tokio::task::spawn_blocking(move || shm.clear_stale()).await {
+            Ok(Ok(cleared)) if cleared.removed > 0 => tracing::info!(
+                batch_id,
+                removed = cleared.removed,
+                bytes = cleared.bytes,
+                "removed SP1 shared-memory files no process holds",
+            ),
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => tracing::warn!(
+                batch_id,
+                %err,
+                "could not clear SP1's stale shared-memory files",
+            ),
+            Err(err) => tracing::warn!(
+                batch_id,
+                %err,
+                "clearing SP1's stale shared-memory files did not finish",
+            ),
+        }
     }
 }
 
@@ -310,15 +346,21 @@ mod tests {
     }
 
     /// A prover whose proving command is a shell snippet, run as `sh -c "<snippet> \"$@\"" sh elf wire proof info`.
+    /// Its shared memory is `shm` under `dir`.
     fn proving_with(dir: &tempfile::TempDir, prove_cmd: &str, timeout: Duration) -> Prover {
-        Prover::new(ServiceConfig {
-            prove_mode: ProveMode::Sp1Groth16,
-            elf_path: Some(dir.path().join("guest.elf")),
-            proof_dir: dir.path().join("proofs"),
-            prove_cmd: prove_cmd.to_string(),
-            prove_timeout: timeout,
-            ..ServiceConfig::default()
-        })
+        let shm = dir.path().join("shm");
+        std::fs::create_dir_all(&shm).unwrap();
+        Prover {
+            shm: Sp1Shm::new(shm, "/proc"),
+            ..Prover::new(ServiceConfig {
+                prove_mode: ProveMode::Sp1Groth16,
+                elf_path: Some(dir.path().join("guest.elf")),
+                proof_dir: dir.path().join("proofs"),
+                prove_cmd: prove_cmd.to_string(),
+                prove_timeout: timeout,
+                ..ServiceConfig::default()
+            })
+        }
     }
 
     // The command gets the ELF, wire, proof and info paths as its arguments, so a snippet is a function of them.
@@ -420,6 +462,95 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         panic!("sh alive: {}, its child alive: {}", alive(sh), alive(child));
+    }
+
+    /// An SP1 shared-memory file in the prover's `shm` directory.
+    fn sp1_shm_file(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path().join("shm/sp1_AbCdEfGhIjKl-_mNoPqRsT==_m")
+    }
+
+    #[tokio::test]
+    async fn shared_memory_a_gone_prover_left_is_removed_before_a_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let prover = proving_with(&dir, "f() { exit 3; }; f", Duration::from_secs(5));
+        let stale = sp1_shm_file(&dir);
+        std::fs::write(&stale, b"left by a killed prover").unwrap();
+        let checks = format!(
+            "f() {{ [ -e '{}' ] && exit 9; exit 3; }}; f",
+            stale.display()
+        );
+
+        let err = Prover {
+            config: ServiceConfig {
+                prove_cmd: checks,
+                ..prover.config.clone()
+            },
+            ..prover
+        }
+        .prove("b-9".into(), vec![1])
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("exited with status 3"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_attempt_ends_what_it_left_running_and_its_shared_memory_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = sp1_shm_file(&dir);
+        // Like SP1's executor after the host exits on a fatal task error: still running, still
+        // holding its shared memory.
+        let leaves = format!(
+            r#"f() {{ : > '{file}'; sleep 30 3<'{file}' & echo $! > "$4.left"; exit 70; }}; f"#,
+            file = file.display()
+        );
+        let err = proving_with(&dir, &leaves, Duration::from_secs(5))
+            .prove("b-10".into(), vec![1])
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("exited with status 70") && message.contains("SP1 fails a task"),
+            "{message}"
+        );
+        let left: i32 = std::fs::read_to_string(dir.path().join("proofs/b-10.json.left"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        for _ in 0..20 {
+            if !alive(left) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            !alive(left),
+            "the process the command left is still running"
+        );
+
+        // Gone now, or at the latest before the next attempt starts.
+        let checks = format!(
+            "f() {{ [ -e '{}' ] && exit 9; exit 3; }}; f",
+            file.display()
+        );
+        let err = proving_with(&dir, &checks, Duration::from_secs(5))
+            .prove("b-10".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("exited with status 3"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn shared_memory_nothing_holds_is_removed_once_an_attempt_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = sp1_shm_file(&dir);
+        let leaves = format!("f() {{ : > '{}'; exit 70; }}; f", file.display());
+        proving_with(&dir, &leaves, Duration::from_secs(5))
+            .prove("b-11".into(), vec![1])
+            .await
+            .unwrap_err();
+        assert!(!file.exists());
     }
 
     #[tokio::test]

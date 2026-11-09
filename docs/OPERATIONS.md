@@ -36,6 +36,12 @@ prover is untrusted: anyone may run one, and a wrong proof fails on chain.
   Plan 32 GB or more for live tokens, and expect a proof to take longer than
   the fixture's hour. Precheck alone needs a fraction of that. 8 GB of disk
   for the artifacts and bundles.
+- **Shared memory.** SP1's executor shares the guest's memory and its trace
+  ring with the prover through `/dev/shm`: an 8-burn batch uses about
+  188 MiB there, and Docker gives a container 64 MB unless told otherwise.
+  `docker-compose.yml` sets `shm_size` to 8 GB (`BRIDGE_RETURN_SHM_SIZE`); give
+  a container started some other way at least 2 GB. Its pages count against
+  the container's memory, so it is a ceiling, not a reservation.
 - **Network.** Outbound HTTPS to the Tron node, the Unicity gateway and the
   artifact bucket. Inbound HTTPS from wallets on the service port (8787 in the
   container). The service speaks plain HTTP; put TLS in front of it.
@@ -103,7 +109,7 @@ Service environment (defaults from `prover/docker/entrypoint.sh`):
 | `BRIDGE_RETURN_IDLE_WAIT_SECS` | `0` | collection window before the first proof when the service is idle |
 | `BRIDGE_RETURN_COMMAND_TIMEOUT_SECS` | `600` | a relayer command (settle, simulate, events, confirm, receipt) that runs longer is killed and counts as a failed attempt. The relayers' `settle` stops waiting for the receipt 30 s before it and reports the transaction as unconfirmed, and the service then waits on that transaction (§5) |
 | `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` (the image sets its full path) | the command that prints the guest's verifying key at start, in a child process like the proofs, so the service itself loads no SP1 code |
-| `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout and an abandoned proof (§5, Stopping) kill all of it, so a restart never proves next to an orphan |
+| `BRIDGE_RETURN_PROVE_CMD`, `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `bridge-return-host sp1-groth16-files` (the image sets its full path), `7200` | the command that proves one batch in a child process, given the ELF, wire, proof and info paths; a proof that runs longer is killed and counts as a failed attempt, so set the limit well above the slowest proof the host makes (a full batch on a slow host can pass two hours), or `0` for no limit. The child leads its own process group: a timeout, a failed attempt and an abandoned proof (§5, Stopping) kill all of it, so a restart never proves next to an orphan. Before each proof, and after a failed one, the service removes the SP1 files in `/dev/shm` that no process has open or mapped, which a killed prover leaves behind. `bridge-return-host` exits with status 70 when SP1 fails a task the proof needs, instead of waiting for the timeout: SP1 logs the failure but never reports it to the caller |
 | `BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` | `0` (`2640` in `docker-compose.yml`) | the most a drain waits for the batch in flight before it abandons the proof (§5, Stopping); `0` waits however long the batch takes. Keep it below the container's stop grace period, so the service abandons the proof itself, which costs no attempt, before Docker kills it, which costs one |
 | `BRIDGE_RETURN_RETRY_BASE_SECS`, `BRIDGE_RETURN_MAX_ATTEMPTS`, `BRIDGE_RETURN_MAX_REBASES` | `60`, `5`, `3` | retry backoff, attempts before a return is parked, rebases before a batch fails |
 | `BRIDGE_RETURN_FEE_AMOUNT`, `BRIDGE_RETURN_FEE_FLOOR`, `BRIDGE_RETURN_FEE_RECIPIENT`, `BRIDGE_RETURN_FEE_WINDOW_SECS` | `0`, the amount, none, `86400` | the fee quoted to wallets, in the asset's smallest unit; the least a burn must pay to be accepted; the source-chain account that receives it; the time the service wants between accepting a burn and the burn's fee deadline |
@@ -344,9 +350,10 @@ Worth alerting on:
 | Return `failed` with `fee_not_paid` or `fee_deadline_passed` | the burn pays less than the floor, names another account, or came in too late for its deadline | lower the floor (to `0` for a late burn), and the wallet's own resubmit is accepted; raise it again afterwards |
 | Return `failed` with `service_unavailable` and `accumulator not synced to chain` | the events command could not read the chain for about two minutes: the batch already read it again after 15, 30 and 60 seconds (`chain log unavailable` warnings in the log), and `relayer-eth.js events` repeats each failed read three times before it exits non-zero | the node or RPC endpoint is down or rate-limiting; fix or replace `ETH_RPC_URL`/`TRON_RPC_URL`. The retry reuses the proof as long as the vault root has not moved |
 | Return `failed` with a recoverable message (`submission_failed`, `proving_failed`, `chain_rejected`) | settlement or proving hit a transient fault | the service retries on its own at `notBeforeMs` (doubling backoff; a settlement retry reuses the proof) and parks the return as final after `BRIDGE_RETURN_MAX_ATTEMPTS`; a resubmit from the wallet re-queues it without shortening the schedule; fix the cause (gas, memory, node) meanwhile |
-| Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause; there is no API to un-park yet: stop the service, remove the return from the journal's snapshot line, start it, and the wallet's next resubmit is accepted as new |
+| Return `failed` with a message saying it is parked | the same fault repeated `BRIDGE_RETURN_MAX_ATTEMPTS` times | fix the cause, then see §9, Un-parking returns |
 | Service restarted | the journal is replayed | nothing to do: queued burns stay queued, a proof the service abandoned to stop (§5, Stopping) re-runs at once without an attempt, one a crash cut off re-runs after the retry backoff, a proven batch is settled or resubmitted after a chain check. A 404 on the wallet's `returnId` means the state directory was lost; the wallet resubmits the blob |
 | Return `failed` with `proving_failed` saying the proving command `was killed by signal 9` (the Docker VM's `dmesg` shows an `oom-kill` of `bridge-return-h`) | the proof outgrew the memory limit: a live Sepolia USDC burn peaks at about 26 GiB, 23 GB killed it in a 24 GB WSL VM on 2026-09-23 | the service keeps running and retries with backoff; each kill counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS`. Size the limit for one proof's peak plus the service; keep the single-worker `SP1_WORKER_NUM_*=1` settings and the `GOMEMLIMIT`/`GOGC` defaults from `docker-compose.yml` (a soft heap limit the Go collector honours) |
+| Return `failed` with `proving_failed` saying the proving command `exited with status 70`, and the log above it shows `CoreExecute: task failed: … Child native executor crashed, details: CrashDetails { signal: 7, … }` | SP1's executor died of SIGBUS: `/dev/shm` is too small for the batch (Docker's default 64 MB fits batches of one or two burns), or full of files killed provers left | give the container more shared memory (§2) and restart it. The host exits on the failure at once and the service retries after the backoff; each failure counts as an attempt, so returns may park meanwhile (§9, Un-parking returns). Files a killed prover left in `/dev/shm` are removed before the next proof; `removed SP1 shared-memory files no process holds` in the log says how many |
 | Service restarts while proving; the return says `Proof interrupted by a service restart` | the service process died while proving: a crash, an OOM kill of the service itself, or a SIGKILL (Docker's included, once the stop grace period runs out) | each such interruption counts as an attempt, so the return parks after `BRIDGE_RETURN_MAX_ATTEMPTS` instead of looping forever; a proof is never interrupted by the memory it took itself, since it runs in a child |
 | Return `submitted`, its message saying the vault log shows it released in a transaction a second source has not confirmed | the service did not submit that release itself (someone submitted the public bundle first, or the relayer lost track of its own transaction), and `BRIDGE_RETURN_CONFIRM_CMD` could not confirm it: the second RPC is unset, the same endpoint as the first, down, behind, or disagrees | look the transaction up on an explorer. Paid: fix `ETH_CONFIRM_RPC_URL`, and the next check settles the return with that transaction. Not paid: the first RPC is wrong; replace `ETH_RPC_URL`, and once the log no longer shows the release the return is proven again |
 | Return `proven`, its message saying `Settlement 0x… broadcast; waiting to see it settle`, and `unconfirmedSettlements` above zero for long | the relayer signed and sent the settlement but did not see it settle, and the transaction is still pending, or the receipt command cannot read it | nothing is charged while it waits. Look the transaction up on an explorer: pending, it settles the batch once mined (if it is stuck, replace it at the same nonce; the vault accepts only one settlement of the batch); mined, check `ETH_RPC_URL` and `BRIDGE_RETURN_RECEIPT_CMD` |
@@ -422,6 +429,31 @@ older image starts with an empty ledger and compacts that. Roll back only while
 after a restart of the current image has compacted the journal in that state; copy
 `journal.jsonl` aside first. Images from this one on refuse a complete line they
 cannot read instead of skipping it.
+
+**Un-parking returns.** A return parks when a failure brings its attempts to
+`BRIDGE_RETURN_MAX_ATTEMPTS`. Parking is not recorded as such: the journal records
+the failure, the limit decides it each time the journal is replayed, and every
+start then compacts the journal into a snapshot that keeps the outcome. So the
+first start after the cause is fixed can un-park the returns that parked while the
+service last ran:
+
+1. Fix the cause (shared memory, memory, gas, the node).
+2. Copy `journal.jsonl` aside.
+3. Start the service with `BRIDGE_RETURN_MAX_ATTEMPTS` above the parked returns'
+   attempts, for example 10 instead of 5. Their failures replay under the new
+   limit, so they come back as recoverable failures and are retried once their
+   backoff, counted from the failure, has passed (usually at once), with the
+   attempts the new limit leaves them.
+4. Keep the higher limit until they settle: a later failure parks a return
+   against the limit then in force.
+
+Any start compacts the journal, so a start with the old limit, even a routine
+restart before the fix, keeps them parked for good. A return that parked before
+an earlier start, or at a start (a restart interrupting its proof for the last
+allowed time), is parked in the snapshot already, and a higher limit does not
+change it. For such a return: stop the service, remove the return from the
+journal's snapshot line, start it, and the wallet's next resubmit is accepted as a
+new return.
 
 ## 10. Known gaps before real value
 
