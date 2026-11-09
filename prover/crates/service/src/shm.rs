@@ -8,7 +8,12 @@
 //! the container is recreated; enough of them leave the next proof too little room in
 //! `/dev/shm`, and its executor dies of SIGBUS.
 
-use std::{collections::HashSet, fs, io, os::unix::fs::MetadataExt, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs, io,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
 
 /// Where SP1's files are, and where to see which processes hold them.
 #[derive(Clone, Debug)]
@@ -88,7 +93,16 @@ impl Sp1Shm {
     /// its name: glibc creates a named semaphore under a temporary name, maps it, links it to
     /// its name and removes the temporary one, so its creator's mapping shows a name it no
     /// longer has.
+    ///
+    /// A live process this user cannot inspect fails the whole scan when it could hold a file
+    /// this user can remove: one running as this user (a process that is not dumpable hides
+    /// its mappings and descriptors from its own user, who can still remove its files), or any
+    /// process when this user is root. Another user's process cannot open SP1's files, which
+    /// only their owner may read.
     fn held(&self) -> io::Result<HashSet<FileId>> {
+        let me = uids(&fs::read_to_string(self.proc.join("self/status"))?)
+            .map(|[_, effective, _, _]| effective)
+            .ok_or_else(|| io::Error::other("cannot read this process's user"))?;
         let mut held = HashSet::new();
         for process in fs::read_dir(&self.proc)? {
             let process = process?.path();
@@ -99,21 +113,66 @@ impl Sp1Shm {
             if !is_pid {
                 continue;
             }
-            // A process that exits meanwhile, or one this user may not inspect, holds nothing
-            // this user can remove.
-            if let Ok(maps) = fs::read_to_string(process.join("maps")) {
-                held.extend(maps.lines().filter_map(FileId::of_mapping));
-            }
-            if let Ok(fds) = fs::read_dir(process.join("fd")) {
-                for fd in fds.flatten() {
-                    if let Ok(metadata) = fs::metadata(fd.path()) {
-                        held.insert(FileId::of(&metadata));
-                    }
+            let Err(err) = inspect(&process, &mut held) else {
+                continue;
+            };
+            match fs::read_to_string(process.join("status")) {
+                // Gone meanwhile.
+                Err(gone) if gone.kind() == io::ErrorKind::NotFound => {}
+                // A zombie holds nothing.
+                Ok(status) if state(&status) == Some('Z') => {}
+                Ok(status) if me != 0 && uids(&status).is_some_and(|ids| !ids.contains(&me)) => {}
+                _ => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "cannot see which files process {} holds: {err}",
+                            process.display()
+                        ),
+                    ))
                 }
             }
         }
         Ok(held)
     }
+}
+
+/// Add the files `process` maps or has open to `held`.
+fn inspect(process: &Path, held: &mut HashSet<FileId>) -> io::Result<()> {
+    let maps = fs::read_to_string(process.join("maps"))?;
+    held.extend(maps.lines().filter_map(FileId::of_mapping));
+    for fd in fs::read_dir(process.join("fd"))? {
+        match fs::metadata(fd?.path()) {
+            Ok(metadata) => {
+                held.insert(FileId::of(&metadata));
+            }
+            // Closed meanwhile.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+/// The real, effective, saved and filesystem user ids in a `/proc/<pid>/status`.
+fn uids(status: &str) -> Option<[u32; 4]> {
+    let line = status.lines().find_map(|l| l.strip_prefix("Uid:"))?;
+    let ids: Vec<u32> = line
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    ids.try_into().ok()
+}
+
+/// The state letter in a `/proc/<pid>/status`.
+fn state(status: &str) -> Option<char> {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("State:"))?
+        .trim()
+        .chars()
+        .next()
 }
 
 /// A file's device and inode.
@@ -195,6 +254,23 @@ mod tests {
             .collect()
     }
 
+    /// A `/proc` that shows only `pids`, and this process as `self`, linked to the real ones: the
+    /// host's other processes, some of which this user may not inspect, stay out of the test.
+    fn proc_showing(dir: &Path, pids: &[u32]) -> PathBuf {
+        let proc = dir.join("proc");
+        fs::create_dir_all(&proc).unwrap();
+        std::os::unix::fs::symlink("/proc/self", proc.join("self")).unwrap();
+        for pid in pids {
+            std::os::unix::fs::symlink(format!("/proc/{pid}"), proc.join(pid.to_string())).unwrap();
+        }
+        proc
+    }
+
+    /// A process's status with `uid` as all four of its user ids.
+    fn status(uid: u32, state: &str) -> String {
+        format!("Name:\tx\nState:\t{state}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+    }
+
     #[test]
     fn sp1_names_are_told_from_others() {
         for name in [
@@ -230,7 +306,9 @@ mod tests {
         fs::write(&other, b"x").unwrap();
         fs::create_dir(dir.path().join("sp1_zzzzzzzzzzzzzzzzzzzzzz==_m")).unwrap();
 
-        let cleared = Sp1Shm::new(dir.path(), "/proc").clear_stale().unwrap();
+        let proc = proc_showing(&dir.path().join("view"), &[std::process::id()]);
+
+        let cleared = Sp1Shm::new(dir.path(), proc).clear_stale().unwrap();
 
         assert_eq!(
             cleared,
@@ -282,11 +360,16 @@ mod tests {
             ),
         )
         .unwrap();
+        fs::create_dir_all(proc.join("41/fd")).unwrap();
+        fs::write(proc.join("41/status"), status(1000, "S (sleeping)")).unwrap();
         fs::create_dir_all(proc.join("42/fd")).unwrap();
+        fs::write(proc.join("42/maps"), "").unwrap();
+        fs::write(proc.join("42/status"), status(1000, "S (sleeping)")).unwrap();
         std::os::unix::fs::symlink(&files[1], proc.join("42/fd/3")).unwrap();
         // Not a process.
         fs::create_dir_all(proc.join("self/fd")).unwrap();
         std::os::unix::fs::symlink(&files[3], proc.join("self/fd/3")).unwrap();
+        fs::write(proc.join("self/status"), status(1000, "R (running)")).unwrap();
 
         let cleared = Sp1Shm::new(&shm, &proc).clear_stale().unwrap();
 
@@ -320,12 +403,52 @@ mod tests {
         }
         assert!(ready.exists(), "the creator never got ready");
 
-        let cleared = Sp1Shm::new(dir.path(), "/proc").clear_stale();
+        let proc = proc_showing(&dir.path().join("view"), &[creator.id()]);
+        let cleared = Sp1Shm::new(dir.path(), proc).clear_stale();
         creator.kill().unwrap();
         creator.wait().unwrap();
 
         assert_eq!(cleared.unwrap().in_use, 1);
         assert!(semaphore.exists());
+    }
+
+    #[test]
+    fn a_live_process_that_cannot_be_inspected_stops_the_cleanup_if_it_could_hold_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let shm = dir.path().join("shm");
+        fs::create_dir(&shm).unwrap();
+        let proc = dir.path().join("proc");
+        fs::create_dir_all(proc.join("self")).unwrap();
+        // Its mappings cannot be read, as a process that is not dumpable hides them.
+        fs::create_dir_all(proc.join("50/maps")).unwrap();
+        fs::create_dir_all(proc.join("50/fd")).unwrap();
+        // Gone, all but its directory.
+        fs::create_dir_all(proc.join("51")).unwrap();
+        let clear = |me: u32, held_by: u32, state: &str| {
+            sp1_files(&shm, ID);
+            fs::write(proc.join("self/status"), status(me, "R (running)")).unwrap();
+            fs::write(proc.join("50/status"), status(held_by, state)).unwrap();
+            Sp1Shm::new(&shm, &proc).clear_stale()
+        };
+
+        let err = clear(1000, 1000, "S (sleeping)").unwrap_err();
+        assert!(err.to_string().contains("50"), "{err}");
+        assert_eq!(fs::read_dir(&shm).unwrap().count(), 4, "nothing removed");
+        assert!(
+            clear(0, 2000, "S (sleeping)").is_err(),
+            "root can remove anyone's files"
+        );
+
+        assert_eq!(
+            clear(1000, 2000, "S (sleeping)").unwrap().removed,
+            4,
+            "another user's"
+        );
+        assert_eq!(
+            clear(1000, 1000, "Z (zombie)").unwrap().removed,
+            4,
+            "a zombie's"
+        );
     }
 
     #[test]

@@ -346,12 +346,18 @@ mod tests {
     }
 
     /// A prover whose proving command is a shell snippet, run as `sh -c "<snippet> \"$@\"" sh elf wire proof info`.
-    /// Its shared memory is `shm` under `dir`.
+    /// Its shared memory is `shm` under `dir`, and the only process it sees is this one: the
+    /// shared-memory tests cover which files a process holds.
     fn proving_with(dir: &tempfile::TempDir, prove_cmd: &str, timeout: Duration) -> Prover {
         let shm = dir.path().join("shm");
         std::fs::create_dir_all(&shm).unwrap();
+        let proc = dir.path().join("proc");
+        if !proc.exists() {
+            std::fs::create_dir(&proc).unwrap();
+            std::os::unix::fs::symlink("/proc/self", proc.join("self")).unwrap();
+        }
         Prover {
-            shm: Sp1Shm::new(shm, "/proc"),
+            shm: Sp1Shm::new(shm, proc),
             ..Prover::new(ServiceConfig {
                 prove_mode: ProveMode::Sp1Groth16,
                 elf_path: Some(dir.path().join("guest.elf")),
