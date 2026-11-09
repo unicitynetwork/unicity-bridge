@@ -658,8 +658,7 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
         };
         let mut renamed = Vec::new();
         for (waiting, verdict) in doubtful {
-            let spent = parse_hex32(&waiting.nullifier)
-                .filter(|n| acc.tree.non_membership_witness(n).is_none());
+            let spent = parse_hex32(&waiting.nullifier).filter(|n| acc.is_spent(n));
             match spent {
                 Some(n) => {
                     let txid = acc.txids.get(&n).cloned();
@@ -856,8 +855,5 @@ impl<P: ProofBackend, S: Settler, C: ChainLog> Orchestrator<P, S, C> {
 /// Whether the vault's log shows every nullifier of the proven batch spent.
 fn all_released(batch: &Batch, acc: &RebuiltAccumulator) -> bool {
     let nullifiers = batch.nullifiers();
-    !nullifiers.is_empty()
-        && nullifiers
-            .iter()
-            .all(|n| acc.tree.non_membership_witness(n).is_none())
+    !nullifiers.is_empty() && nullifiers.iter().all(|n| acc.is_spent(n))
 }

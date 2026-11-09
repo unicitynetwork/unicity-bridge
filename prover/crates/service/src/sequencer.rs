@@ -38,7 +38,11 @@ pub struct ChainEvents {
     confirm: Option<String>,
     receipt: Option<String>,
     timeout: Duration,
+    /// Always `rebuild_verified`, except in tests that hold a rebuild in flight.
+    rebuild: Rebuild,
 }
+
+type Rebuild = fn(&SettledLog) -> bridge_return_host::Result<RebuiltAccumulator>;
 
 /// What the receipt command read of a settlement transaction, through the RPC the log comes
 /// from.
@@ -144,6 +148,7 @@ impl ChainEvents {
             confirm: command("BRIDGE_RETURN_CONFIRM_CMD"),
             receipt: command("BRIDGE_RETURN_RECEIPT_CMD"),
             timeout: Duration::from_secs(600),
+            rebuild: rebuild_verified,
         }
     }
 
@@ -153,6 +158,7 @@ impl ChainEvents {
             confirm: None,
             receipt: None,
             timeout: Duration::from_secs(600),
+            rebuild: rebuild_verified,
         }
     }
 
@@ -294,13 +300,24 @@ impl ChainEvents {
     /// reconstructed root against the vault's live `spentRoot` when the watcher
     /// reports it. The returned accumulator's `spent_root` equals the value the
     /// vault will check `spent_root_old` against in `fulfillBatch`.
+    ///
+    /// The rebuild hashes every spent nullifier's path, so it runs on the blocking pool:
+    /// on a runtime worker it holds that worker for as long as it takes, and when the
+    /// worker is the one that last drove the I/O driver nothing accepts a connection or
+    /// reads a socket meanwhile.
     pub async fn synced_accumulator(
         &self,
         known: Vec<SettledBatch>,
     ) -> Result<RebuiltAccumulator, ChainSyncError> {
         let mut log = self.fetch_log().await?;
         log.batches.extend(known);
-        rebuild_verified(&log).map_err(|e| ChainSyncError::Rebuild(e.to_string()))
+        let rebuild = self.rebuild;
+        tokio::task::spawn_blocking(move || rebuild(&log))
+            .await
+            .map_err(|e| {
+                ChainSyncError::Rebuild(format!("accumulator rebuild did not finish: {e}"))
+            })?
+            .map_err(|e| ChainSyncError::Rebuild(e.to_string()))
     }
 
     async fn fetch_log(&self) -> Result<SettledLog, ChainSyncError> {
@@ -393,6 +410,9 @@ impl ChainSyncError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
     use super::*;
 
     fn events(cmd: &str) -> ChainEvents {
@@ -401,6 +421,7 @@ mod tests {
             confirm: None,
             receipt: None,
             timeout: Duration::from_secs(5),
+            rebuild: rebuild_verified,
         }
     }
 
@@ -543,5 +564,84 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ChainSyncError::Rebuild(_)), "{err}");
         assert!(!err.is_unavailable());
+    }
+
+    static REBUILDING: AtomicBool = AtomicBool::new(false);
+    static HEALTH_ANSWERED: AtomicBool = AtomicBool::new(false);
+
+    /// A rebuild that does not finish until `/health` has answered, or five seconds pass.
+    fn rebuild_until_health_answers(
+        log: &SettledLog,
+    ) -> bridge_return_host::Result<RebuiltAccumulator> {
+        REBUILDING.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !HEALTH_ANSWERED.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        REBUILDING.store(false, Ordering::SeqCst);
+        rebuild_verified(log)
+    }
+
+    fn get(addr: std::net::SocketAddr, path: &str) -> String {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    /// The accumulator is rebuilt after the events command's output arrives, as for every
+    /// `/accumulator` request and every rescan. The server runs as the binary runs it, on
+    /// the runtime's main thread, and is asked over TCP from threads of its own.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_api_answers_while_the_accumulator_is_rebuilt() {
+        let state = crate::AppState {
+            config: crate::config::ServiceConfig::default(),
+            store: crate::store::ReturnStore::memory(Default::default()),
+            clock: crate::clock::Clock::default(),
+            intake: None,
+            chain_events: ChainEvents {
+                rebuild: rebuild_until_health_answers,
+                ..events(r#"echo '{"batches":[]}'"#)
+            },
+            drain: crate::shutdown::Drain::default(),
+            submits: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let probe = std::thread::spawn(move || {
+            let accumulator = std::thread::spawn(move || get(addr, "/accumulator"));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !REBUILDING.load(Ordering::SeqCst) {
+                assert!(Instant::now() < deadline, "the rebuild never started");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let health = get(addr, "/health");
+            let during = REBUILDING.load(Ordering::SeqCst);
+            HEALTH_ANSWERED.store(true, Ordering::SeqCst);
+            (health, during, accumulator.join().unwrap())
+        });
+        let (health, during, accumulator) = tokio::select! {
+            served = axum::serve(listener, crate::router(state)) => panic!("server stopped: {served:?}"),
+            probed = tokio::task::spawn_blocking(move || probe.join().unwrap()) => probed.unwrap(),
+        };
+        assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+        assert!(
+            during,
+            "/health answered only once the rebuild had finished"
+        );
+        assert!(accumulator.starts_with("HTTP/1.1 200"), "{accumulator}");
+        assert!(
+            accumulator.contains(&format!("0x{}", "00".repeat(32))),
+            "{accumulator}"
+        );
     }
 }
