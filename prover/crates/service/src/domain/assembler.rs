@@ -204,7 +204,7 @@ fn admit(
     if let Some(spent) = input
         .return_leaves
         .iter()
-        .find(|l| acc.tree.non_membership_witness(&l.nullifier).is_none())
+        .find(|l| acc.is_spent(&l.nullifier))
     {
         return Err(Exclusion::released(
             acc.txids.get(&spent.nullifier).cloned(),

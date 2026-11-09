@@ -14,15 +14,18 @@
 //! caught), and then produces the witnesses + root transition for a new batch.
 //!
 //! It is chain-agnostic: the caller fetches and decodes the events (TronGrid /
-//! an EVM RPC) into [`SettledBatch`]s; this module owns only the accumulator math
-//! and reuses the same `sdk-ext` SMT the guest verifies against.
+//! an EVM RPC) into [`SettledBatch`]s; this module owns only the accumulator math.
+//! Witnesses come from the same `sdk-ext` SMT the guest verifies against; the replay
+//! computes its roots with a tree that hashes as that one does but keeps its subtree
+//! hashes, so it stays linear in the nullifiers spent.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bridge_return_sdk_ext::accumulator::{
     insert as accumulator_insert, ordered_insert_witnesses, NonMembershipWitness, NullifierTree,
     EMPTY_TREE_ROOT,
 };
+use unicity_token::crypto::hash::sha256;
 
 use crate::{HostError, Result};
 
@@ -120,6 +123,14 @@ pub struct RebuiltAccumulator {
     /// The transitions replayed, in chain order, one per distinct batch, each with the
     /// first txid any copy of it names.
     pub batches: Vec<SettledBatch>,
+    spent: HashSet<[u8; 32]>,
+}
+
+impl RebuiltAccumulator {
+    /// Whether the log spent `nullifier`.
+    pub fn is_spent(&self, nullifier: &[u8; 32]) -> bool {
+        self.spent.contains(nullifier)
+    }
 }
 
 /// Replay `batches` into the accumulator by following the root links from the
@@ -132,6 +143,8 @@ pub struct RebuiltAccumulator {
 /// unverified state.
 pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
     let mut tree = NullifierTree::new();
+    let mut hashed = HashedTree::new();
+    let mut spent = HashSet::new();
     let mut root = EMPTY_TREE_ROOT;
     let mut spent_count = 0usize;
     let mut txids = HashMap::new();
@@ -143,8 +156,15 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         if batch.nullifiers.is_empty() {
             return Err(HostError::Check(format!("S2 batch {i}: empty batch")));
         }
-        let (_, new_root) = ordered_insert_witnesses(&tree, &batch.nullifiers)
-            .map_err(|e| HostError::Check(format!("S2 batch {i}: insert failed: {e:?}")))?;
+        for nullifier in &batch.nullifiers {
+            if !spent.insert(*nullifier) || !hashed.insert(*nullifier) {
+                return Err(HostError::Check(format!(
+                    "S2 batch {i}: nullifier 0x{} is spent twice",
+                    hex::encode(nullifier),
+                )));
+            }
+        }
+        let new_root = hashed.root();
         if new_root != batch.spent_root_new {
             return Err(HostError::Check(format!(
                 "S2 batch {i}: recomputed spentRootNew 0x{} != chain 0x{}",
@@ -191,6 +211,7 @@ pub fn rebuild(batches: &[SettledBatch]) -> Result<RebuiltAccumulator> {
         spent_count,
         txids,
         batches: replayed,
+        spent,
     })
 }
 
@@ -275,4 +296,240 @@ pub fn next_batch(acc: &RebuiltAccumulator, new_nullifiers: &[[u8; 32]]) -> Resu
         witnesses,
         spent_root_new,
     })
+}
+
+/// The accumulator's root, kept current one insert at a time. It hashes exactly as the
+/// sdk-ext `NullifierTree` the guest's witnesses come from, but keeps every subtree's
+/// hash, so an insert rehashes the new key's path and the key it displaces rather than
+/// every key in the tree. `NullifierTree` recomputes the whole tree for each root and
+/// each witness, which made replaying the log quadratic in the nullifiers spent.
+struct HashedTree {
+    top: Subtree,
+    empties: Box<[[u8; 32]; DEPTH + 1]>,
+}
+
+/// A subtree at some depth: no key, one key (hashed from its leaf up to this depth), or
+/// two or more keys split on this depth's bit.
+enum Subtree {
+    Empty,
+    One {
+        key: [u8; 32],
+        hash: [u8; 32],
+    },
+    Split {
+        left: Box<Subtree>,
+        right: Box<Subtree>,
+        hash: [u8; 32],
+    },
+}
+
+const DEPTH: usize = 256;
+const LEAF_PREFIX: u8 = 0x00;
+const NODE_PREFIX: u8 = 0x01;
+const PRESENCE_VALUE: u8 = 0x01;
+
+impl HashedTree {
+    fn new() -> Self {
+        let mut empties = Box::new([[0u8; 32]; DEPTH + 1]);
+        empties[DEPTH] = EMPTY_TREE_ROOT;
+        for depth in (0..DEPTH).rev() {
+            empties[depth] = node_hash(depth, &empties[depth + 1], &empties[depth + 1]);
+        }
+        Self {
+            top: Subtree::Empty,
+            empties,
+        }
+    }
+
+    fn root(&self) -> [u8; 32] {
+        match &self.top {
+            Subtree::Empty => EMPTY_TREE_ROOT,
+            Subtree::One { hash, .. } | Subtree::Split { hash, .. } => *hash,
+        }
+    }
+
+    /// Add `key`; `false`, with the tree unchanged, if it is already there.
+    fn insert(&mut self, key: [u8; 32]) -> bool {
+        self.top.insert(key, 0, &self.empties)
+    }
+}
+
+impl Subtree {
+    fn hash(&self, depth: usize, empties: &[[u8; 32]; DEPTH + 1]) -> [u8; 32] {
+        match self {
+            Subtree::Empty => empties[depth],
+            Subtree::One { hash, .. } | Subtree::Split { hash, .. } => *hash,
+        }
+    }
+
+    fn insert(&mut self, key: [u8; 32], depth: usize, empties: &[[u8; 32]; DEPTH + 1]) -> bool {
+        match self {
+            Subtree::Empty => {
+                *self = Subtree::One {
+                    key,
+                    hash: single_key_hash(&key, depth, empties),
+                };
+            }
+            Subtree::One { key: other, .. } => {
+                let other = *other;
+                // Both keys took the same path down to `depth`, so they first differ at or
+                // below it.
+                let Some(fork) = (depth..DEPTH).find(|&d| bit_at(&key, d) != bit_at(&other, d))
+                else {
+                    return false;
+                };
+                let one = |key: [u8; 32]| Subtree::One {
+                    key,
+                    hash: single_key_hash(&key, fork + 1, empties),
+                };
+                let mut node = if bit_at(&key, fork) {
+                    split(fork, one(other), one(key), empties)
+                } else {
+                    split(fork, one(key), one(other), empties)
+                };
+                for d in (depth..fork).rev() {
+                    node = if bit_at(&key, d) {
+                        split(d, Subtree::Empty, node, empties)
+                    } else {
+                        split(d, node, Subtree::Empty, empties)
+                    };
+                }
+                *self = node;
+            }
+            Subtree::Split { left, right, hash } => {
+                let side = if bit_at(&key, depth) {
+                    &mut **right
+                } else {
+                    &mut **left
+                };
+                if !side.insert(key, depth + 1, empties) {
+                    return false;
+                }
+                *hash = node_hash(
+                    depth,
+                    &left.hash(depth + 1, empties),
+                    &right.hash(depth + 1, empties),
+                );
+            }
+        }
+        true
+    }
+}
+
+fn split(depth: usize, left: Subtree, right: Subtree, empties: &[[u8; 32]; DEPTH + 1]) -> Subtree {
+    let hash = node_hash(
+        depth,
+        &left.hash(depth + 1, empties),
+        &right.hash(depth + 1, empties),
+    );
+    Subtree::Split {
+        left: Box::new(left),
+        right: Box::new(right),
+        hash,
+    }
+}
+
+/// The hash of a subtree at `depth` holding only `key`: its leaf, folded up with the
+/// empty sibling at every level.
+fn single_key_hash(key: &[u8; 32], depth: usize, empties: &[[u8; 32]; DEPTH + 1]) -> [u8; 32] {
+    let mut leaf = [0u8; 34];
+    leaf[0] = LEAF_PREFIX;
+    leaf[1..33].copy_from_slice(key);
+    leaf[33] = PRESENCE_VALUE;
+    let mut hash = digest(&leaf);
+    for level in (depth..DEPTH).rev() {
+        let sibling = &empties[level + 1];
+        hash = if bit_at(key, level) {
+            node_hash(level, sibling, &hash)
+        } else {
+            node_hash(level, &hash, sibling)
+        };
+    }
+    hash
+}
+
+fn node_hash(depth: usize, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut node = [0u8; 66];
+    node[0] = NODE_PREFIX;
+    node[1] = depth as u8;
+    node[2..34].copy_from_slice(left);
+    node[34..].copy_from_slice(right);
+    digest(&node)
+}
+
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(sha256(bytes).data());
+    out
+}
+
+fn bit_at(data: &[u8; 32], index: usize) -> bool {
+    (data[index / 8] >> (index % 8)) & 1 == 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(mut v: u64) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        for byte in b.iter_mut() {
+            v = v
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *byte = (v >> 33) as u8;
+        }
+        b
+    }
+
+    fn with_bit(mut key: [u8; 32], index: usize) -> [u8; 32] {
+        key[index / 8] ^= 1 << (index % 8);
+        key
+    }
+
+    /// Insert `keys` one at a time into both trees and compare the roots after each of the
+    /// first `every_up_to` and at the end. The sdk tree rehashes every key for each root.
+    fn same_roots(keys: &[[u8; 32]], every_up_to: usize) {
+        let mut hashed = HashedTree::new();
+        let mut reference = NullifierTree::new();
+        assert_eq!(hashed.root(), reference.root());
+        for (i, k) in keys.iter().enumerate() {
+            assert!(hashed.insert(*k), "key {i} refused");
+            reference.insert(*k).unwrap();
+            if i < every_up_to || i + 1 == keys.len() {
+                assert_eq!(hashed.root(), reference.root(), "root after key {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_root_is_the_sdk_trees() {
+        same_roots(&(1..=300).map(key).collect::<Vec<_>>(), 24);
+    }
+
+    #[test]
+    fn keys_that_part_deep_or_at_the_top_hash_as_the_sdk_tree_does() {
+        let base = key(7);
+        // Keys that differ only in the last bit, only in the first, and a run of keys that
+        // each part from the previous one a level further down, inserted in both orders.
+        let mut keys = vec![base, with_bit(base, 255), with_bit(base, 0)];
+        keys.extend((1..12).map(|d| with_bit(with_bit(base, 0), d)));
+        keys.extend((240..255).map(|d| with_bit(base, d)));
+        keys.push([0u8; 32]);
+        keys.push([0xff; 32]);
+        same_roots(&keys, keys.len());
+        keys.reverse();
+        same_roots(&keys, keys.len());
+    }
+
+    #[test]
+    fn a_key_already_there_is_refused_and_changes_nothing() {
+        let mut hashed = HashedTree::new();
+        assert!(hashed.insert(key(1)));
+        assert!(hashed.insert(key(2)));
+        let root = hashed.root();
+        assert!(!hashed.insert(key(1)));
+        assert!(!hashed.insert(key(2)));
+        assert_eq!(hashed.root(), root);
+    }
 }
