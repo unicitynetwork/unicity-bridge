@@ -10,6 +10,11 @@ services:
     # exits. The grace period covers a slow proof plus its settlement, and the drain
     # timeout ends a longer one a minute before Docker would kill the process.
     stop_grace_period: 45m
+    # SP1's executor shares the guest's memory and its trace ring with the prover through
+    # /dev/shm. Docker's default of 64 MB is too small for a batch of three or more burns (an
+    # 8-burn batch uses about 188 MiB there), and the executor dies of SIGBUS. Its pages count
+    # against the container's memory, so this is a ceiling, not a reservation.
+    shm_size: ${BRIDGE_RETURN_SHM_SIZE:-8g}
     ports:
       - "8787:8787"
     environment:

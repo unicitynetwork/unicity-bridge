@@ -740,9 +740,8 @@ fn sp1_real_groth16(
     let proof = require_arg(proof, "proof.bin")?;
     // This executable owns its global tracing subscriber. Library callers such
     // as bridge-return-service install their own subscriber before invoking the
-    // proving API, so the library must not call SP1's panicking global logger
-    // initializer.
-    sp1_sdk::utils::setup_logger();
+    // proving API, so the library must not install one.
+    bridge_return_host::sp1_log::init();
     let info = bridge_return_host::sp1::real_groth16(&elf, wire, &proof)?;
     print_proof_info(&info);
     Ok(())
@@ -776,7 +775,7 @@ fn sp1_real_groth16_files(
     let wire = std::fs::read(&wire_path).map_err(|err| {
         bridge_return_host::HostError::Check(format!("read {}: {err}", wire_path.display()))
     })?;
-    sp1_sdk::utils::setup_logger();
+    bridge_return_host::sp1_log::init();
     let info = bridge_return_host::sp1::real_groth16(&elf, wire, &proof)?;
     let json = proof_info_json(&info);
     std::fs::write(

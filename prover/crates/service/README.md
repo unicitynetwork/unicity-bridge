@@ -103,7 +103,7 @@ cargo run -p bridge-return-service --release
 | `BRIDGE_RETURN_PROVE_MODE` | `precheck_only` | `precheck_only` or `sp1_groth16`. |
 | `SP1_GUEST_ELF` | — | Guest ELF path (required for `sp1_groth16`). |
 | `BRIDGE_RETURN_PROOF_DIR` | `target/bridge-return-service/proofs` | Where proof bundles are written. |
-| `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. |
+| `BRIDGE_RETURN_PROVE_CMD` | `bridge-return-host sp1-groth16-files` | The command that proves one batch in a child process; it gets the ELF, wire, proof and info paths as arguments. A failed attempt kills what it left running, and the SP1 files in `/dev/shm` that no process holds are removed before each proof and after a failed one (nothing is removed while a live process that could hold one cannot be inspected). `bridge-return-host` exits with status 70 when SP1 fails a task the proof needs, which SP1 logs but never reports to the caller. |
 | `BRIDGE_RETURN_VKEY_CMD` | `bridge-return-host sp1-vkey` | The command that prints the guest's verifying key as JSON at start, given the ELF path; the service itself loads no SP1 code. |
 | `BRIDGE_RETURN_PROVE_TIMEOUT_SECS` | `7200` | A proof that runs longer is killed and counts as a failed attempt; set it well above the slowest proof, or `0` for no limit. |
 | `BRIDGE_RETURN_DRAIN_TIMEOUT_SECS` | `0` | Most a drain (SIGTERM) waits for the batch in flight before abandoning its proof; `0` waits however long it takes. Keep it below the container's stop grace period. |
